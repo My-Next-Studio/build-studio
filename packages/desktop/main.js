@@ -284,6 +284,26 @@ async function waitForServer(port, timeoutMs = 30000) {
   return false;
 }
 
+// Shown when the hub server never came up — instead of a black window.
+function showHubFailureWindow(incompleteBundle) {
+  const win = new BrowserWindow({ width: 720, height: 480, title: 'Build Studio' });
+  const diagnosis = incompleteBundle
+    ? `<p><strong>This app bundle is incomplete</strong> — the packaged hub server
+       (<code>Resources/standalone/packages/hub/server.js</code>) is missing.
+       Rebuild the app with <code>npm run build</code> in <code>packages/desktop</code>;
+       the packaging step injects the hub server and fails loudly if it can't.</p>`
+    : `<p>The hub server did not respond on port ${HUB_PORT}. Another process may be
+       using the port, or the server failed while starting.</p>`;
+  const html = `<!doctype html><html><body style="background:#111114;color:#e2e8f0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;padding:48px;line-height:1.7">
+    <h2 style="color:#f87171;margin-top:0">Hub server failed to start</h2>
+    ${diagnosis}
+    <p style="color:#9ca3af">Details were appended to <code>${crashLogPath}</code>.
+    Quit and relaunch after fixing; for help see the Troubleshooting section of the README.</p>
+    </body></html>`;
+  win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+}
+
 function createWindow(onboarding = false) {
   const saved = loadWindowState();
   mainWindow = new BrowserWindow({
@@ -567,7 +587,16 @@ app.whenReady().then(async () => {
   console.log('Waiting for server to be ready...');
   const ready = await waitForServer(HUB_PORT);
   if (!ready) {
+    // A silent black window is the worst possible failure mode: nothing on
+    // screen, nothing in crash.log (it's not a crash). Show an explicit error
+    // page and log the condition instead of loadURL-ing into the void.
     console.error('Hub server failed to start within timeout');
+    const bundleServer = getResourcePath('standalone', 'packages', 'hub', 'server.js');
+    const isDev = process.env.NODE_ENV === 'development';
+    const incompleteBundle = !isDev && !fs.existsSync(bundleServer);
+    logCrash(`hub-server-not-ready: nothing answering on :${HUB_PORT} after timeout${incompleteBundle ? ' — app bundle is INCOMPLETE (missing Resources/standalone hub server)' : ''}`);
+    showHubFailureWindow(incompleteBundle);
+    return;
   }
 
   // Check if this is first launch (empty registry) — show onboarding

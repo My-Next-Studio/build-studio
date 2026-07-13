@@ -14,3 +14,9 @@ docs/_internal/
 # Personal/local Claude Code config (contributors keep their own)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Environment / secrets — never tracked
+.env
+.env.local
+.env.*.local
+.elevenlabs-key

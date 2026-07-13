@@ -89,7 +89,6 @@ function createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecuti
     const sessionName = tmuxOps.generateSessionName();
     const workers = [];
     let sessionCreated = false;
-    const skipPerms = config.agent_defaults.skip_permissions;
     const unsetKey = config.agent_defaults.unset_api_key;
 
     for (const task of tasks) {
@@ -111,12 +110,15 @@ function createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecuti
         [`# Task: ${task.role}`, '', task.instruction, '', '---', `Skill: /${skill}`].join('\n'));
 
       // Write startup script
-      const dangerFlag = (allowAll && skipPerms) ? ' --dangerously-skip-permissions' : '';
+      const { resolvePermissionMode, claudePermissionFlag } = require('../permission-mode');
+      const dangerFlag = allowAll ? claudePermissionFlag(resolvePermissionMode(config.agent_defaults)) : '';
       const taskModel = task.model || config.agent_defaults.model || 'opus';
       const MODEL_IDS = { opus: 'claude-opus-4-6', sonnet: 'claude-sonnet-4-6' };
       const modelFlag = ` --model ${MODEL_IDS[taskModel] || taskModel}`;
       const initialPrompt = `Read TASK.md and execute the task using /${skill}. When you are done, commit your output files with git (git add docs/ src/ && git commit -m "feat: <short description>"). Do NOT add or commit TASK.md or start.sh. Do not skip the commit.`;
-      const startScript = `#!/bin/bash\neval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null\nclaude${dangerFlag}${modelFlag} "${initialPrompt.replace(/"/g, '\\"')}"\n`;
+      // Brew shellenv is Apple-Silicon-pathed; add a command -v fallback probe
+      // (Intel /usr/local, npm-global, ~/.local) like workflow.js/oneshot.js.
+      const startScript = `#!/bin/bash\neval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null\nif ! command -v claude >/dev/null 2>&1; then\n  for p in /opt/homebrew/bin /usr/local/bin "$HOME/.npm-global/bin" "$HOME/.local/bin"; do\n    if [ -x "$p/claude" ]; then PATH="$p:$PATH"; break; fi\n  done\nfi\nclaude${dangerFlag}${modelFlag} "${initialPrompt.replace(/"/g, '\\"')}"\n`;
       fs.writeFileSync(path.join(wtPath, 'start.sh'), startScript, { mode: 0o755 });
 
       const windowName = branch.replace(/^agent-/, '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 15);

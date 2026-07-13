@@ -41,7 +41,7 @@ The result is a product that grows step by step — each increment vision-aligne
 
 ## Prerequisites
 
-- **Node.js >= 18** and **npm**
+- **Node.js >= 20** and **npm**
 - **[Claude Code](https://claude.com/claude-code)** — the agents are Claude Code sessions
 - **tmux** — agent session orchestration (`brew install tmux`)
 - **git**
@@ -176,12 +176,17 @@ The hub can be packaged as a native macOS app with Electron.
 # Dev mode
 cd packages/desktop && npm run dev
 
-# Build the .app
-cd packages/hub && npx next build
-cd ../desktop && npx electron-builder --mac --dir
+# Build the .app (builds the hub, packages, and injects the hub server)
+cd packages/desktop && npm run build
 ```
 
 The `.app` is output to `packages/desktop/dist/mac-arm64/Build Studio.app`. Copy it to `/Applications` or double-click to run.
+
+Notes:
+
+- Packaging injects the bundled hub server via an electron-builder `afterPack` hook and **fails loudly if the result is incomplete** — a bare `electron-builder --mac --dir` also goes through the same hook, so a shippable app can never silently miss its hub server (the old symptom was a black window on launch).
+- The app is **unsigned by default** (fine for local use — right-click → Open on first launch). To sign, use electron-builder's standard `CSC_NAME`/`CSC_LINK` environment variables; no identity is hardcoded in the repo.
+- Packaging requires a full monorepo checkout with `npm install` done at the root — the injection step copies runtime dependencies from the local `node_modules`.
 
 ---
 

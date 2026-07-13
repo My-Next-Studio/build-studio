@@ -11,6 +11,11 @@ const fs = require('fs');
 
 const syncOnly = process.argv.includes('--sync-only');
 const restartProjects = process.argv.includes('--restart-projects');
+// --app-resources=<path>: inject into exactly one .app Resources dir (used by
+// the electron-builder afterPack hook). Skips /Applications, cache clearing,
+// and stale-server handling — packaging must not touch the running install.
+const appResourcesArg = process.argv.find(a => a.startsWith('--app-resources='));
+const appResourcesOverride = appResourcesArg ? appResourcesArg.split('=').slice(1).join('=') : null;
 
 // Bundle-version stamp written into each .app's project-server lib/ at sync time.
 // process-manager.js compares this against the running server's reported version
@@ -30,14 +35,21 @@ function findDistApp() {
 
 const installedApp = '/Applications/Build Studio.app/Contents/Resources';
 
-// Target both dist and /Applications if both exist
-const appPaths = [
-  findDistApp(),
-  fs.existsSync(installedApp) ? installedApp : null,
-].filter(Boolean);
+// Target both dist and /Applications if both exist — unless afterPack passed
+// an explicit Resources path, in which case inject only there.
+const appPaths = appResourcesOverride
+  ? [appResourcesOverride]
+  : [
+      findDistApp(),
+      fs.existsSync(installedApp) ? installedApp : null,
+    ].filter(Boolean);
 
 if (appPaths.length === 0) {
   console.error('Error: no .app found. Run "npm run build" first.');
+  process.exit(1);
+}
+if (appResourcesOverride && !fs.existsSync(appResourcesOverride)) {
+  console.error(`Error: --app-resources path does not exist: ${appResourcesOverride}`);
   process.exit(1);
 }
 
@@ -136,7 +148,8 @@ for (const appPath of appPaths) {
   }
   console.log(`  Runtime deps: ${copiedCount} packages copied (${allDeps.size} total resolved)`);
 
-  // Verify
+  // Verify — and fail loudly. A .app without the hub server launches to a
+  // black window, so an incomplete injection must never pass silently.
   const hasNodeModules = fs.existsSync(path.join(standaloneDest, 'node_modules'));
   const hasServer = fs.existsSync(path.join(standaloneDest, 'packages', 'hub', 'server.js'));
   const hasShared = fs.existsSync(path.join(nmDest, 'shared', 'process-manager.js'));
@@ -145,16 +158,22 @@ for (const appPath of appPaths) {
   console.log(`  server.js: ${hasServer ? '✓' : '✗'}`);
   console.log(`  @build-studio/shared: ${hasShared ? '✓' : '✗'}`);
   console.log(`  @build-studio/project-server: ${hasProjectServer ? '✓' : '✗'}`);
+  if (!hasNodeModules || !hasServer || !hasShared || !hasProjectServer) {
+    console.error(`Error: injection incomplete for ${appPath} — the app would launch to a black window.`);
+    process.exit(1);
+  }
 }
 
 // Clear Electron browser cache so the app loads fresh JS/CSS
 const os = require('os');
-const cacheDir = path.join(os.homedir(), 'Library', 'Application Support', '@build-studio', 'desktop');
-for (const dir of ['Cache', 'Code Cache', 'GPUCache', 'Service Worker']) {
-  const p = path.join(cacheDir, dir);
-  if (fs.existsSync(p)) {
-    fs.rmSync(p, { recursive: true, force: true });
-    console.log(`  Cleared cache: ${dir}`);
+if (!appResourcesOverride) {
+  const cacheDir = path.join(os.homedir(), 'Library', 'Application Support', '@build-studio', 'desktop');
+  for (const dir of ['Cache', 'Code Cache', 'GPUCache', 'Service Worker']) {
+    const p = path.join(cacheDir, dir);
+    if (fs.existsSync(p)) {
+      fs.rmSync(p, { recursive: true, force: true });
+      console.log(`  Cleared cache: ${dir}`);
+    }
   }
 }
 
@@ -248,6 +267,11 @@ async function detectAndHandleStaleServers() {
   console.log('  Click Start for each project in the hub to relaunch on the fresh bundle.');
 }
 
-detectAndHandleStaleServers().then(() => {
+if (appResourcesOverride) {
+  // Packaging context (afterPack): never touch running servers or user state.
   console.log('Done.');
-});
+} else {
+  detectAndHandleStaleServers().then(() => {
+    console.log('Done.');
+  });
+}

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "NODE_ENV=development electron .",
-    "build": "npm run build:next && npm run pack && npm run inject-resources",
+    "build": "npm run build:next && npm run pack",
     "build:next": "cd ../hub && npx next build",
     "pack": "electron-builder --mac --dir",
     "inject-resources": "node inject-resources.js",
@@ -25,8 +25,10 @@
     "productName": "Build Studio",
     "mac": {
       "category": "public.app-category.developer-tools",
-      "target": ["dir"],
-      "identity": "Apple Development: lars.bruce@gmail.com (TPKDYK67UH)",
+      "target": [
+        "dir"
+      ],
+      "identity": null,
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Build Studio records narration from your microphone during demo recordings."
       },
@@ -42,18 +44,27 @@
       {
         "from": "../project-server",
         "to": "project-server",
-        "filter": ["**/*", "!node_modules"]
+        "filter": [
+          "**/*",
+          "!node_modules"
+        ]
       },
       {
         "from": "../shared",
         "to": "shared",
-        "filter": ["**/*", "!node_modules"]
+        "filter": [
+          "**/*",
+          "!node_modules"
+        ]
       },
       {
         "from": "../../templates",
         "to": "templates",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
-    ]
+    ],
+    "afterPack": "./scripts/after-pack.js"
   }
 }
