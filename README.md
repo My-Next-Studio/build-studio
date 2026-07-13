@@ -1,6 +1,6 @@
 # Build Studio
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/My-Next-Studio/build-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/My-Next-Studio/build-studio/actions/workflows/ci.yml) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Mission control for multi-agent [Claude Code](https://claude.com/claude-code) workflows. Run a whole product team of AI agents — PM, architect, designers, developers, QA, security, code review — across multiple projects from a single hub. Each agent runs in its own tmux session, drives a real git workflow, and reports back so you can review and approve at the gates that matter.
 
