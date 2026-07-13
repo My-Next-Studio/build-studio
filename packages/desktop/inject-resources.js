@@ -148,6 +148,12 @@ for (const appPath of appPaths) {
   }
   console.log(`  Runtime deps: ${copiedCount} packages copied (${allDeps.size} total resolved)`);
 
+  // Strip Finder junk copied in from the source tree — codesign refuses to
+  // sign bundles containing .DS_Store files, which breaks signed packaging.
+  try {
+    execFileSync('find', [standaloneDest, '-name', '.DS_Store', '-delete'], { stdio: 'ignore' });
+  } catch (_) {}
+
   // Verify — and fail loudly. A .app without the hub server launches to a
   // black window, so an incomplete injection must never pass silently.
   const hasNodeModules = fs.existsSync(path.join(standaloneDest, 'node_modules'));
