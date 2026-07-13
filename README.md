@@ -61,7 +61,7 @@ npm link   # makes `build-studio` available globally
 ## Quick start
 
 ```bash
-# 1. Start the hub (opens at http://localhost:4000)
+# 1. Start the hub (opens at http://localhost:18080)
 build-studio hub --dev
 
 # 2. On the home screen, click "+ New Project" and point it at a folder.
@@ -155,7 +155,7 @@ You can add, remove, or customize roles per project — see [Customizing roles](
 Scaffold a new project and register it. Options: `--name <name>`, `--port <N>`.
 
 ### `build-studio hub [--dev] [--port N]`
-Start the hub app (default port 4000). `--dev` enables hot reload.
+Start the hub app (default port 18080). `--dev` enables hot reload.
 
 ### `build-studio start [path]`
 Start a single project server directly (bypasses the hub).

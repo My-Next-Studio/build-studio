@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import path from 'path'
 
 // Maps onboardProject's structured error codes → HTTP status. Anything not
 // listed here falls through to 500 (genuine server-side failure).
@@ -19,11 +18,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'name and dirPath required' }, { status: 400 })
   }
 
-  const targetPath = path.resolve(dirPath)
-
   // Dynamic requires to dodge Turbopack tracing the filesystem ops.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { registry } = require(/* turbopackIgnore: true */ '@build-studio/shared')
+  const { registry, paths: sharedPaths } = require(/* turbopackIgnore: true */ '@build-studio/shared')
+  const targetPath: string = sharedPaths.resolveUserPath(dirPath)
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { onboardProject } = require(/* turbopackIgnore: true */ '@build-studio/project-server/lib/onboard')
 

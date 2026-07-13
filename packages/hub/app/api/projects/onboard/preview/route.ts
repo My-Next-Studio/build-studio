@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import path from 'path'
 
 const ERROR_HTTP_STATUS: Record<string, number> = {
   PATH_MISSING: 400,
@@ -13,7 +12,9 @@ export async function POST(req: Request) {
   if (!dirPath) {
     return NextResponse.json({ error: 'dirPath required' }, { status: 400 })
   }
-  const targetPath = path.resolve(dirPath)
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { paths: sharedPaths } = require(/* turbopackIgnore: true */ '@build-studio/shared')
+  const targetPath: string = sharedPaths.resolveUserPath(dirPath)
 
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { previewOnboard } = require(/* turbopackIgnore: true */ '@build-studio/project-server/lib/onboard')

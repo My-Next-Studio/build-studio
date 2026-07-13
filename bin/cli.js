@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const path = require('path');
+const { resolveUserPath } = require('@build-studio/shared/paths');
 const fs = require('fs');
 
 const [,, command, ...args] = process.argv;
@@ -42,7 +43,7 @@ if (command === 'init') {
     process.exit(1);
   }
 
-  const targetPath = path.resolve(targetArg);
+  const targetPath = resolveUserPath(targetArg);
   const { registry } = require('@build-studio/shared');
 
   let port = null;
@@ -96,7 +97,7 @@ Done! Next steps:
 
 } else if (command === 'start') {
   const projectPath = args.find(a => !a.startsWith('--'));
-  const projectRoot = path.resolve(projectPath || '.');
+  const projectRoot = resolveUserPath(projectPath || '.');
 
   if (!fs.existsSync(path.join(projectRoot, '.build-studio', 'config.yaml'))) {
     console.error(`Error: no .build-studio/config.yaml found in ${projectRoot}`);
@@ -157,7 +158,7 @@ Done! Next steps:
     process.exit(1);
   }
 
-  const targetPath = path.resolve(targetArg);
+  const targetPath = resolveUserPath(targetArg);
   const configPath = path.join(targetPath, '.build-studio', 'config.yaml');
 
   if (!fs.existsSync(configPath)) {
@@ -235,7 +236,7 @@ Done! Next steps:
 
 } else if (command === 'list-presets') {
   const projectPath = args.find(a => !a.startsWith('--'));
-  const projectRoot = projectPath ? path.resolve(projectPath) : process.cwd();
+  const projectRoot = projectPath ? resolveUserPath(projectPath) : process.cwd();
   const hasProject = fs.existsSync(path.join(projectRoot, '.build-studio', 'config.yaml'));
 
   const { listPresets } = require('@build-studio/project-server/lib/presets');

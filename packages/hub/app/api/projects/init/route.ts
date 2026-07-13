@@ -9,7 +9,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'name and dirPath required' }, { status: 400 })
   }
 
-  const targetPath = path.resolve(dirPath)
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { paths: sharedPaths } = require(/* turbopackIgnore: true */ '@build-studio/shared')
+  const targetPath: string = sharedPaths.resolveUserPath(dirPath)
   const configPath = path.join(targetPath, '.build-studio', 'config.yaml')
 
   if (fs.existsSync(configPath)) {
