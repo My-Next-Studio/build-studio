@@ -1,6 +1,41 @@
 const express = require('express');
 const { stripAnsi } = require('../tmux');
 
+/**
+ * Resolve a role name or tmux window name to the live tmux target of an
+ * agent in the active workflow (any step, task-execution state) or run.
+ * Returns { sessionName, window } or null. Used by the WebSocket
+ * live-terminal attach in server.js — the client only ever names an
+ * agent; the tmux target is always resolved server-side from state.
+ */
+function resolveAgentTarget(state, roleOrWindow) {
+  const key = String(roleOrWindow || '').toLowerCase();
+  const match = (a) => a && (a.window === roleOrWindow || (a.role || '').toLowerCase() === key);
+  const wf = state.loadWorkflow();
+  if (wf) {
+    let agent = (wf.steps?.[wf.currentStep]?.agents || []).find(match);
+    if (!agent && wf.taskExecution?.taskStates) {
+      for (const ts of Object.values(wf.taskExecution.taskStates)) {
+        agent = (ts.agents || []).find(match);
+        if (agent) break;
+      }
+    }
+    if (!agent) {
+      for (const step of Object.values(wf.steps || {})) {
+        agent = (step.agents || []).find(match);
+        if (agent) break;
+      }
+    }
+    if (agent && agent.window) return { sessionName: wf.sessionName, window: agent.window };
+  }
+  const run = typeof state.loadRun === 'function' ? state.loadRun() : null;
+  if (run) {
+    const worker = (run.workers || []).find(w => w.window === roleOrWindow || w.branch === roleOrWindow);
+    if (worker && worker.window) return { sessionName: run.sessionName, window: worker.window };
+  }
+  return null;
+}
+
 function createTerminalRouter(config, state, tmuxOps) {
   const router = express.Router();
 
@@ -70,4 +105,4 @@ function createTerminalRouter(config, state, tmuxOps) {
   return router;
 }
 
-module.exports = { createTerminalRouter };
+module.exports = { createTerminalRouter, resolveAgentTarget };

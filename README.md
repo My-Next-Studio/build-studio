@@ -266,7 +266,7 @@ Edit `.claude/commands/<role>.md` to change what a role does. Edit `.build-studi
 ## Troubleshooting
 
 **An agent is stuck (no progress, a step won't advance, a gate misfired).**
-This happens occasionally — an environment hiccup, a flaky test, a transient API error, or an edge case in a workflow step. The most effective fix is to **open Claude Code in the project repo (or in this dashboard's repo) and drive it to diagnose and unstick the run** — read the step's feedback, check the tmux output, patch the workflow or the project, and re-advance. This is exactly the kind of maintenance Build Studio itself is built and maintained with. For workflow-engine bugs, the project-server logs and `packages/project-server/lib/api/workflow.js` are the place to look.
+This happens occasionally — an interactive prompt, an environment hiccup, a flaky test, a transient API error, or an edge case in a workflow step. First stop: open the agent's log in the workflow view and click **⌁ Live terminal** — that attaches a real bidirectional terminal to the agent's session, so you can answer a prompt, press Enter, or type a nudge directly from the hub. For deeper problems, **open Claude Code in the project repo (or in this dashboard's repo) and drive it to diagnose and unstick the run** — read the step's feedback, check the tmux output, patch the workflow or the project, and re-advance. This is exactly the kind of maintenance Build Studio itself is built and maintained with. For workflow-engine bugs, the project-server logs and `packages/project-server/lib/api/workflow.js` are the place to look.
 
 **Port already in use:** the server auto-increments ports on conflict. To pin one, set it in `.build-studio/config.yaml` or pass `--port` when registering.
 

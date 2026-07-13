@@ -7,6 +7,7 @@ import { useProjectApi } from '@/lib/use-project-api'
 import { useProject } from '@/lib/project-context'
 import { roleConfig, avatarSrc } from '@/lib/roles'
 import { CommitRibbon } from './commit-ribbon'
+import { AgentTerminal } from './agent-terminal'
 import { PathologyPanel, type PathologySignals } from './pathology-panel'
 import { FindingsChecklist, type Finding } from './findings-checklist'
 
@@ -1944,6 +1945,7 @@ function StepActions({
 }
 
 function AgentLog({ logText, onClose, windowName }: { logText: string; onClose: () => void; windowName: string }) {
+  const [live, setLive] = useState(false)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
@@ -1957,14 +1959,32 @@ function AgentLog({ logText, onClose, windowName }: { logText: string; onClose: 
         <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
           {windowName}
         </span>
+        <span style={{ flex: 1 }} />
+        <button
+          onClick={() => setLive(!live)}
+          title={live ? 'Back to the read-only log' : 'Attach a live terminal — answer prompts or nudge the agent directly'}
+          style={{
+            padding: '3px 10px', borderRadius: 4,
+            border: `1px solid ${live ? 'rgba(34,197,94,0.3)' : 'var(--border)'}`,
+            background: live ? 'rgba(34,197,94,0.08)' : 'none',
+            color: live ? 'var(--green)' : 'var(--text-dim)',
+            fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer',
+          }}
+        >
+          {live ? '⌁ Live — back to log' : '⌁ Live terminal'}
+        </button>
       </div>
-      <pre style={{
-        flex: 1, overflow: 'auto', background: 'var(--bg)', border: '1px solid var(--border)',
-        borderRadius: 6, padding: 12, fontFamily: 'var(--mono)', fontSize: 11,
-        lineHeight: 1.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      }}>
-        {logText || 'No output yet — agent starting...'}
-      </pre>
+      {live ? (
+        <AgentTerminal agentWindow={windowName} />
+      ) : (
+        <pre style={{
+          flex: 1, overflow: 'auto', background: 'var(--bg)', border: '1px solid var(--border)',
+          borderRadius: 6, padding: 12, fontFamily: 'var(--mono)', fontSize: 11,
+          lineHeight: 1.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+        }}>
+          {logText || 'No output yet — agent starting...'}
+        </pre>
+      )}
     </div>
   )
 }

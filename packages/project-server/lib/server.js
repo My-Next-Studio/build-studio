@@ -240,7 +240,64 @@ function startServer(projectRoot, opts = {}) {
     });
   }
 
-  wss.on('connection', (ws) => {
+  // Live agent terminal: a dedicated pty per connection that attaches to the
+  // agent's tmux window through a grouped "view" session. Grouped = shares the
+  // workflow session's windows but keeps its own current-window, so viewing
+  // one agent never flips what another viewer (or the run itself) sees.
+  // destroy-unattached reaps the view session the moment the socket closes.
+  function handleAgentTerminal(ws, agentWindow) {
+    const { resolveAgentTarget } = require('./api/terminal');
+    const target = resolveAgentTarget(state, agentWindow);
+    if (!target) {
+      ws.send(JSON.stringify({ type: 'error', data: `No agent "${agentWindow}" found in the active workflow or run` }));
+      ws.close();
+      return;
+    }
+    const viewSession = `view-${String(agentWindow).replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now().toString(36)}`;
+    const env = { ...process.env };
+    delete env.ANTHROPIC_API_KEY;
+    let agentPty;
+    try {
+      agentPty = pty.spawn('tmux', [
+        'new-session', '-t', target.sessionName, '-s', viewSession, ';',
+        'set-option', 'destroy-unattached', 'on', ';',
+        'select-window', '-t', `${viewSession}:=${target.window}`,
+      ], { name: 'xterm-256color', cols: 220, rows: 50, cwd: config.projectRoot, env });
+    } catch (e) {
+      ws.send(JSON.stringify({ type: 'error', data: `Could not attach to agent terminal: ${e.message}` }));
+      ws.close();
+      return;
+    }
+    agentPty.onData((data) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'output', data }));
+    });
+    agentPty.onExit(() => {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(JSON.stringify({ type: 'exit' }));
+        ws.close();
+      }
+    });
+    ws.on('message', (raw) => {
+      try {
+        const { type, data, cols, rows } = JSON.parse(raw);
+        if (type === 'input') agentPty.write(data);
+        if (type === 'resize') agentPty.resize(Math.max(cols, 2), Math.max(rows, 2));
+      } catch (_) {}
+    });
+    ws.on('close', () => {
+      try { agentPty.kill(); } catch (_) {}
+      // destroy-unattached reaps the grouped view session; belt and braces:
+      try { require('child_process').execFile('tmux', ['kill-session', '-t', viewSession], () => {}); } catch (_) {}
+    });
+  }
+
+  wss.on('connection', (ws, req) => {
+    let agentWindow = null;
+    try {
+      agentWindow = new URL(req.url, 'http://localhost').searchParams.get('agentWindow');
+    } catch (_) {}
+    if (agentWindow) return handleAgentTerminal(ws, agentWindow);
+
     if (!persistentPty) spawnPersistentPty();
     if (!persistentPty) {
       ws.send(JSON.stringify({ type: 'error', data: 'Terminal unavailable — node-pty failed to spawn' }));
