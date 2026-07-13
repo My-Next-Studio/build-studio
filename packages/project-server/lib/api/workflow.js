@@ -1088,7 +1088,20 @@ ${EFFICIENCY_INSTRUCTIONS}`,
   // (.git/info/exclude — shared by all worktrees, never committed) instead of
   // the project's .gitignore. Patterns are root-anchored so a legitimate
   // project file like docs/prompt-library.txt is never masked.
-  const LAUNCHER_EXCLUDE_PATTERNS = ['/start-*.sh', '/prompt-*.txt', '/goal-*.txt'];
+  // Also exclude Build Studio's runtime state. It lives inside the repo
+  // (.build-studio/ next to the tracked config.yaml), and a project whose
+  // .gitignore doesn't cover it (onboarded repos, projects migrated from
+  // older config-dir names) otherwise trips the merge gate — or worse, gets
+  // snapshots committed by an agent's git add -A. Deliberately NOT the whole
+  // .build-studio/ dir: config.yaml is tracked and its changes must stay
+  // visible. Unanchored so the patterns hold in every worktree.
+  const LAUNCHER_EXCLUDE_PATTERNS = [
+    '/start-*.sh', '/prompt-*.txt', '/goal-*.txt',
+    '.build-studio/workflow-state.json',
+    '.build-studio/run-state.json',
+    '.build-studio/snapshots/',
+    '.build-studio/*.bak*',
+  ];
   function ensureLauncherArtifactsIgnored(agentCwd) {
     try {
       const { execFileSync } = require('child_process');
