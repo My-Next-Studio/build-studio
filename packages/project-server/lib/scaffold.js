@@ -84,7 +84,7 @@ function scaffoldProject(targetPath, options = {}) {
   const docsDir = path.join(targetPath, 'docs');
   fs.mkdirSync(docsDir, { recursive: true });
   const docsSrc = path.join(templateDir, 'docs');
-  for (const file of ['project-state.md', 'vision.md']) {
+  for (const file of ['project-state.md', 'vision.md', 'asset-register.md']) {
     const src = path.join(docsSrc, file);
     if (fs.existsSync(src)) {
       let content = fs.readFileSync(src, 'utf8');

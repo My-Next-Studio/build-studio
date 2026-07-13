@@ -163,6 +163,8 @@ async function onboardProject(targetPath, options = {}) {
   ensureDirWithGitkeep(path.join(targetPath, 'docs', 'prds'), 'docs/prds/.gitkeep', written);
   copyIfAbsent(path.join(templateDir, 'docs', 'prds', 'TEMPLATE.md'),
     path.join(targetPath, 'docs', 'prds', 'TEMPLATE.md'), 'docs/prds/TEMPLATE.md', written, skipped);
+  copyIfAbsent(path.join(templateDir, 'docs', 'asset-register.md'),
+    path.join(targetPath, 'docs', 'asset-register.md'), 'docs/asset-register.md', written, skipped);
   for (const cat of LEARNING_CATEGORIES) {
     ensureDirWithGitkeep(
       path.join(targetPath, 'docs', 'learnings', cat),
