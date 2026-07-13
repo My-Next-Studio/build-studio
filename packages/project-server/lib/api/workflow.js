@@ -1323,6 +1323,9 @@ if ! command -v ${cliBin} >/dev/null 2>&1; then
 fi
 ${simEnvLine}${goalArmLine}${cliInvocation}
 `;
+      // Pre-trust project-scoped MCP servers so Claude Code's interactive
+      // "New MCP server found in this project" prompt can't stall the agent.
+      require('../claude-settings').ensureMcpAutoApprove(agentCwd);
       fs.writeFileSync(path.join(agentCwd, scriptName), startScript, { mode: 0o755 });
 
       const logFile = path.join(logsPath, `${windowName}-${wf.id}.log`);
