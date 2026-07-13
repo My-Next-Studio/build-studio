@@ -8,6 +8,8 @@ export function ProjectCard({ project }: { project: ProjectWithStatus }) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [optimisticRunning, setOptimisticRunning] = useState<boolean | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [removing, setRemoving] = useState(false)
   const running = optimisticRunning ?? (project.status?.running ?? false)
 
   // Clear optimistic state once server-side data catches up
@@ -24,6 +26,14 @@ export function ProjectCard({ project }: { project: ProjectWithStatus }) {
     await fetch(`/api/projects/${project.name}/${action}`, { method: 'POST' })
     setOptimisticRunning(!running)
     setLoading(false)
+    router.refresh()
+  }
+
+  async function removeProject() {
+    setRemoving(true)
+    await fetch(`/api/registry/projects/${encodeURIComponent(project.name)}`, { method: 'DELETE' })
+    setRemoving(false)
+    setConfirmRemove(false)
     router.refresh()
   }
 
@@ -84,6 +94,22 @@ export function ProjectCard({ project }: { project: ProjectWithStatus }) {
         }}>
           :{project.port}
         </span>
+        <button
+          onClick={e => { e.stopPropagation(); setConfirmRemove(true) }}
+          title="Remove from Build Studio (files stay on disk)"
+          className="app-no-drag"
+          style={{
+            width: 20, height: 20, padding: 0, lineHeight: 1,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'transparent', border: 'none', borderRadius: 'var(--radius)',
+            color: 'var(--muted)', fontFamily: 'var(--mono)', fontSize: 12,
+            cursor: 'pointer', transition: 'all 0.15s ease', flexShrink: 0,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--red)'; e.currentTarget.style.background = 'rgba(239,68,68,0.08)' }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--muted)'; e.currentTarget.style.background = 'transparent' }}
+        >
+          ✕
+        </button>
       </div>
 
       <div style={{
@@ -119,6 +145,80 @@ export function ProjectCard({ project }: { project: ProjectWithStatus }) {
           {loading ? '...' : running ? 'Stop' : 'Start'}
         </button>
       </div>
+
+      {confirmRemove && (
+        <div
+          onClick={e => { e.stopPropagation(); setConfirmRemove(false) }}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 100, cursor: 'default',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-lg)',
+              padding: '28px 32px',
+              maxWidth: 440,
+              width: '90vw',
+            }}
+          >
+            <div style={{
+              fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 14,
+              color: 'var(--text)', marginBottom: 10, letterSpacing: '-0.01em',
+            }}>
+              Remove {project.name}?
+            </div>
+            <p style={{
+              fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)',
+              lineHeight: 1.7, margin: '0 0 6px',
+            }}>
+              This removes the project from Build Studio and stops its
+              project server if it is running.
+            </p>
+            <p style={{
+              fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)',
+              lineHeight: 1.7, margin: '0 0 22px',
+            }}>
+              The project folder and all its files <strong style={{ color: 'var(--text)' }}>remain on disk</strong> at{' '}
+              <span style={{ color: 'var(--text)' }}>{project.path}</span> — nothing is deleted there.
+              You can bring it back later with &ldquo;↪ Onboard project&rdquo;.
+            </p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setConfirmRemove(false)}
+                style={{
+                  padding: '7px 16px', borderRadius: 'var(--radius)',
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  color: 'var(--muted)', fontFamily: 'var(--mono)',
+                  fontSize: 11, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={removeProject}
+                disabled={removing}
+                style={{
+                  padding: '7px 16px', borderRadius: 'var(--radius)',
+                  background: 'rgba(239,68,68,0.12)',
+                  border: '1px solid rgba(239,68,68,0.3)',
+                  color: 'var(--red)', fontFamily: 'var(--mono)',
+                  fontWeight: 700, fontSize: 11,
+                  cursor: removing ? 'wait' : 'pointer',
+                  opacity: removing ? 0.5 : 1,
+                }}
+              >
+                {removing ? 'Removing…' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
