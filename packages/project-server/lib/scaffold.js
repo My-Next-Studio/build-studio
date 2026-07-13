@@ -94,6 +94,16 @@ function scaffoldProject(targetPath, options = {}) {
     }
   }
 
+  // PRD template — the PM starts every PRD from this instead of
+  // reverse-engineering the format from an older PRD.
+  const prdsDir = path.join(docsDir, 'prds');
+  fs.mkdirSync(prdsDir, { recursive: true });
+  const prdTemplateSrc = path.join(docsSrc, 'prds', 'TEMPLATE.md');
+  if (fs.existsSync(prdTemplateSrc)) {
+    fs.copyFileSync(prdTemplateSrc, path.join(prdsDir, 'TEMPLATE.md'));
+    log('docs/prds/TEMPLATE.md');
+  }
+
   // Empty directories
   for (const dir of ['docs/inputs', 'docs/prds', 'tmp']) {
     fs.mkdirSync(path.join(targetPath, dir), { recursive: true });

@@ -161,6 +161,8 @@ async function onboardProject(targetPath, options = {}) {
 
   // ─── 5. Empty workflow scaffolding (.gitkeep'd dirs) ──────────────────────
   ensureDirWithGitkeep(path.join(targetPath, 'docs', 'prds'), 'docs/prds/.gitkeep', written);
+  copyIfAbsent(path.join(templateDir, 'docs', 'prds', 'TEMPLATE.md'),
+    path.join(targetPath, 'docs', 'prds', 'TEMPLATE.md'), 'docs/prds/TEMPLATE.md', written, skipped);
   for (const cat of LEARNING_CATEGORIES) {
     ensureDirWithGitkeep(
       path.join(targetPath, 'docs', 'learnings', cat),

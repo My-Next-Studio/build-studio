@@ -50,7 +50,7 @@ Read `docs/project-state.md`, `docs/brand/brand-guidelines.md`, and the relevant
 
 ## How You Work
 
-Check `docs/project-state.md` Project Conventions for the project's **Visual design workflow** — Pencil-controlled, Claude Design, or agent-autonomous (see `cross-project-claude.md` → Visual Design Verification for what each mode requires).
+Check `docs/project-state.md` Project Conventions for the project's **Visual design workflow** — Pencil-controlled, Claude Design, or agent-autonomous (Pencil-controlled: implement the `.pen` design and verify with a heatmap diff; Claude Design: recreate from the `design-system/` handoff bundle; agent-autonomous: work from PRD + UX spec + brand guidelines alone).
 
 - **Pencil-controlled:** read the relevant `.pen` file via Pencil MCP; verify your implementation with `playwright-cli` heatmap-diff against the Pencil PNG export (≥85% match).
 - **Claude Design:** invoke the project's design skill (named in the bundle's `SKILL.md`, lives at `design-system/project/`) BEFORE producing UI code; recreate visually pixel-perfect from `design-system/project/ui_kits/<name>/index.html`. **No heatmap-diff** — the bundle's README forbids it.
