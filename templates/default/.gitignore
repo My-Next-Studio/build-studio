@@ -1,0 +1,20 @@
+tmp/
+node_modules/
+.DS_Store
+
+# Build Studio runtime state — ephemeral, machine-local, regenerated as workflows run
+.build-studio/workflow-state.json
+.build-studio/run-state.json
+.build-studio/snapshots/
+.build-studio/*.bak*
+docs/agent-status.json
+
+# Per-workflow agent launch artifacts
+start.sh
+start-*.sh
+TASK.md
+prompt-*.txt
+
+# Test runner artifacts
+test-results/
+playwright-report/

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Demo notes</title>
+<style>
+  :root { --bg:#0d0f14; --surface:#161a22; --surface2:#1f2530; --border:#2a3140; --text:#e6e9ef; --dim:#9aa4b2; --muted:#5f6b7a; --accent:#f59e0b; --red:#ff5f5f; --green:#34d399; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .wrap { display:grid; grid-template-columns:1fr 420px; height:100vh; }
+  .left { padding:16px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+  video { width:100%; background:#000; border-radius:8px; }
+  .bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .t { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
+  button { background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px 12px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#0d0f14; border:none; font-weight:700; }
+  button.rec { background:var(--red); color:#fff; border:none; }
+  .hint { color:var(--muted); font-size:11px; }
+  .right { border-left:1px solid var(--border); background:var(--surface); display:flex; flex-direction:column; min-height:0; }
+  .right h2 { font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); margin:0; padding:14px 16px 8px; }
+  #saved { float:right; font-size:10px; color:var(--green); opacity:0; transition:opacity .3s; }
+  #notes { overflow:auto; padding:0 12px 16px; flex:1; }
+  .note { background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:8px; margin-bottom:8px; }
+  .note .row { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+  .note .time { color:var(--accent); font-weight:700; cursor:pointer; font-variant-numeric:tabular-nums; }
+  .note select { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:5px; padding:2px 4px; font:inherit; font-size:11px; }
+  .note textarea { width:100%; min-height:46px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:6px; font:inherit; resize:vertical; }
+  .note .del { margin-left:auto; color:var(--muted); border:none; background:none; padding:2px 6px; }
+  .note .del:hover { color:var(--red); }
+  .mic { border:none; background:none; cursor:pointer; font-size:14px; padding:2px 4px; }
+  .mic.on { color:var(--red); }
+  .type-highlight { border-left:3px solid var(--accent); }
+  .type-technical { border-left:3px solid #60a5fa; }
+  .type-cut { border-left:3px solid var(--red); opacity:.8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="left">
+    <video id="v" controls></video>
+    <div class="bar">
+      <span class="t" id="cur">0:00</span>
+      <button class="primary" id="add">＋ Note at current time <span class="hint">(N)</span></button>
+      <button id="back5">⟲ 5s</button>
+      <button id="fwd5">5s ⟳</button>
+      <label class="hint">🎤 <select id="lang" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:2px 4px;font:inherit;font-size:11px;"><option value="sv-SE">Svenska</option><option value="en-US">English</option></select></label>
+      <span class="hint" id="cutname"></span>
+    </div>
+    <div class="hint">
+      Space play/pause · ←/→ seek 5s · <b>N</b> add note (pauses) · click a note's time to jump.
+      Dictate into a note with macOS dictation (press <b>fn fn</b>) or the 🎤 button if your browser supports it.
+    </div>
+  </div>
+  <div class="right">
+    <h2>Notes <span id="saved">saved ✓</span></h2>
+    <div id="notes"></div>
+  </div>
+</div>
+<script>
+const v = document.getElementById('v');
+const notesEl = document.getElementById('notes');
+let notes = [];
+let meta = { cut:'', recording:'' };
+
+const fmt = s => { s=Math.max(0,Math.floor(s)); const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60; const p=n=>String(n).padStart(2,'0'); return (h?p(h)+':':'')+p(m)+':'+p(x); };
+const fmtMs = s => fmt(s); // shown HH:MM:SS
+
+async function boot() {
+  meta = await (await fetch('/meta')).json();
+  document.getElementById('cutname').textContent = meta.cut;
+  v.src = '/video';
+  const existing = await (await fetch('/notes')).json().catch(()=>({notes:[]}));
+  notes = (existing && existing.notes) || [];
+  render();
+}
+boot();
+
+v.addEventListener('timeupdate', () => { document.getElementById('cur').textContent = fmt(v.currentTime); });
+
+let saveTimer=null;
+function save() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    notes.sort((a,b)=>a.t-b.t);
+    await fetch('/notes', { method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ meta:{ ...meta, generatedAt:new Date().toISOString() }, notes }) });
+    const s=document.getElementById('saved'); s.style.opacity=1; setTimeout(()=>s.style.opacity=0,900);
+  }, 400);
+}
+
+function addNote() {
+  v.pause();
+  const n = { id: Math.random().toString(36).slice(2,9), t: +v.currentTime.toFixed(2), type:'note', text:'' };
+  notes.push(n); render();
+  const ta = document.querySelector(`[data-id="${n.id}"] textarea`); if (ta) ta.focus();
+  save();
+}
+
+function render() {
+  notes.sort((a,b)=>a.t-b.t);
+  notesEl.innerHTML = '';
+  for (const n of notes) {
+    const d = document.createElement('div');
+    d.className = 'note type-'+n.type; d.dataset.id = n.id;
+    d.innerHTML = `
+      <div class="row">
+        <span class="time">${fmtMs(n.t)}</span>
+        <select>${['note','highlight','technical','cut'].map(t=>`<option ${t===n.type?'selected':''}>${t}</option>`).join('')}</select>
+        <button class="mic" title="Live dictation (if supported)">🎤</button>
+        <button class="del" title="Delete">✕</button>
+      </div>
+      <textarea placeholder="What happens here / what to highlight…">${n.text.replace(/</g,'&lt;')}</textarea>`;
+    d.querySelector('.time').onclick = () => { v.currentTime = n.t; };
+    d.querySelector('select').onchange = e => { n.type=e.target.value; d.className='note type-'+n.type; save(); };
+    d.querySelector('textarea').oninput = e => { n.text=e.target.value; save(); };
+    d.querySelector('.del').onclick = () => { notes=notes.filter(x=>x.id!==n.id); render(); save(); };
+    d.querySelector('.mic').onclick = e => dictate(e.target, n.id);
+    notesEl.appendChild(d);
+  }
+}
+
+// In-browser live dictation (Chrome). Auto-restarts through pauses, and now
+// surfaces errors instead of failing silently. macOS dictation works too.
+let rec=null, recBtn=null, recId=null, recBase='', recActive=false;
+function dictate(btn, id) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('No in-browser speech in this browser. Use macOS dictation (set a shortcut in System Settings → Keyboard → Dictation).'); return; }
+  if (recActive && recBtn===btn) { recActive=false; try{rec&&rec.stop();}catch(e){} btn.classList.remove('on'); return; } // toggle off
+  if (rec) { recActive=false; try{rec.stop();}catch(e){} if(recBtn)recBtn.classList.remove('on'); }
+  const ta = document.querySelector(`[data-id="${id}"] textarea`);
+  recId=id; recBtn=btn; recBase = ta.value ? ta.value+' ' : ''; recActive=true; btn.classList.add('on');
+  startRec(SR, ta);
+}
+function startRec(SR, ta) {
+  rec = new SR(); rec.continuous=true; rec.interimResults=true;
+  rec.lang = (document.getElementById('lang') || {}).value || 'sv-SE';
+  rec.onresult = ev => {
+    let s=''; for (let i=ev.resultIndex;i<ev.results.length;i++) s+=ev.results[i][0].transcript;
+    ta.value = recBase+s; const n=notes.find(x=>x.id===recId); if(n){n.text=ta.value; save();}
+  };
+  rec.onerror = ev => {
+    recActive=false; if(recBtn)recBtn.classList.remove('on');
+    if (ev.error==='not-allowed'||ev.error==='service-not-allowed') alert('Microphone blocked. Click the camera/mic icon in Chrome\'s address bar → Allow, then try again.');
+    else if (ev.error==='network') alert('Chrome speech service unreachable (needs internet). Use macOS dictation instead.');
+    else if (ev.error!=='no-speech' && ev.error!=='aborted') alert('Speech error: '+ev.error);
+  };
+  rec.onend = () => { if (recActive) { recBase = ta.value ? ta.value+' ' : ''; startRec(SR, ta); } else if (recBtn) recBtn.classList.remove('on'); };
+  try { rec.start(); } catch(e) {}
+}
+
+document.addEventListener('keydown', e => {
+  const typing = ['TEXTAREA','INPUT','SELECT'].includes(document.activeElement.tagName);
+  if (typing) return;
+  if (e.code==='Space') { e.preventDefault(); v.paused?v.play():v.pause(); }
+  else if (e.key==='ArrowLeft') v.currentTime=Math.max(0,v.currentTime-5);
+  else if (e.key==='ArrowRight') v.currentTime+=5;
+  else if (e.key.toLowerCase()==='n') { e.preventDefault(); addNote(); }
+});
+const langSel = document.getElementById('lang');
+langSel.value = localStorage.getItem('demoLang') || 'sv-SE';
+langSel.onchange = () => localStorage.setItem('demoLang', langSel.value);
+document.getElementById('add').onclick = addNote;
+document.getElementById('back5').onclick = ()=>v.currentTime=Math.max(0,v.currentTime-5);
+document.getElementById('fwd5').onclick = ()=>v.currentTime+=5;
+</script>
+</body>
+</html>

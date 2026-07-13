@@ -1,0 +1,16 @@
+node_modules/
+.DS_Store
+.next/
+dist/
+_standalone/
+_robot_icon/
+*.icns
+*.tsbuildinfo
+packages/desktop/icon.iconset/
+packages/desktop/user-icon-source.jpg
+tmp/oneshot/
+docs/_internal/
+
+# Personal/local Claude Code config (contributors keep their own)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

@@ -1,0 +1,189 @@
+name: my-project
+port: 3000
+docs_path: ./docs
+
+# Workflow preset — defines roles, workflow steps, and model assignments.
+# Available presets: web-app, api-only, mobile-app, static-site
+preset: web-app
+
+# Override preset roles (optional):
+# roles:
+#   add:
+#     execution:
+#       - role: Data Engineer
+#         skill: data_engineer
+#         command: data_engineer.md
+#         branch_prefix: agent-data
+#         worktree: true
+#   remove:
+#     - Marketing    # remove a role by name
+
+# Override preset workflow steps (optional):
+# workflow:
+#   execution:
+#     remove:
+#       - visual_design    # skip visual design
+#     add:
+#       - step: staging_deploy
+#         after: demo_review   # insert after a specific step
+
+# Override model assignments per step (optional):
+# step_models:
+#   implementation: sonnet   # use cheaper model for implementation
+
+# Override per-step reasoning effort (optional; merges over the preset's
+# step_efforts — the solo preset keeps judgment steps at high and dials
+# mechanical steps to low). xhigh is an Opus-only deep-reasoning tier.
+# step_efforts:
+#   task_execution: xhigh    # e.g. whole-PRD monolithic builds on Opus
+#   capture_learnings: low
+
+# How the monolithic task_execution builder is driven (optional, hot-reloaded):
+#   role (default) — classic role-prompted session
+#   goal           — also arms Claude Code's native /goal harness on the builder
+#                    session: the CLI re-checks the done-condition (every AC
+#                    implemented, COMPLETE suite green, per-AC evidence table,
+#                    feedback POSTed) after every response and keeps the session
+#                    working until it is met — premature "done" doesn't end the
+#                    run. Claude builders only (ignored for Codex/fine-grained).
+# builder_strategy: goal
+
+# Override preset features (optional):
+# Each preset defines defaults — override here per-project.
+# features:
+#   playwright_cli: true   # enable browser screenshots for visual verification (web projects)
+#                          # set to false for mobile-only or API-only projects
+
+agent_defaults:
+  skip_permissions: true
+  unset_api_key: true
+
+# Deployment and versioning strategy (optional):
+# Defaults: trunk-based, semver tags, auto-tag + auto-push on merge-to-main.
+# deployment:
+#   strategy: trunk           # trunk | gitflow (default: trunk)
+#   versioning: semver        # semver | calver | none (default: semver)
+#   auto_tag: true            # create git tag on merge-to-main
+#   auto_deploy: true         # push to remote after merge (triggers CD pipeline)
+#   tag_prefix: v             # tag format: v1.2.3
+#   initial_version: 0.1.0   # first tag if no tags exist yet
+#   # Optional: multiple, clearly-labelled deploy targets (e.g. a monorepo with a
+#   # web app AND a mobile app). Omit `targets` to keep the single-target default
+#   # synthesized from repo/ci_workflow above (backward-compatible). Each target:
+#   #   kind: github-workflow  → dispatched via `gh workflow run` (web/CD)
+#   #   kind: local-command    → runs a local command on the host (e.g. a fastlane lane)
+#   targets:
+#     - id: web
+#       label: "Web → Cloudflare Pages"
+#       kind: github-workflow
+#       repo: owner/repo
+#       ci_workflow: deploy-pages.yml
+#       deployedOnPush: true            # auto on push → status card, no redundant button
+#     - id: ios-appstore
+#       label: "iOS → App Store (fastlane)"
+#       kind: local-command
+#       command: "bundle exec fastlane metadata_validate"
+#       cwd: ios
+
+# Dev servers to start in worktrees during QA validation.
+# `type` controls how the port is injected:
+#   vite  → appends `-- --port N` (vite ignores PORT= env var)
+#   node  → prepends `PORT=N` (standard Node/Next.js custom server)
+#   custom → no port injection (handle it yourself in cmd)
+# Omit `type` to auto-detect via package.json scripts.
+# dev_commands:
+#   - name: backend
+#     cmd: npm run dev
+#     cwd: backend/
+#     port: 4000
+#     type: node
+#   - name: frontend
+#     cmd: npm run dev
+#     cwd: frontend/
+#     port: 5173
+#     type: vite
+
+# Functions — control which dashboard sections are enabled.
+# Project and Development are enabled by default.
+# functions:
+#   project:
+#     enabled: true
+#   development:
+#     enabled: true
+#   # Future functions (disabled by default):
+#   # operations:
+#   #   enabled: true
+#   # support:
+#   #   enabled: true
+#   # marketing:
+#   #   enabled: true
+
+worktree_env_files: []
+
+# ─── Execution-phase recall gates (project-agnostic; sensible defaults apply) ──
+# These improve the execution phase's ability to catch untested-variant bugs,
+# silent fail-safe drops, leaked test scaffolding, and altitude/contract drift.
+# All are hot-reloaded — no restart needed to change them.
+#
+# coverage_matrix — ADVISORY post-implementation coverage check (non-blocking).
+#   The full acceptance-criteria × variant matrix is now enumerated and tested UP
+#   FRONT at qa_tests (which has no test-count cap and writes a test per relevant
+#   cell — entity/type, state, toggle direction, invalid payload). This step only
+#   re-checks against the real implementation and surfaces residual gaps
+#   (impl-introduced variants, silent drops) as advisory notes — it never blocks
+#   the merge. `variants` is an OPTIONAL taxonomy supplied when your project has a
+#   specific variant vocabulary worth calling out.
+# coverage_matrix:
+#   variants:
+#     entity_types: [template-page, ai-generated-page]
+#     states: [draft, published, expired]
+#
+# final_review — independent, recall-biased review run as a HARD GATE before the
+#   demo/merge gate. Starts from the spec (not the diff) and runs the /code-review
+#   skill's multi-angle finder→verify. `effort` is the skill effort level.
+# final_review:
+#   effort: high        # low | medium | high | max
+#
+# code_review — in-flow review effort (the mid-flow multi-angle pass).
+# code_review:
+#   effort: high
+#
+# qa_validation — the post-merge test-run gate.
+#   strict (default true): any failing test blocks approval (main is the
+#     zero-failing-tests baseline). Bypass one approval with
+#     {"action":"approve","override":true}; relax permanently with strict: false.
+#   honor_clean_approval (default false): when the QA agent certifies a clean
+#     verdict (Approved: yes + Blocking: 0 — it triaged every failure as
+#     non-blocking), the strict gate approves WITHOUT a manual override. Opt in
+#     for projects whose suites throw occasional environmental flakes the agent
+#     reliably triages (e.g. iOS XCUITests). Real regressions still block (the
+#     agent reports Blocking > 0). Trusts the agent's triage — leave off if you
+#     want a human to consciously accept every failure.
+# qa_validation:
+#   strict: true
+#   honor_clean_approval: false
+#
+# hygiene — mechanical pre-merge grep gate for test scaffolding leaked into
+#   production source. Runs at merge_for_review. BLOCKS the merge only on actual
+#   mechanisms that gate/backdoor production: env failure hooks
+#   (`process.env.X === 'fail'`), global backdoors (`globalThis.__TEST_*`),
+#   `__TEST_HOOK__`/`__E2E_HOOK__` identifiers. A bare `// test-only` comment is
+#   ADVISORY (surfaced as a note, never blocks — a documentation marker isn't a
+#   reachable seam). Test files and test dirs (tests/, fixtures/, test-fixtures/,
+#   __mocks__, *Tests.swift, …) are skipped. `extra_patterns` adds project
+#   regexes (blocking); `allow` exempts files whose path contains any substring.
+# hygiene:
+#   enabled: true
+#   extra_patterns: []
+#   allow: []
+#
+# learnings — the end-of-run Knowledge Curator + per-agent injection of past
+#   lessons. Capture is gated to signal-bearing runs by default: a clean
+#   first-pass run (no fix rounds, overrides, or gate trips) skips the curator.
+#   Injection is capped and relevance-ranked; agents self-report which entries
+#   they applied (`**Learnings applied:**` in feedback), and entries injected
+#   30× without ever being applied are auto-archived to docs/learnings/_archive/.
+# learnings:
+#   capture: failures    # failures (default) | always | off
+#   max_injected: 6      # Known Learnings entries per agent prompt
+#   max_entries_per_domain: 25

@@ -1,0 +1,59 @@
+{
+  "name": "@build-studio/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
+    "build": "npm run build:next && npm run pack && npm run inject-resources",
+    "build:next": "cd ../hub && npx next build",
+    "pack": "electron-builder --mac --dir",
+    "inject-resources": "node inject-resources.js",
+    "sync": "node inject-resources.js --sync-only",
+    "dist": "npm run build"
+  },
+  "dependencies": {
+    "@build-studio/shared": "*"
+  },
+  "devDependencies": {
+    "electron": "35.7.5",
+    "electron-builder": "^26"
+  },
+  "build": {
+    "appId": "com.build-studio.app",
+    "productName": "Build Studio",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dir"],
+      "identity": "Apple Development: lars.bruce@gmail.com (TPKDYK67UH)",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Build Studio records narration from your microphone during demo recordings."
+      },
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "demo/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../project-server",
+        "to": "project-server",
+        "filter": ["**/*", "!node_modules"]
+      },
+      {
+        "from": "../shared",
+        "to": "shared",
+        "filter": ["**/*", "!node_modules"]
+      },
+      {
+        "from": "../../templates",
+        "to": "templates",
+        "filter": ["**/*"]
+      }
+    ]
+  }
+}

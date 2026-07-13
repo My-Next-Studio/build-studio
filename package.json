@@ -1,0 +1,24 @@
+{
+  "name": "build-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mission control dashboard for multi-agent Claude Code workflows",
+  "bin": {
+    "build-studio": "./bin/cli.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "start": "node bin/cli.js start",
+    "hub": "node bin/cli.js hub",
+    "postinstall": "find node_modules/node-pty -name 'spawn-helper' -exec chmod +x {} +"
+  },
+  "dependencies": {
+    "@build-studio/project-server": "*",
+    "@build-studio/shared": "*"
+  }
+}

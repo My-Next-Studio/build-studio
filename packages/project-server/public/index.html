@@ -1,0 +1,1973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Build Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0d0f14;
+      --surface:   #131720;
+      --surface2:  #1a1f2e;
+      --surface3:  #1f2639;
+      --border:    #252d3d;
+      --accent:    #4a9eff;
+      --accent2:   #7c6fff;
+      --green:     #3ddc84;
+      --yellow:    #f5c518;
+      --orange:    #ff9f43;
+      --red:       #ff5f5f;
+      --muted:     #4a5568;
+      --text:      #c8d0e0;
+      --text-dim:  #6b7a99;
+      --mono:      'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+      --sans:      -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --panel-w-left:  300px;
+      --panel-w-right: 290px;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.5; overflow: hidden; }
+
+    /* ── Layout ─────────────────────────── */
+    #app { display: grid; grid-template-rows: 48px 1fr; grid-template-columns: var(--panel-w-left) 1fr var(--panel-w-right); height: 100vh; }
+    /* Explicit grid placement so display:none on spec-nav doesn't shift siblings */
+    #spec-nav   { grid-column: 1; grid-row: 2; }
+    #work-area  { grid-column: 2; grid-row: 2; }
+    #agent-roster { grid-column: 3; grid-row: 2; }
+    #app.view-overview { grid-template-columns: 0px 1fr 0px; }
+    #app.view-overview #agent-roster { display: none; }
+    #app.view-overview #spec-nav { display: none; }
+    #app.view-overview.overview-spec #spec-nav { display: flex; }
+    #app.view-overview.overview-spec { grid-template-columns: var(--panel-w-left) 1fr 0px; }
+    #app.view-overview #work-tabs { display: flex; }
+    #app.view-overview .scroll-panel:not(#tab-spec):not(#tab-status) { display: none !important; }
+    #app.view-overview [id^="tab-"]:not(#tab-spec):not(#tab-status) { display: none !important; }
+    #app.view-workflow { grid-template-columns: 0px 1fr 0px; }
+    #app.view-workflow #agent-roster { display: none; }
+    #app.view-workflow #work-tabs { display: none; }
+    #app.view-workflow #spec-nav { display: none; }
+    #app.view-workflow #tab-workflow { display: flex !important; }
+    #app.view-workflow .scroll-panel { display: none !important; }
+    #app.view-workflow [id^="tab-"]:not(#tab-workflow) { display: none !important; }
+
+    /* ── Top bar ─────────────────────────── */
+    #topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--border); }
+    #topbar .logo { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; }
+    #topbar .sep { color: var(--muted); margin: 0 4px; }
+    #topbar .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); flex-shrink: 0; }
+    #topbar .status-text { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+    #topbar .spacer { flex: 1; }
+    #topbar .docs-path { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+    /* ── View toggle ─────────────────────── */
+    .view-toggle { display: flex; align-items: center; gap: 2px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 3px; margin-right: 4px; }
+    .view-btn { padding: 4px 14px; background: none; border: none; border-radius: 4px; color: var(--text-dim); font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: all 0.15s; }
+    .view-btn:hover { color: var(--text); }
+    .view-btn.active { background: var(--surface3); color: var(--text); border: 1px solid var(--border); }
+
+    /* Allow-all toggle */
+    .allow-toggle-wrap { display: flex; align-items: center; gap: 8px; padding: 0 14px; border-left: 1px solid var(--border); margin-left: 8px; }
+    .allow-toggle-label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); user-select: none; }
+    .toggle-switch { position: relative; width: 36px; height: 20px; cursor: pointer; flex-shrink: 0; }
+    .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-slider { position: absolute; inset: 0; background: var(--surface3); border: 1px solid var(--border); border-radius: 10px; transition: background 0.2s, border-color 0.2s; }
+    .toggle-slider::before { content: ''; position: absolute; width: 14px; height: 14px; left: 2px; bottom: 2px; background: var(--muted); border-radius: 50%; transition: transform 0.2s, background 0.2s; }
+    .toggle-switch input:checked + .toggle-slider { background: rgba(61,220,132,0.15); border-color: var(--green); }
+    .toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); background: var(--green); }
+    .allow-toggle-wrap.restricted .allow-toggle-label { color: var(--orange); }
+    .allow-toggle-wrap.restricted .toggle-slider { border-color: var(--orange); }
+
+    /* ── Left panel ─────────────────────── */
+    #spec-nav { background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+    .panel-header { padding: 12px 16px 10px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    #file-tree { flex: 1; overflow-y: auto; padding: 8px 0; }
+    #file-tree::-webkit-scrollbar { width: 4px; }
+    #file-tree::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .folder-group { margin-bottom: 4px; }
+    .folder-label { padding: 4px 16px; font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+    .file-item { display: flex; align-items: center; gap: 8px; padding: 5px 16px 5px 24px; cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--text-dim); transition: background 0.1s, color 0.1s; border-left: 2px solid transparent; }
+    .file-item:hover { background: var(--surface2); color: var(--text); }
+    .file-item.active { background: var(--surface2); color: var(--accent); border-left-color: var(--accent); }
+    .file-item .file-icon { color: var(--muted); font-size: 10px; }
+    .file-item .recent-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--yellow); flex-shrink: 0; margin-left: auto; }
+
+    /* ── Center panel ────────────────────── */
+    #work-area { display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+    #work-tabs { display: flex; align-items: center; background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 16px; flex-shrink: 0; height: 38px; gap: 0; }
+    .tab-btn { padding: 0 14px; height: 38px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-dim); font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: color 0.1s, border-color 0.1s; }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-spacer { flex: 1; }
+    #selected-badge { font-family: var(--mono); font-size: 11px; color: var(--accent2); background: rgba(124,111,255,0.12); padding: 2px 10px; border-radius: 3px; display: none; }
+
+    .scroll-panel { flex: 1; overflow-y: auto; padding: 28px 36px; display: none; }
+    .scroll-panel.active { display: block; }
+    .scroll-panel::-webkit-scrollbar { width: 5px; }
+    .scroll-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--muted); font-family: var(--mono); font-size: 13px; text-align: center; line-height: 1.7; }
+    .empty-state .big { font-size: 48px; margin-bottom: 8px; }
+
+    /* Markdown */
+    .md-body { max-width: 780px; }
+    .md-body h1 { font-size: 1.6em; font-weight: 700; color: #e2e8f0; margin-bottom: 16px; }
+    .md-body h2 { font-size: 1.25em; font-weight: 600; color: #cbd5e0; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    .md-body h3 { font-size: 1.05em; font-weight: 600; color: #a0aec0; margin: 20px 0 8px; }
+    .md-body p { margin-bottom: 12px; color: var(--text); line-height: 1.7; }
+    .md-body ul, .md-body ol { padding-left: 22px; margin-bottom: 12px; }
+    .md-body li { margin-bottom: 4px; line-height: 1.65; }
+    .md-body code { font-family: var(--mono); font-size: 0.85em; background: var(--surface2); padding: 1px 6px; border-radius: 3px; color: #7dd3fc; }
+    .md-body pre { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 16px 18px; overflow-x: auto; margin-bottom: 16px; }
+    .md-body pre code { background: none; padding: 0; color: #a8d8a8; font-size: 0.82em; }
+    .md-body blockquote { border-left: 3px solid var(--accent2); padding-left: 16px; margin: 16px 0; color: var(--text-dim); font-style: italic; }
+    .md-body hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    .md-body a { color: var(--accent); text-decoration: none; }
+    .md-body strong { color: #e2e8f0; }
+    .md-body table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+    .md-body th, .md-body td { border: 1px solid var(--border); padding: 6px 12px; text-align: left; }
+    .md-body th { background: var(--surface2); font-weight: 600; }
+
+    /* ── Instruct panel ─────────────────── */
+    .instr-heading { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 4px; }
+    .instr-targets { display: flex; flex-wrap: wrap; gap: 8px; }
+    .instr-tag { display: flex; align-items: center; gap: 6px; background: rgba(74,158,255,0.1); border: 1px solid rgba(74,158,255,0.25); border-radius: 4px; padding: 4px 10px; font-family: var(--mono); font-size: 12px; color: var(--accent); }
+    #instr-textarea { flex: 1; min-height: 160px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.6; padding: 14px 16px; resize: vertical; outline: none; transition: border-color 0.15s; }
+    #instr-textarea:focus { border-color: var(--accent); }
+    #instr-textarea::placeholder { color: var(--muted); }
+    .instr-actions { display: flex; align-items: center; gap: 12px; }
+    .primary-btn { display: flex; align-items: center; gap: 8px; padding: 9px 20px; background: var(--accent); border: none; border-radius: 5px; color: #0d0f14; font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: opacity 0.15s; }
+    .primary-btn:hover { opacity: 0.85; }
+    .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .primary-btn.green { background: var(--green); }
+    .primary-btn.orange { background: var(--orange); }
+    .primary-btn.red { background: var(--red); }
+    .action-hint { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .flash-confirm { font-family: var(--mono); font-size: 12px; color: var(--green); display: none; align-items: center; gap: 6px; }
+    .queue-divider { border-top: 1px solid var(--border); padding-top: 16px; }
+    .sent-entry { background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 12px 14px; margin-bottom: 10px; font-family: var(--mono); font-size: 12px; }
+    .sent-entry .q-header { color: var(--accent2); margin-bottom: 6px; }
+    .sent-entry .q-body { color: var(--text-dim); white-space: pre-wrap; }
+
+    /* ── Queue panel ─────────────────────── */
+    .section-label { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 12px; }
+    .queue-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; margin-bottom: 12px; }
+    .queue-card .qc-meta { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .queue-card .qc-roles { display: flex; flex-wrap: wrap; gap: 6px; }
+    .queue-card .qc-role-tag { font-family: var(--mono); font-size: 11px; color: var(--accent2); background: rgba(124,111,255,0.12); border: 1px solid rgba(124,111,255,0.2); padding: 2px 8px; border-radius: 3px; }
+    .queue-card .qc-time { font-family: var(--mono); font-size: 10px; color: var(--muted); white-space: nowrap; }
+    .queue-card .qc-body { font-size: 13px; color: var(--text); line-height: 1.6; margin-bottom: 12px; white-space: pre-wrap; }
+    .queue-card .qc-actions { display: flex; gap: 8px; }
+    .ghost-btn { padding: 5px 14px; background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--text-dim); font-family: var(--mono); font-size: 11px; cursor: pointer; transition: all 0.1s; }
+    .ghost-btn:hover { border-color: var(--muted); color: var(--text); }
+    .ghost-btn.copied { border-color: var(--green); color: var(--green); }
+    .ghost-btn.danger { border-color: rgba(255,95,95,0.4); color: var(--red); }
+    .ghost-btn.danger:hover { border-color: var(--red); }
+    .ghost-btn.accent { border-color: rgba(74,158,255,0.4); color: var(--accent); }
+    .ghost-btn.accent:hover { border-color: var(--accent); }
+
+    /* ── Plan panel ─────────────────────── */
+    #plan-body { flex: 1; overflow-y: auto; padding: 28px 36px 0; }
+    #plan-body::-webkit-scrollbar { width: 5px; }
+    #plan-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    #plan-launch-bar { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--surface); padding: 14px 36px; display: none; align-items: center; gap: 16px; }
+    #plan-launch-bar.visible { display: flex; }
+    .task-cards { display: flex; flex-direction: column; gap: 10px; margin: 20px 0; }
+    .task-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
+    .task-card .tc-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .task-card .tc-avatar { font-size: 18px; }
+    .task-card .tc-role { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--text); }
+    .task-card .tc-branch { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto; }
+    .task-card .tc-instruction { font-size: 12px; color: var(--text-dim); line-height: 1.6; max-height: 60px; overflow: hidden; }
+    .plan-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; color: var(--muted); font-family: var(--mono); font-size: 12px; text-align: center; line-height: 1.7; }
+    .plan-empty .big { font-size: 40px; }
+    .launch-result { font-family: var(--mono); font-size: 12px; }
+    .launch-result.ok { color: var(--green); }
+    .launch-result.err { color: var(--red); }
+
+    /* Status pill */
+    .status-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 10px; font-family: var(--mono); font-size: 10px; font-weight: 600; }
+    .status-pill::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    .status-pill.idle    { color: var(--muted); background: rgba(74,85,104,0.2); }
+    .status-pill.running, .status-pill.working { color: var(--yellow); background: rgba(245,197,24,0.12); }
+    .status-pill.done    { color: var(--green); background: rgba(61,220,132,0.12); }
+    .status-pill.error   { color: var(--red); background: rgba(255,95,95,0.12); }
+
+    /* ── Right panel ─────────────────────── */
+    #agent-roster { background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+    #agent-list { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
+    #agent-list::-webkit-scrollbar { width: 4px; }
+    #agent-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .agent-card { display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); cursor: pointer; margin-bottom: 6px; transition: border-color 0.15s; user-select: none; position: relative; }
+    .agent-card:hover { border-color: var(--muted); }
+    .agent-card.selected { border-color: var(--accent2); background: rgba(124,111,255,0.08); }
+    .agent-card .card-top { display: flex; align-items: center; gap: 9px; }
+    .agent-card .avatar { font-size: 18px; line-height: 1; flex-shrink: 0; }
+    .agent-card .card-meta { flex: 1; min-width: 0; }
+    .agent-card .role-name { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-card .last-activity { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-card .select-check { position: absolute; top: 8px; right: 8px; width: 15px; height: 15px; border: 1.5px solid var(--muted); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: transparent; transition: all 0.15s; }
+    .agent-card.selected .select-check { border-color: var(--accent2); background: var(--accent2); color: white; }
+
+    #worktree-section { flex-shrink: 0; border-top: 1px solid var(--border); }
+    #worktree-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 4px; }
+    #worktree-header .wt-label { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); }
+    #worktree-header .wt-count { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+    #worktree-list { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
+    .wt-item { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 7px 10px; }
+    .wt-item .wt-branch { font-family: var(--mono); font-size: 11px; color: var(--orange); }
+    .wt-item .wt-task { font-family: var(--mono); font-size: 10px; color: var(--text-dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wt-item .wt-commit { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .wt-empty { font-family: var(--mono); font-size: 11px; color: var(--muted); padding: 4px 4px 8px; }
+    #roster-footer { padding: 8px; border-top: 1px solid var(--border); flex-shrink: 0; }
+    #select-all-btn { width: 100%; padding: 7px; background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--text-dim); font-family: var(--mono); font-size: 11px; cursor: pointer; transition: all 0.1s; }
+    #select-all-btn:hover { border-color: var(--muted); color: var(--text); }
+
+    /* ── Agent chat-selected state ────────── */
+    .agent-card.chat-selected { border-color: var(--green); background: rgba(61,220,132,0.08); }
+    .agent-card.chat-selected .select-check { border-color: var(--green); background: var(--green); color: #0d0f14; }
+
+    /* ── Spec terminal panel ─────────────── */
+    #term-topbar-btn { display: none; }
+    #app.view-overview #term-topbar-btn { display: inline-flex; }
+    #spec-terminal-panel { display: none; flex-direction: column; border-left: 1px solid var(--border); width: 50%; min-width: 300px; flex-shrink: 0; }
+    #spec-terminal-panel.term-visible { display: flex; }
+    #work-area-content { display: flex; flex-direction: row; flex: 1; min-height: 0; overflow: hidden; }
+    #work-area-content > .scroll-panel.active,
+    #work-area-content > #tab-status.active { flex: 1; min-width: 0; overflow-y: auto; }
+    #app.view-workflow #spec-terminal-panel { display: none !important; }
+    .terminal-header { display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: var(--surface2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .terminal-label { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: 0.08em; text-transform: uppercase; }
+    #spec-terminal-container { flex: 1; background: var(--bg); overflow: hidden; min-height: 0; }
+    #spec-terminal-container .xterm { height: 100%; padding: 4px; }
+    #spec-terminal-container .xterm-viewport { overflow-y: hidden !important; }
+    #chat-input:disabled { opacity: 0.5; }
+
+    /* ── Status tab ──────────────────────── */
+    #tab-status { flex: 1; overflow-y: auto; padding: 24px 32px; display: none; }
+    #tab-status.active { display: block; }
+
+    /* ── Workflow modal ───────────────────── */
+    #workflow-modal { display: none; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px); align-items: center; justify-content: center; }
+    #workflow-modal.visible { display: flex; }
+    #workflow-modal-inner { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; max-width: 820px; width: 90vw; max-height: 85vh; overflow-y: auto; padding: 28px 32px; position: relative; }
+    #workflow-modal-inner::-webkit-scrollbar { width: 5px; }
+    #workflow-modal-inner::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .wf-close { position: absolute; top: 12px; right: 16px; background: none; border: none; color: var(--text-dim); font-size: 18px; cursor: pointer; }
+    .wf-close:hover { color: var(--text); }
+    .wf-title { font-family: var(--mono); font-size: 16px; font-weight: 700; color: #e2e8f0; margin-bottom: 24px; }
+    .wf-phase { margin-bottom: 28px; }
+    .wf-phase-title { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    .wf-steps { display: flex; flex-direction: column; gap: 0; }
+    .wf-step { display: flex; align-items: flex-start; gap: 14px; position: relative; padding: 0 0 0 0; }
+    .wf-step-track { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; width: 32px; }
+    .wf-step-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--border); background: var(--surface); flex-shrink: 0; z-index: 1; }
+    .wf-step-line { width: 2px; flex: 1; background: var(--border); min-height: 20px; }
+    .wf-step:last-child .wf-step-line { display: none; }
+    .wf-step-body { padding: 0 0 16px 0; flex: 1; min-width: 0; }
+    .wf-step-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+    .wf-step-num { font-family: var(--mono); font-size: 10px; color: var(--muted); min-width: 20px; }
+    .wf-role { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 10px; font-family: var(--mono); font-size: 11px; font-weight: 600; background: rgba(74,158,255,0.1); color: var(--accent); border: 1px solid rgba(74,158,255,0.2); }
+    .wf-role.parallel { background: rgba(124,111,255,0.1); color: var(--accent2); border-color: rgba(124,111,255,0.2); }
+    .wf-role.gate { background: rgba(245,197,24,0.1); color: var(--yellow); border-color: rgba(245,197,24,0.2); }
+    .wf-role.team { background: rgba(61,220,132,0.1); color: var(--green); border-color: rgba(61,220,132,0.2); }
+    .wf-step-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+    .wf-step-dot.parallel { border-color: var(--accent2); }
+    .wf-step-dot.gate { border-color: var(--yellow); background: var(--yellow); }
+    .wf-step-dot.team { border-color: var(--green); }
+    .wf-parallel-group { border-left: 2px solid var(--accent2); margin-left: 4px; padding-left: 10px; }
+    .wf-tabs { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 1px solid var(--border); }
+    .wf-tab { padding: 8px 16px; font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--text-dim); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; }
+    .wf-tab:hover { color: var(--text); }
+    .wf-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .status-section { margin-bottom: 28px; }
+    .status-section-title { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .active-prd-card { background: var(--surface2); border: 1px solid rgba(74,158,255,0.3); border-left: 3px solid var(--accent); border-radius: 6px; padding: 14px 16px; margin-bottom: 8px; }
+    .active-prd-card .prd-id { font-family: var(--mono); font-size: 11px; color: var(--accent); font-weight: 700; margin-bottom: 4px; }
+    .active-prd-card .prd-title { font-size: 15px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
+    .commit-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; }
+    .commit-row:last-child { border-bottom: none; }
+    .commit-hash { color: var(--accent2); flex-shrink: 0; }
+    .commit-msg { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .status-agents-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .status-agent-chip { display: flex; align-items: center; gap: 6px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 5px 10px; font-family: var(--mono); font-size: 11px; }
+    .status-agent-chip .chip-avatar { font-size: 14px; }
+    .status-agent-chip .chip-role { color: var(--text); font-weight: 600; }
+
+    * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+    /* ── Workflow tab ──────────────────── */
+    .wf-label { font-size: 11px; text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px; font-family: var(--mono); font-weight: 600; letter-spacing: 0.08em; }
+    .wf-type-btn { flex: 1; padding: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; text-align: center; font-size: 12px; color: var(--text-dim); cursor: pointer; font-family: var(--mono); transition: all 0.15s; }
+    .wf-type-btn:hover { color: var(--text); }
+    .wf-type-btn.active { background: rgba(74,158,255,0.12); border-color: var(--accent); color: var(--accent); }
+    .wf-type-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .wf-input { width: 100%; padding: 8px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; font-family: var(--sans); outline: none; }
+    .wf-input:focus { border-color: var(--accent); }
+    .wf-input:disabled { opacity: 0.5; }
+
+    .wf-step { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--surface2); border-radius: 6px; margin-bottom: 4px; border-left: 3px solid var(--border); cursor: pointer; transition: all 0.15s; }
+    .wf-step:hover { background: var(--surface3); }
+    .wf-step.completed { border-left-color: var(--green); }
+    .wf-step.running { border-left-color: var(--accent); background: rgba(74,158,255,0.06); }
+    .wf-step.error { border-left-color: var(--red); }
+    .wf-step-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
+    .wf-step.completed .wf-step-dot { background: var(--green); }
+    .wf-step.running .wf-step-dot { background: var(--accent); animation: pulse 1.5s infinite; }
+    .wf-step.error .wf-step-dot { background: var(--red); }
+    .wf-step-name { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+    .wf-model-badge { font-family: var(--mono); font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; cursor: pointer; user-select: none; line-height: 1.2; }
+    .wf-model-badge.model-sonnet { background: rgba(74,158,255,0.15); color: var(--accent); }
+    .wf-model-badge.model-opus { background: rgba(124,111,255,0.15); color: var(--accent2); }
+    .wf-step-status { font-size: 11px; color: var(--text-dim); }
+    .wf-connector { width: 2px; height: 12px; background: var(--border); margin-left: 14px; }
+    .wf-loop-hint { margin-left: 14px; padding: 4px 0; font-size: 11px; color: var(--text-dim); font-style: italic; }
+    .wf-round-badge { font-family: var(--mono); font-size: 11px; color: var(--accent2); background: rgba(124,111,255,0.12); padding: 2px 8px; border-radius: 3px; margin-bottom: 12px; display: inline-block; }
+
+    .wf-agent-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+    .wf-agent-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+    .wf-agent-card.running { border-color: rgba(74,158,255,0.3); }
+    .wf-agent-card.done { border-color: rgba(61,220,132,0.3); }
+    .wf-agent-card.error { border-color: rgba(255,95,95,0.3); }
+    .wf-agent-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .wf-agent-role { font-weight: 600; }
+    .wf-agent-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+    .wf-agent-badge.running { color: var(--accent); background: rgba(74,158,255,0.15); }
+    .wf-agent-badge.done { color: var(--green); background: rgba(61,220,132,0.15); }
+    .wf-agent-badge.error { color: var(--red); background: rgba(255,95,95,0.15); }
+    .wf-agent-feedback { font-size: 13px; line-height: 1.5; background: var(--bg); padding: 12px 14px; border-radius: 6px; color: var(--text); max-height: 400px; overflow-y: auto; margin-top: 8px; white-space: pre-wrap; word-break: break-word; }
+
+    .wf-action-area { background: var(--surface3); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .wf-action-area.disabled { opacity: 0.5; pointer-events: none; }
+    .wf-action-label { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-dim); }
+    .wf-action-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .wf-action-row .wf-notes { width: 100%; flex-basis: 100%; }
+    .wf-notes { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; color: var(--text); font-size: 12px; resize: vertical; min-height: 80px; font-family: var(--sans); outline: none; }
+    .wf-notes:focus { border-color: var(--accent); }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <header id="topbar">
+    <span class="logo">⌘ Build Studio</span>
+    <span class="sep">/</span>
+    <span class="status-dot" id="conn-dot"></span>
+    <span class="status-text" id="conn-text">connecting…</span>
+    <span class="spacer"></span>
+    <div class="view-toggle">
+      <button class="view-btn" data-view="overview" onclick="switchView('overview')">Overview</button>
+      <button class="view-btn" data-view="workflow" onclick="switchView('workflow')">Workflow</button>
+    </div>
+    <!-- terminal button moved to work-tabs -->
+    <span class="docs-path" id="docs-path-label"></span>
+  </header>
+
+  <aside id="spec-nav">
+    <div class="panel-header">Specs</div>
+    <div id="file-tree"></div>
+  </aside>
+
+  <main id="work-area">
+    <div id="work-tabs">
+      <button class="tab-btn"        data-tab="spec"   onclick="switchTab('spec')">Spec</button>
+      <button class="tab-btn"        data-tab="status" onclick="switchTab('status')">Status</button>
+      <button class="tab-btn"        data-tab="instr"  onclick="switchTab('instr')">Instruct</button>
+      <button class="tab-btn"        data-tab="queue"  onclick="switchTab('queue')">Queue</button>
+      <button class="tab-btn"        data-tab="plan"   onclick="switchTab('plan')">Plan</button>
+      <span class="tab-spacer"></span>
+      <span id="selected-badge"></span>
+      <button id="term-topbar-btn" class="ghost-btn" onclick="toggleTerminal()" style="font-size:11px;padding:4px 12px;">⌨ Terminal</button>
+    </div>
+
+    <div id="work-area-content">
+    <!-- Spec view -->
+    <div id="tab-spec" class="scroll-panel active">
+      <div class="empty-state">
+        <div class="big">📄</div>
+        <div>Select a spec from the left panel</div>
+      </div>
+    </div>
+
+    <!-- Status panel -->
+    <div id="tab-status">
+      <div id="status-content"><div class="empty-state"><div class="big">📊</div><div>Loading status…</div></div></div>
+    </div>
+
+    <!-- Instruct panel -->
+    <div id="tab-instr" style="display:none;flex:1;flex-direction:column;padding:24px 32px;gap:16px;overflow-y:auto;">
+      <div>
+        <div class="instr-heading">Addressing</div>
+        <div class="instr-targets" id="instr-targets">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--muted)">Select agents from the roster →</span>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;flex:1;gap:8px;">
+        <div class="instr-heading">Instruction</div>
+        <textarea id="instr-textarea" placeholder="Type your instruction…"></textarea>
+      </div>
+      <div class="instr-actions">
+        <button id="send-btn" class="primary-btn" onclick="sendInstruction()" disabled>↗ Queue Instruction</button>
+        <span class="action-hint">appends to instructions-queue.md</span>
+        <span id="send-confirm" class="flash-confirm">✓ Queued!</span>
+      </div>
+      <div class="queue-divider">
+        <div class="instr-heading">Sent this session</div>
+        <div id="sent-entries"></div>
+      </div>
+    </div>
+
+    <!-- Queue panel -->
+    <div id="tab-queue" class="scroll-panel">
+      <div id="queue-content"></div>
+    </div>
+
+    <!-- Plan panel -->
+    <div id="tab-plan" style="display:none;flex:1;flex-direction:column;overflow:hidden;">
+      <div id="plan-body">
+        <div class="plan-empty">
+          <div class="big">🗺️</div>
+          <div>No execution plan yet.<br>Queue an instruction → copy coordinator prompt → run coordinator in Claude Code.<br>The coordinator writes <code>docs/execution-plan.md</code> — it will appear here.</div>
+        </div>
+      </div>
+      <div id="plan-launch-bar">
+        <button id="launch-btn" class="primary-btn orange" onclick="launchWorkers()">⚡ Launch Workers</button>
+        <div class="allow-toggle-wrap" id="launch-allow-toggle-wrap" title="Skip all permission prompts (--dangerously-skip-permissions). Disable for sensitive operations.">
+          <span class="allow-toggle-label" id="launch-allow-toggle-label">Allow All</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="launch-allow-all-cb" checked onchange="onAllowAllChange()">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <button class="ghost-btn danger" onclick="clearPlan()" title="Clear execution plan">✕ Clear plan</button>
+        <span class="action-hint" id="launch-hint"></span>
+        <span id="launch-result" class="launch-result"></span>
+      </div>
+    </div>
+
+    <!-- Workflow panel -->
+    <div id="tab-workflow" style="display:none;flex:1;overflow:hidden;">
+      <div style="display:grid;grid-template-columns:var(--panel-w-left) 1fr;height:100%;">
+        <!-- Left: workflow sidebar -->
+        <div id="wf-sidebar" style="border-right:1px solid var(--border);padding:16px;overflow-y:auto;background:var(--surface);">
+          <!-- Type toggle -->
+          <div style="margin-bottom:16px;">
+            <div class="wf-label">Workflow</div>
+            <div style="display:flex;gap:4px;">
+              <button class="wf-type-btn active" data-wftype="review" onclick="setWorkflowType('review')">Review</button>
+              <button class="wf-type-btn" data-wftype="execution" onclick="setWorkflowType('execution')">Execution</button>
+              <button class="wf-type-btn" data-wftype="kickoff" onclick="setWorkflowType('kickoff')">Kickoff</button>
+            </div>
+          </div>
+          <!-- Review mode toggle -->
+          <div id="wf-review-mode" style="margin-bottom:12px;">
+            <div class="wf-label">Review mode</div>
+            <div style="display:flex;gap:4px;">
+              <button class="wf-type-btn active" data-reviewmode="parallel" onclick="setReviewMode('parallel')">Parallel</button>
+              <button class="wf-type-btn" data-reviewmode="orchestrator" onclick="setReviewMode('orchestrator')">Orchestrator</button>
+              <button class="wf-type-btn" data-reviewmode="sequential" onclick="setReviewMode('sequential')">Sequential</button>
+            </div>
+          </div>
+          <!-- Input -->
+          <div id="wf-input-area" style="margin-bottom:20px;">
+            <div class="wf-label">Working on</div>
+            <input id="wf-input" type="text" class="wf-input" placeholder="e.g. PRD-006" />
+          </div>
+          <!-- Step pipeline -->
+          <div id="wf-steps"></div>
+          <!-- Actions -->
+          <div id="wf-sidebar-actions" style="margin-top:20px;">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+              <label style="font-size:11px;color:var(--text-dim);white-space:nowrap;" title="Auto-iterate: number of review/fix rounds to run automatically before pausing. 1 = manual control (default).">Auto-iterate:</label>
+              <input id="wf-auto-iterate" type="number" min="1" max="20" value="1" style="width:50px;padding:4px 6px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px;" onchange="updateAutoIterate(this.value)" />
+            </div>
+            <button id="wf-start-btn" class="primary-btn" onclick="startWorkflow()" style="width:100%;">Start Workflow</button>
+            <button id="wf-cancel-btn" class="primary-btn red" onclick="cancelWorkflow()" style="width:100%;margin-top:8px;display:none;">Cancel Workflow</button>
+          </div>
+        </div>
+        <!-- Right: step detail -->
+        <div id="wf-detail" style="padding:24px;overflow-y:auto;">
+          <div class="empty-state">
+            <div class="big">⚙</div>
+            <div>Select a workflow type and PRD to begin</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Spec terminal panel (visible only in spec view) -->
+    <div id="spec-terminal-panel">
+      <div class="terminal-header">
+        <span class="terminal-label">Terminal</span>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);">— project root</span>
+      </div>
+      <div id="spec-terminal-container"></div>
+    </div>
+    </div><!-- /work-area-content -->
+  </main>
+
+  <aside id="agent-roster">
+    <div class="panel-header">Agents</div>
+    <div id="agent-list"></div>
+    <div id="worktree-section">
+      <div id="worktree-header">
+        <span class="wt-label">Worktrees</span>
+        <span class="wt-count" id="wt-count">0</span>
+      </div>
+      <div id="worktree-list"><div class="wt-empty">None active</div></div>
+    </div>
+    <div id="roster-footer">
+      <button id="select-all-btn" onclick="toggleSelectAll()">Select all</button>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+// ── State ────────────────────────────────
+const state = {
+  files: [],
+  activeFile: null,
+  agents: [],
+  selectedAgents: new Set(),
+  activeTab: 'status',
+  activeView: (['overview', 'workflow'].includes(localStorage.getItem('dashView')) ? localStorage.getItem('dashView') : 'overview'),
+  recentFiles: new Set(),
+  sentInstructions: [],
+  queueEntries: [],
+  executionPlan: null,
+  worktrees: [],
+  status: null,
+  workflowType: 'review',
+  workflow: null,
+  wfLogPolling: null,
+  wfViewingLog: null, // windowName when viewing agent log
+};
+
+const RECENT_TTL = 60_000;
+let allowAll = localStorage.getItem('allowAll') !== 'false';
+
+// ── Role config ──────────────────────────
+const ROLE_CONFIG = {
+  'CEO':          { avatar: '🎯', color: '#f5c518' },
+  'PM':           { avatar: '📋', color: '#4a9eff' },
+  'Brand':        { avatar: '🎨', color: '#ff7eb6' },
+  'Marketing':    { avatar: '📣', color: '#ff9f43' },
+  'UX/UI':        { avatar: '✏️',  color: '#a29bfe' },
+  'Architect':    { avatar: '🏗️', color: '#74b9ff' },
+  'DevOps':       { avatar: '⚙️', color: '#55efc4' },
+  'QA/Security':  { avatar: '🛡️', color: '#fd79a8' },
+  'Frontend Dev': { avatar: '💻', color: '#6c5ce7' },
+  'Backend Dev':  { avatar: '🖥️', color: '#00b894' },
+  'Code Review':  { avatar: '🔍', color: '#e17055' },
+};
+function roleConfig(role) {
+  return ROLE_CONFIG[role] || { avatar: '🤖', color: '#4a5568' };
+}
+
+// ── HTML cache (avoids unreliable innerHTML comparison) ──
+const _htmlCache = {};
+
+// ── Init ─────────────────────────────────
+async function init() {
+  // Load project config
+  try {
+    const cfgRes = await fetch('/api/config');
+    const cfg = await cfgRes.json();
+    state.projectConfig = cfg;
+    document.title = `${cfg.name} — Build Studio`;
+    const logo = document.querySelector('.logo');
+    if (logo) logo.textContent = `⌘ ${cfg.name}`;
+  } catch (_) {}
+
+  // Restore allow-all toggle state
+  document.getElementById('launch-allow-all-cb').checked = allowAll;
+  applyAllowAllStyle(allowAll);
+
+  await Promise.all([loadFiles(), loadAgents(), loadQueue(), loadExecutionPlan(), loadWorktrees()]);
+  connectSSE();
+  switchView(state.activeView, true);
+
+  // Restore terminal if it was open before refresh
+  if (localStorage.getItem('terminal-open') === '1') {
+    toggleTerminal();
+  }
+}
+
+// ── Allow All toggle ──────────────────────
+function onAllowAllChange() {
+  allowAll = document.getElementById('launch-allow-all-cb').checked;
+  localStorage.setItem('allowAll', String(allowAll));
+  applyAllowAllStyle(allowAll);
+}
+
+function applyAllowAllStyle(on) {
+  const wrap = document.getElementById('launch-allow-toggle-wrap');
+  const label = document.getElementById('launch-allow-toggle-label');
+  if (!wrap) return;
+  if (on) { wrap.classList.remove('restricted'); label.textContent = 'Allow All'; }
+  else     { wrap.classList.add('restricted');    label.textContent = 'Restricted'; }
+}
+
+// ── File list ────────────────────────────
+async function loadFiles() {
+  const res = await fetch('/api/files');
+  const { files } = await res.json();
+  state.files = files || [];
+  renderFileTree();
+}
+
+function renderFileTree() {
+  const tree = document.getElementById('file-tree');
+  const groups = {};
+  for (const f of state.files) {
+    const parts = f.path.split('/');
+    const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : '·';
+    if (!groups[folder]) groups[folder] = [];
+    groups[folder].push(f);
+  }
+  tree.innerHTML = '';
+  for (const [folder, files] of Object.entries(groups)) {
+    const g = document.createElement('div');
+    g.className = 'folder-group';
+    if (folder !== '·') {
+      const lbl = document.createElement('div');
+      lbl.className = 'folder-label';
+      lbl.textContent = folder;
+      g.appendChild(lbl);
+    }
+    for (const f of files) {
+      const item = document.createElement('div');
+      item.className = 'file-item' + (state.activeFile === f.path ? ' active' : '');
+      item.dataset.path = f.path;
+      const name = f.path.split('/').pop();
+      const isRecent = state.recentFiles.has(f.path);
+      item.innerHTML = `<span class="file-icon">≡</span><span>${name}</span>${isRecent ? '<span class="recent-dot"></span>' : ''}`;
+      item.onclick = () => openFile(f.path);
+      g.appendChild(item);
+    }
+    tree.appendChild(g);
+  }
+}
+
+async function openFile(filePath, { preserveScroll = false } = {}) {
+  state.activeFile = filePath;
+  renderFileTree();
+  const res = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`);
+  if (!res.ok) return;
+  const { content } = await res.json();
+  // Note: content comes from local filesystem via our own API, not user input.
+  // marked.parse output is trusted markdown-to-HTML conversion of local project files.
+  const rendered = marked.parse(content);
+  const specEl = document.getElementById('tab-spec');
+  const mdBody = specEl.querySelector('.md-body');
+  // Skip re-render if content hasn't changed (prevents scroll reset)
+  if (_htmlCache.specFile === rendered) return;
+  _htmlCache.specFile = rendered;
+  const prevScroll = specEl.scrollTop;
+  specEl.replaceChildren();
+  const div = document.createElement('div');
+  div.className = 'md-body';
+  div.innerHTML = rendered;
+  specEl.appendChild(div);
+  if (preserveScroll) specEl.scrollTop = prevScroll;
+  if (state.activeView === 'overview') return;
+  switchTab('spec');
+}
+
+// ── Agents ───────────────────────────────
+async function loadAgents() {
+  const res = await fetch('/api/agents');
+  const data = await res.json();
+  state.agents = data.agents || [];
+  renderRoster();
+}
+
+function renderRoster() {
+  const list = document.getElementById('agent-list');
+  list.innerHTML = '';
+  const isSpecView = state.activeView === 'overview';
+  for (const agent of state.agents) {
+    const cfg = roleConfig(agent.role);
+    const isSelected = state.selectedAgents.has(agent.role);
+    const statusClass = (agent.status || 'idle').replace(/\s+/g, '-').toLowerCase();
+    const card = document.createElement('div');
+    card.className = 'agent-card' + (isSelected ? ' selected' : '');
+    card.dataset.role = agent.role;
+    card.onclick = () => toggleAgent(agent.role);
+    card.innerHTML = `
+      <div class="card-top">
+        <span class="avatar">${cfg.avatar}</span>
+        <div class="card-meta">
+          <div class="role-name">${agent.role}</div>
+          <div><span class="status-pill ${statusClass}">${agent.status || 'idle'}</span></div>
+        </div>
+        <span class="select-check">✓</span>
+      </div>
+      <div class="last-activity">${agent.lastActivity || ''}</div>`;
+    list.appendChild(card);
+  }
+}
+
+function toggleAgent(role) {
+  if (state.activeView === 'overview') {
+    return; // roster is read-only reference in terminal view
+  }
+  if (state.selectedAgents.has(role)) state.selectedAgents.delete(role);
+  else state.selectedAgents.add(role);
+  renderRoster();
+  updateSelectionUI();
+}
+
+function toggleSelectAll() {
+  if (state.selectedAgents.size === state.agents.length) state.selectedAgents.clear();
+  else for (const a of state.agents) state.selectedAgents.add(a.role);
+  renderRoster();
+  updateSelectionUI();
+}
+
+function updateSelectionUI() {
+  const n = state.selectedAgents.size;
+  const badge = document.getElementById('selected-badge');
+  const sendBtn = document.getElementById('send-btn');
+  badge.style.display = n > 0 ? 'inline-block' : 'none';
+  if (n > 0) badge.textContent = `${n} agent${n > 1 ? 's' : ''} selected`;
+  sendBtn.disabled = n === 0;
+  const targets = document.getElementById('instr-targets');
+  targets.innerHTML = n === 0
+    ? `<span style="font-family:var(--mono);font-size:12px;color:var(--muted)">Select agents from the roster →</span>`
+    : [...state.selectedAgents].map(role => {
+        const cfg = roleConfig(role);
+        return `<span class="instr-tag"><span>${cfg.avatar}</span>${role}</span>`;
+      }).join('');
+}
+
+// ── Worktrees ────────────────────────────
+async function loadWorktrees() {
+  const res = await fetch('/api/worktrees');
+  const data = await res.json();
+  state.worktrees = data.worktrees || [];
+  renderWorktrees();
+}
+
+function renderWorktrees() {
+  const list = document.getElementById('worktree-list');
+  document.getElementById('wt-count').textContent = state.worktrees.length;
+  if (state.worktrees.length === 0) {
+    list.innerHTML = '<div class="wt-empty">None active</div>';
+    return;
+  }
+  list.innerHTML = state.worktrees.map(wt => `
+    <div class="wt-item">
+      <div class="wt-branch">${wt.branch}</div>
+      ${wt.taskSummary ? `<div class="wt-task">${escapeHtml(wt.taskSummary)}</div>` : ''}
+      ${wt.lastCommit ? `<div class="wt-commit">↳ ${escapeHtml(wt.lastCommit)}</div>` : ''}
+    </div>`).join('');
+}
+
+// ── Tabs ─────────────────────────────────
+function switchTab(tab) {
+  state.activeTab = tab;
+
+  // Hide all content panels
+  document.getElementById('tab-spec').className = 'scroll-panel';
+  document.getElementById('tab-status').classList.remove('active');
+  document.getElementById('tab-queue').className = 'scroll-panel';
+  for (const id of ['tab-instr', 'tab-plan']) {
+    document.getElementById(id).style.display = 'none';
+  }
+
+  if (tab === 'spec')   { document.getElementById('tab-spec').className = 'scroll-panel active'; }
+
+  // Toggle spec-nav visibility in overview mode
+  const app = document.getElementById('app');
+  if (state.activeView === 'overview') {
+    app.classList.toggle('overview-spec', tab === 'spec');
+  }
+  if (tab === 'status') { document.getElementById('tab-status').classList.add('active'); loadStatus(); }
+  if (tab === 'queue')  { document.getElementById('tab-queue').classList.add('active'); loadQueue(); }
+  if (tab === 'instr')  { document.getElementById('tab-instr').style.display = 'flex'; }
+  if (tab === 'plan')   { document.getElementById('tab-plan').style.display = 'flex'; loadExecutionPlan(); }
+
+  document.querySelectorAll('#work-tabs .tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+}
+
+// ── Views ─────────────────────────────────
+function switchView(view, init = false) {
+  // Migrate old 'spec' view to 'overview'
+  if (view === 'spec') view = 'overview';
+  state.activeView = view;
+  localStorage.setItem('dashView', view);
+
+  const app = document.getElementById('app');
+  app.classList.remove('view-overview', 'view-workflow');
+  app.classList.add(`view-${view}`);
+
+  document.querySelectorAll('.view-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.view === view);
+  });
+
+  if (view === 'workflow') {
+    loadWorkflow();
+    startWorkflowPolling();
+  } else {
+    stopWorkflowPolling();
+  }
+
+  if (view === 'overview') {
+    // Overview: show all tabs
+    const overviewTabs = ['spec', 'status', 'instr', 'queue', 'plan'];
+    document.querySelectorAll('#work-tabs .tab-btn').forEach(btn => {
+      btn.style.display = overviewTabs.includes(btn.dataset.tab) ? '' : 'none';
+    });
+    if (!init && overviewTabs.includes(state.activeTab)) switchTab(state.activeTab);
+    else switchTab('spec');
+    renderRoster();
+  }
+}
+
+// ── Instructions ─────────────────────────
+async function sendInstruction() {
+  const text = document.getElementById('instr-textarea').value.trim();
+  if (!text || state.selectedAgents.size === 0) return;
+  const roles = [...state.selectedAgents];
+  const res = await fetch('/api/instructions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ roles, instruction: text }),
+  });
+  if (!res.ok) return;
+  const { timestamp } = await res.json();
+  state.sentInstructions.unshift({ timestamp, roles, instruction: text });
+  renderSentInstructions();
+  document.getElementById('instr-textarea').value = '';
+  const confirm = document.getElementById('send-confirm');
+  confirm.style.display = 'flex';
+  setTimeout(() => { confirm.style.display = 'none'; }, 2500);
+}
+
+function renderSentInstructions() {
+  const el = document.getElementById('sent-entries');
+  if (state.sentInstructions.length === 0) {
+    el.innerHTML = `<div style="font-family:var(--mono);font-size:11px;color:var(--muted)">None yet.</div>`;
+    return;
+  }
+  el.innerHTML = state.sentInstructions.slice(0, 5).map(e => `
+    <div class="sent-entry">
+      <div class="q-header">${new Date(e.timestamp).toLocaleTimeString()} → ${e.roles.join(', ')}</div>
+      <div class="q-body">${escapeHtml(e.instruction)}</div>
+    </div>`).join('');
+}
+
+// ── Queue panel ──────────────────────────
+async function loadQueue() {
+  const res = await fetch('/api/queue');
+  const data = await res.json();
+  state.queueEntries = data.entries || [];
+  renderQueuePanel();
+}
+
+function renderQueuePanel() {
+  const el = document.getElementById('queue-content');
+  if (state.queueEntries.length === 0) {
+    el.innerHTML = `<div class="empty-state" style="height:60vh"><div class="big">📭</div><div>No instructions queued yet.<br>Use the Instruct tab to add some.</div></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="section-label">${state.queueEntries.length} instruction${state.queueEntries.length !== 1 ? 's' : ''} in queue</div>
+    ${state.queueEntries.map((e, i) => `
+    <div class="queue-card">
+      <div class="qc-meta">
+        <div class="qc-roles">${e.roles.map(r => `<span class="qc-role-tag">${roleConfig(r).avatar} ${r}</span>`).join('')}</div>
+        <span class="qc-time">${new Date(e.timestamp).toLocaleString()}</span>
+      </div>
+      <div class="qc-body">${escapeHtml(e.instruction)}</div>
+      <div class="qc-actions">
+        <button class="ghost-btn accent" onclick="planQueueEntry(${i})">Plan this →</button>
+        <button class="ghost-btn" id="copy-btn-${i}" onclick="copyCoordinatorPrompt(${i})">Copy prompt</button>
+        <button class="ghost-btn" onclick="dismissQueueEntry(${i})">Dismiss</button>
+      </div>
+    </div>`).join('')}`;
+}
+
+function copyCoordinatorPrompt(index) {
+  const entry = state.queueEntries[index];
+  if (!entry) return;
+  const roleList = Object.entries(ROLE_CONFIG).map(([role, cfg]) => {
+    const skill = role.toLowerCase().replace(/[\s\/]/g, '_');
+    return `- ${cfg.avatar} ${role} → ${skill}`;
+  }).join('\n');
+  const prompt = `You are the coordinator agent for this project.
+
+## Setup
+1. Read \`docs/project-state.md\` to understand current project state
+2. Read any PRDs or specs referenced in the instruction below
+
+## Queued instruction
+**[${entry.timestamp}] → ${entry.roles.join(', ')}**
+
+${entry.instruction}
+
+## Your task
+Break this into agent-specific sub-tasks and write an execution plan to \`docs/execution-plan.md\`.
+
+Your plan must include:
+1. Summary of the work
+2. Agent assignments with rationale
+3. Dependency order (what must happen before what)
+4. A final **"## Execution Config"** section with this exact JSON block:
+
+\`\`\`json
+{
+  "tasks": [
+    {
+      "role": "Frontend Dev",
+      "skill": "frontend_dev",
+      "branch": "agent-frontend",
+      "instruction": "Self-contained instruction with all context needed. Do not assume the agent has read anything else."
+    }
+  ],
+  "order": "parallel"
+}
+\`\`\`
+
+Valid \`order\` values: "parallel" (all at once) or "sequential" (in array order).
+
+## Available agents and skills
+${roleList}`;
+  navigator.clipboard.writeText(prompt).then(() => {
+    const btn = document.getElementById(`copy-btn-${index}`);
+    if (btn) { btn.textContent = '✓ Copied!'; btn.classList.add('copied'); setTimeout(() => { btn.textContent = 'Copy coordinator prompt'; btn.classList.remove('copied'); }, 2500); }
+  });
+}
+
+async function dismissQueueEntry(index) {
+  const entry = state.queueEntries[index];
+  if (!entry) return;
+  await fetch(`/api/queue/${encodeURIComponent(entry.id)}`, { method: 'DELETE' });
+  await loadQueue();
+}
+
+const ROLE_SKILL_MAP = {
+  'pm': 'pm', 'product manager': 'pm',
+  'frontend dev': 'frontend_dev', 'frontend developer': 'frontend_dev',
+  'backend dev': 'backend_dev', 'backend developer': 'backend_dev',
+  'architect': 'architect',
+  'brand': 'brand',
+  'ceo': 'ceo',
+  'ux': 'ux',
+  'qa': 'qa',
+  'devops': 'devops',
+  'code review': 'engineering-skills:code-reviewer',
+  'marketing': 'marketing',
+};
+
+async function planQueueEntry(index) {
+  const entry = state.queueEntries[index];
+  if (!entry) return;
+
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const tasks = entry.roles.map(role => {
+    const key = role.toLowerCase().trim();
+    const skill = ROLE_SKILL_MAP[key] || key.replace(/[\s/]+/g, '_');
+    const roleSlug = key.replace(/[\s/]+/g, '-').replace(/[^a-z0-9-]/g, '');
+    return { role, skill, branch: `agent-${roleSlug}-${dateStr}`, instruction: entry.instruction };
+  });
+
+  const config = { tasks, order: tasks.length > 1 ? 'parallel' : 'sequential' };
+  const content = `# Execution Plan
+
+**Roles:** ${entry.roles.join(', ')}
+**Queued:** ${new Date(entry.timestamp).toLocaleString()}
+
+## Instruction
+
+${entry.instruction}
+
+---
+
+## Execution Config
+
+\`\`\`json
+${JSON.stringify(config, null, 2)}
+\`\`\`
+`;
+
+  await fetch('/api/execution-plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+
+  switchTab('plan');
+}
+
+// ── Plan panel ───────────────────────────
+async function loadExecutionPlan() {
+  const res = await fetch('/api/execution-plan');
+  state.executionPlan = await res.json();
+  renderPlanPanel();
+}
+
+function renderPlanPanel() {
+  const body = document.getElementById('plan-body');
+  const launchBar = document.getElementById('plan-launch-bar');
+  const { content, config } = state.executionPlan || {};
+
+  if (!content) {
+    body.innerHTML = `<div class="plan-empty"><div class="big">🗺️</div><div>No execution plan yet.<br>Queue an instruction → copy coordinator prompt → run in Claude Code.<br>The coordinator writes <code>docs/execution-plan.md</code> — it appears here live.</div></div>`;
+    launchBar.classList.remove('visible');
+    return;
+  }
+
+  let displayContent = content;
+  if (config && config.tasks) {
+    displayContent = content.replace(/## Execution Config[\s\S]*/, '');
+  }
+
+  let html = `<div class="md-body">${marked.parse(displayContent)}</div>`;
+
+  if (config && config.tasks && config.tasks.length > 0) {
+    const order = config.order || 'parallel';
+    html += `
+      <div style="margin-top:24px;">
+        <div class="section-label">Execution Config — ${config.tasks.length} task${config.tasks.length !== 1 ? 's' : ''}, ${order}</div>
+        <div class="task-cards">
+          ${config.tasks.map(t => {
+            const cfg = roleConfig(t.role);
+            return `<div class="task-card">
+              <div class="tc-header">
+                <span class="tc-avatar">${cfg.avatar}</span>
+                <span class="tc-role">${t.role}</span>
+                <span class="tc-branch">${t.branch}</span>
+              </div>
+              <div class="tc-instruction">${escapeHtml(t.instruction)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    launchBar.classList.add('visible');
+    document.getElementById('launch-hint').textContent =
+      `Launches ${config.tasks.length} worker${config.tasks.length !== 1 ? 's' : ''} in tmux — opens Ghostty`;
+  } else {
+    launchBar.classList.remove('visible');
+  }
+
+  if (_htmlCache.plan === html) return;
+  _htmlCache.plan = html;
+  const prevScroll = body.scrollTop;
+  body.innerHTML = html;
+  body.scrollTop = prevScroll;
+}
+
+async function clearPlan() {
+  await fetch('/api/execution-plan', { method: 'DELETE' });
+  loadExecutionPlan();
+}
+
+// ── Status tab ────────────────────────────
+async function loadStatus() {
+  const res = await fetch('/api/status');
+  state.status = await res.json();
+  renderStatus();
+}
+
+function renderStatus() {
+  const el = document.getElementById('status-content');
+  if (!state.status) return;
+  const { projectStateSection, activePrd, commits, agents, git } = state.status;
+
+  // Workflow button + Git status card
+  const workflowBtnHtml = `<div style="margin-bottom:20px;"><button class="ghost-btn accent" onclick="openWorkflowModal()" style="font-size:12px;padding:6px 16px;">▸ View Workflows</button></div>`;
+
+  let gitHtml = '';
+  if (git) {
+    const cleanBadge = git.clean
+      ? '<span class="status-pill done">clean</span>'
+      : '<span class="status-pill running">dirty</span>';
+    const parts = [];
+    if (git.staged > 0) parts.push(`<span style="color:var(--green)">${git.staged} staged</span>`);
+    if (git.unstaged > 0) parts.push(`<span style="color:var(--orange)">${git.unstaged} modified</span>`);
+    if (git.untracked > 0) parts.push(`<span style="color:var(--muted)">${git.untracked} untracked</span>`);
+    const syncParts = [];
+    if (git.ahead > 0) syncParts.push(`<span style="color:var(--accent)">↑${git.ahead} ahead</span>`);
+    if (git.behind > 0) syncParts.push(`<span style="color:var(--orange)">↓${git.behind} behind</span>`);
+    if (git.ahead === 0 && git.behind === 0) syncParts.push(`<span style="color:var(--muted)">in sync</span>`);
+    const wtText = git.worktrees > 0 ? `<span style="color:var(--orange)">${git.worktrees} worktree${git.worktrees > 1 ? 's' : ''}</span>` : '<span style="color:var(--muted)">no worktrees</span>';
+    gitHtml = `<div class="status-section">
+      <div class="status-section-title">Git Status</div>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center;font-family:var(--mono);font-size:12px;">
+        <span style="color:var(--accent);font-weight:600">${escapeHtml(git.branch)}</span>
+        ${cleanBadge}
+        ${parts.length ? '<span style="color:var(--border)">│</span> ' + parts.join(' · ') : ''}
+        <span style="color:var(--border)">│</span> ${syncParts.join(' · ')}
+        <span style="color:var(--border)">│</span> ${wtText}
+      </div>
+    </div>`;
+  }
+
+  // Active PRD card
+  let activePrdHtml = '';
+  if (activePrd) {
+    const idMatch = activePrd.match(/PRD-\d+/);
+    const titleMatch = activePrd.match(/\[([^\]]+)\]/);
+    activePrdHtml = `<div class="status-section">
+      <div class="status-section-title">Active PRD</div>
+      <div class="active-prd-card">
+        <div class="prd-id">${idMatch ? idMatch[0] : ''}</div>
+        <div class="prd-title">${titleMatch ? titleMatch[1] : activePrd}</div>
+      </div>
+    </div>`;
+  }
+
+  // Backlog section as markdown
+  const backlogHtml = projectStateSection
+    ? `<div class="status-section"><div class="status-section-title">Backlog</div><div class="md-body">${marked.parse(projectStateSection)}</div></div>`
+    : '';
+
+  // Commits
+  const commitsHtml = commits && commits.length
+    ? `<div class="status-section">
+        <div class="status-section-title">Recent Commits</div>
+        ${commits.map(c => {
+          const sp = c.indexOf(' ');
+          return `<div class="commit-row"><span class="commit-hash">${c.slice(0,sp)}</span><span class="commit-msg">${escapeHtml(c.slice(sp+1))}</span></div>`;
+        }).join('')}
+      </div>` : '';
+
+  // Agents
+  const agentsHtml = state.agents && state.agents.length
+    ? `<div class="status-section">
+        <div class="status-section-title">Agents</div>
+        <div class="status-agents-grid">
+          ${state.agents.map(a => {
+            const cfg = roleConfig(a.role);
+            const statusClass = (a.status || 'idle').toLowerCase();
+            return `<div class="status-agent-chip"><span class="chip-avatar">${cfg.avatar}</span><span class="chip-role">${a.role}</span><span class="status-pill ${statusClass}">${a.status || 'idle'}</span></div>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+
+  const newContent = workflowBtnHtml + gitHtml + activePrdHtml + backlogHtml + commitsHtml + agentsHtml;
+  if (_htmlCache.status === newContent) return;
+  _htmlCache.status = newContent;
+  const prevScroll = el.parentElement.scrollTop;
+  el.innerHTML = newContent;
+  el.parentElement.scrollTop = prevScroll;
+}
+
+// ── Spec terminal ─────────────────────────
+let _term = null;
+let _fitAddon = null;
+let _termSocket = null;
+
+function toggleTerminal() {
+  const panel = document.getElementById('spec-terminal-panel');
+  const btn = document.getElementById('term-topbar-btn');
+  const visible = panel.classList.toggle('term-visible');
+  btn.textContent = visible ? '⌨ Terminal ✕' : '⌨ Terminal';
+  localStorage.setItem('terminal-open', visible ? '1' : '');
+  if (visible) {
+    if (!_term) _initTerminal();
+    else { setTimeout(() => { _fitAddon.fit(); _term.focus(); }, 50); }
+  }
+}
+
+function _initTerminal() {
+  const container = document.getElementById('spec-terminal-container');
+  if (!container || _term) return;
+
+  _term = new Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: '"Cascadia Code", "Fira Code", "JetBrains Mono", monospace',
+    theme: {
+      background: '#0d0f14',
+      foreground: '#c9d1d9',
+      cursor: '#c9d1d9',
+      selectionBackground: 'rgba(74,158,255,0.3)',
+      black: '#0d0f14', red: '#ff6b6b', green: '#3ddc84', yellow: '#ffd93d',
+      blue: '#4f8ef7', magenta: '#c792ea', cyan: '#89ddff', white: '#c9d1d9',
+      brightBlack: '#484f58', brightRed: '#ff8585', brightGreen: '#56e89e',
+      brightYellow: '#ffe066', brightBlue: '#79b8ff', brightMagenta: '#d2a8ff',
+      brightCyan: '#a5d6ff', brightWhite: '#ffffff',
+    },
+    scrollback: 5000,
+  });
+
+  _fitAddon = new FitAddon.FitAddon();
+  _term.loadAddon(_fitAddon);
+  _term.open(container);
+  _fitAddon.fit();
+  _term.focus();
+
+  _connectTermSocket();
+
+  let _resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(() => {
+      if (!_term || !_fitAddon) return;
+      const buf = _term.buffer.active;
+      const wasAtBottom = buf.viewportY >= buf.baseY;
+      const prevViewportY = buf.viewportY;
+      _fitAddon.fit();
+      if (!wasAtBottom) _term.scrollToLine(prevViewportY);
+    }, 150);
+  });
+}
+
+function _connectTermSocket() {
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  _termSocket = new WebSocket(`${wsProto}//${location.host}`);
+
+  _termSocket.onopen = () => {
+    _termSocket.send(JSON.stringify({ type: 'resize', cols: _term.cols, rows: _term.rows }));
+  };
+
+  _termSocket.onmessage = (evt) => {
+    try {
+      const { type, data } = JSON.parse(evt.data);
+      if (type === 'output') _term.write(data);
+      if (type === 'replay') { _term.write(data); _term.write('\r\n\x1b[36m[Session restored]\x1b[0m\r\n'); }
+      if (type === 'exit') _term.write('\r\n\x1b[33m[Process exited — click Reconnect or close terminal]\x1b[0m\r\n');
+    } catch (_) {}
+  };
+
+  _termSocket.onclose = () => {
+    if (_term) _term.write('\r\n\x1b[31m[Connection closed — refresh to reconnect]\x1b[0m\r\n');
+  };
+
+  _term.onData((data) => {
+    if (_termSocket && _termSocket.readyState === WebSocket.OPEN) {
+      _termSocket.send(JSON.stringify({ type: 'input', data }));
+    }
+  });
+
+  _term.onResize(({ cols, rows }) => {
+    if (_termSocket && _termSocket.readyState === WebSocket.OPEN) {
+      _termSocket.send(JSON.stringify({ type: 'resize', cols, rows }));
+    }
+  });
+}
+
+async function launchWorkers() {
+  if (state.workflow) { alert('A workflow is active. Cancel it before launching workers.'); return; }
+  const config = state.executionPlan && state.executionPlan.config;
+  if (!config || !config.tasks) return;
+
+  const btn = document.getElementById('launch-btn');
+  const result = document.getElementById('launch-result');
+  btn.disabled = true;
+  btn.textContent = 'Launching…';
+  result.textContent = '';
+
+  const res = await fetch('/api/launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tasks: config.tasks, allowAll }),
+  });
+
+  const data = await res.json();
+  btn.disabled = false;
+  btn.textContent = '⚡ Launch Workers';
+
+  if (!res.ok) {
+    result.textContent = `Error: ${data.error}`;
+    result.className = 'launch-result err';
+    return;
+  }
+
+  const errors = (data.results || []).filter(r => r.error);
+  if (errors.length === 0) {
+    result.textContent = `✓ ${data.results.length} worker${data.results.length !== 1 ? 's' : ''} launched`;
+    result.className = 'launch-result ok';
+  } else {
+    result.textContent = `${data.results.length - errors.length} launched, ${errors.length} failed`;
+    result.className = 'launch-result err';
+  }
+
+  loadWorktrees();
+}
+
+
+// ── Workflow ──────────────────────────────
+const WF_STEPS = {
+  review: [
+    { key: 'pm_draft', name: 'PM Draft' },
+    { key: 'reviewing', name: 'Review' },
+    { key: 'pm_fix', name: 'PM Fix', loopHint: '↑ loops back to Review' },
+  ],
+  execution: [
+    { key: 'qa_tests', name: 'QA Test Cases' },
+    { key: 'planning', name: 'Planning' },
+    { key: 'task_execution', name: 'Task Execution' },
+    { key: 'merge_for_review', name: 'Merge for Review' },
+    { key: 'code_review', name: 'Code Review' },
+    { key: 'qa_validation', name: 'QA Validation' },
+    { key: 'ac_verification', name: 'AC Verification' },
+    { key: 'security_audit', name: 'Security Audit' },
+    { key: 'demo_review', name: 'Demo Review' },
+    { key: 'merge_to_main', name: 'Merge to Main' },
+    { key: 'capture_learnings', name: 'Capture Learnings' },
+  ],
+  kickoff: [
+    { key: 'ceo_synthesis', name: 'CEO Synthesis' },
+    { key: 'pm_scoping', name: 'PM Scoping' },
+    { key: 'team_review', name: 'Team Review' },
+    { key: 'pm_revision', name: 'PM Revision', loopHint: '↑ loops back to Team Review' },
+    { key: 'companion_specs', name: 'Companion Specs' },
+    { key: 'devops_init', name: 'DevOps Init' },
+  ],
+};
+
+function setWorkflowType(type) {
+  if (state.workflow) return; // can't change type while running
+  state.workflowType = type;
+  document.querySelectorAll('.wf-type-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.wftype === type);
+  });
+  // Update input field for kickoff vs review/execution
+  const inputArea = document.getElementById('wf-input-area');
+  const input = document.getElementById('wf-input');
+  if (type === 'kickoff') {
+    inputArea.querySelector('.wf-label').textContent = 'Project name';
+    input.placeholder = 'e.g. my-project';
+    input.value = (state.projectConfig && state.projectConfig.name) || '';
+  } else {
+    inputArea.querySelector('.wf-label').textContent = 'Working on';
+    input.placeholder = 'e.g. PRD-006';
+  }
+  // Show review mode selector only for review and kickoff (not execution)
+  const reviewModeEl = document.getElementById('wf-review-mode');
+  if (reviewModeEl) {
+    reviewModeEl.style.display = (type === 'review' || type === 'kickoff') ? '' : 'none';
+  }
+
+  renderWorkflowSteps();
+}
+
+// --- Auto-iterate ---
+function updateAutoIterate(value) {
+  const count = Math.max(1, Math.min(20, parseInt(value) || 1));
+  document.getElementById('wf-auto-iterate').value = count;
+  // Update active workflow if running
+  const wf = state.workflow;
+  if (wf) {
+    fetch('/api/workflow/model-override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ autoIterateRemaining: count - 1 }),
+    });
+  }
+}
+
+// --- Review mode selector ---
+let reviewMode = 'parallel';
+
+function setReviewMode(mode) {
+  reviewMode = mode;
+  document.querySelectorAll('[data-reviewmode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.reviewmode === mode);
+  });
+  // Persist to active workflow if running
+  const wf = state.workflow;
+  if (wf) {
+    wf.reviewMode = mode;
+    fetch('/api/workflow/model-override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewMode: mode }),
+    });
+  }
+}
+
+// --- Model selector per step ---
+// Local overrides stored in state, sent to backend via workflow state
+const stepModelOverrides = {};
+
+function getStepModel(stepKey) {
+  // Priority: local override > config step_models > config default
+  if (stepModelOverrides[stepKey]) return stepModelOverrides[stepKey];
+  const cfg = state.projectConfig;
+  if (cfg && cfg.step_models && cfg.step_models[stepKey]) return cfg.step_models[stepKey];
+  if (cfg && cfg.agent_defaults && cfg.agent_defaults.model) return cfg.agent_defaults.model;
+  return 'opus';
+}
+
+function toggleStepModel(stepKey) {
+  const current = getStepModel(stepKey);
+  stepModelOverrides[stepKey] = current === 'sonnet' ? 'opus' : 'sonnet';
+  // Persist overrides to workflow state if active
+  const wf = state.workflow;
+  if (wf) {
+    wf.stepModelOverrides = { ...(wf.stepModelOverrides || {}), ...stepModelOverrides };
+    fetch('/api/workflow/model-override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stepModelOverrides }),
+    });
+  }
+  renderWorkflowSteps();
+}
+
+async function loadWorkflow() {
+  const res = await fetch('/api/workflow');
+  const data = await res.json();
+  state.workflow = data.workflow;
+  renderWorkflow();
+}
+
+function renderWorkflow() {
+  const wf = state.workflow;
+  const startBtn = document.getElementById('wf-start-btn');
+  const cancelBtn = document.getElementById('wf-cancel-btn');
+
+  if (wf) {
+    state.workflowType = wf.type;
+    if (wf.reviewMode) reviewMode = wf.reviewMode;
+    document.querySelectorAll('.wf-type-btn').forEach(btn => {
+      if (btn.dataset.wftype) btn.classList.toggle('active', btn.dataset.wftype === wf.type);
+      if (btn.dataset.reviewmode) btn.classList.toggle('active', btn.dataset.reviewmode === reviewMode);
+      btn.disabled = true;
+    });
+    document.getElementById('wf-input').value = wf.input;
+    document.getElementById('wf-input').disabled = true;
+    startBtn.style.display = 'none';
+    cancelBtn.style.display = 'block';
+  } else {
+    document.querySelectorAll('.wf-type-btn').forEach(btn => btn.disabled = false);
+    document.getElementById('wf-input').disabled = false;
+    startBtn.style.display = 'block';
+    cancelBtn.style.display = 'none';
+  }
+
+  renderWorkflowSteps();
+  renderWorkflowDetail();
+}
+
+function renderWorkflowSteps() {
+  const container = document.getElementById('wf-steps');
+  if (!container) return;
+  const wf = state.workflow;
+  const steps = WF_STEPS[state.workflowType] || [];
+
+  if (!wf) {
+    container.innerHTML = steps.map((s, i) => {
+      let html = '';
+      if (i > 0) html += '<div class="wf-connector"></div>';
+      const stepModel = getStepModel(s.key);
+      const modelLabel = stepModel === 'sonnet' ? 'Sonnet' : 'Opus';
+      const modelTitle = stepModel === 'sonnet' ? 'Click to switch to Opus' : 'Click to switch to Sonnet';
+      const modelClass = stepModel === 'sonnet' ? 'model-sonnet' : 'model-opus';
+      const modelToggle = `<span class="wf-model-badge ${modelClass}" title="${modelTitle}" onclick="event.stopPropagation(); toggleStepModel('${s.key}')">${modelLabel}</span>`;
+      html += `<div class="wf-step"><div class="wf-step-dot"></div><div><div class="wf-step-name">${s.name} ${modelToggle}</div><div class="wf-step-status">Pending</div></div></div>`;
+      if (s.loopHint) html += `<div class="wf-loop-hint">${s.loopHint}</div>`;
+      return html;
+    }).join('');
+    return;
+  }
+
+  let html = '';
+  if (wf.round > 1) html += `<div class="wf-round-badge">Round ${wf.round}</div>`;
+
+  const activeSteps = [...steps];
+  if (wf.type === 'execution') {
+    if (wf.steps.fix_review) {
+      const idx = activeSteps.findIndex(s => s.key === 'code_review');
+      activeSteps.splice(idx + 1, 0, { key: 'fix_review', name: 'Fix Review Issues', loopHint: '↑ re-merge and re-review' });
+    }
+    if (wf.steps.fix_qa) {
+      const idx = activeSteps.findIndex(s => s.key === 'qa_validation');
+      activeSteps.splice(idx + 1, 0, { key: 'fix_qa', name: 'Fix QA Issues', loopHint: '↑ re-merge and re-validate' });
+    }
+    if (wf.steps.fix_security) {
+      const idx = activeSteps.findIndex(s => s.key === 'security_audit');
+      if (idx >= 0) activeSteps.splice(idx + 1, 0, { key: 'fix_security', name: 'Fix Security Issues', loopHint: '↑ re-merge and re-audit' });
+    }
+  }
+
+  html += activeSteps.map((s, i) => {
+    const stepData = wf.steps[s.key] || {};
+    let statusClass = '';
+    let statusText = 'Pending';
+    if (stepData.status === 'completed') { statusClass = 'completed'; statusText = 'Completed'; }
+    else if (s.key === wf.currentStep && wf.currentStep !== 'completed') { statusClass = 'running'; statusText = 'Active'; }
+    else if (stepData.status === 'error') { statusClass = 'error'; statusText = 'Error'; }
+
+    let stepHtml = '';
+    if (i > 0) stepHtml += '<div class="wf-connector"></div>';
+    const stepModel = getStepModel(s.key);
+    const modelLabel = stepModel === 'sonnet' ? 'Sonnet' : 'Opus';
+    const modelTitle = stepModel === 'sonnet' ? 'Click to switch to Opus' : 'Click to switch to Sonnet';
+    const modelClass = stepModel === 'sonnet' ? 'model-sonnet' : 'model-opus';
+    const modelToggle = stepData.status !== 'completed' ? `<span class="wf-model-badge ${modelClass}" title="${modelTitle}" onclick="event.stopPropagation(); toggleStepModel('${s.key}')">${modelLabel}</span>` : '';
+    const sName = (s.key === 'team_review' || s.key === 'reviewing') && wf.reviewMode ? `${s.name} (${wf.reviewMode})` : s.name;
+    stepHtml += `<div class="wf-step ${statusClass}" onclick="showStepDetail('${s.key}')"><div class="wf-step-dot"></div><div><div class="wf-step-name">${sName} ${modelToggle}</div><div class="wf-step-status">${statusText}</div></div></div>`;
+    if (s.loopHint) stepHtml += `<div class="wf-loop-hint">${s.loopHint}</div>`;
+    return stepHtml;
+  }).join('');
+
+  if (wf.currentStep === 'completed') {
+    html += '<div class="wf-connector"></div>';
+    html += '<div class="wf-step completed"><div class="wf-step-dot"></div><div><div class="wf-step-name">Complete</div></div></div>';
+  }
+
+  if (_htmlCache.wfSteps === html) return;
+  _htmlCache.wfSteps = html;
+  container.innerHTML = html;
+}
+
+function showStepDetail(stepKey) { renderWorkflowDetail(stepKey); }
+
+function renderWorkflowDetail(stepKey) {
+  const detail = document.getElementById('wf-detail');
+  if (!detail) return;
+  // Don't overwrite log view during polling — refresh the log instead
+  if (state.wfViewingLog && !stepKey) {
+    refreshAgentLog(state.wfViewingLog);
+    return;
+  }
+  const wf = state.workflow;
+
+  if (!wf) {
+    detail.innerHTML = '<div class="empty-state"><div class="big">⚙</div><div>Select a workflow type and PRD to begin</div></div>';
+    return;
+  }
+
+  const activeKey = stepKey || wf.currentStep;
+  if (activeKey === 'completed') {
+    const completeMsg = wf.type === 'execution' ? 'The review branch is ready to merge to main.'
+      : wf.type === 'kickoff' ? 'Kickoff complete — project is ready for PRD iterations.'
+      : 'PRD has been approved.';
+    detail.innerHTML = `<div style="font-size:16px;font-weight:600;margin-bottom:8px;">Workflow Complete</div><div style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">${completeMsg}</div>${wf.reviewBranch ? `<div style="font-family:var(--mono);font-size:12px;color:var(--accent);background:var(--surface2);padding:8px 12px;border-radius:6px;display:inline-block;margin-bottom:16px;">Branch: ${wf.reviewBranch}</div>` : ''}<div class="wf-action-area"><div class="wf-action-label">Merge review branch to main, remove worktrees and branches:</div><div class="wf-action-row"><button class="primary-btn green" onclick="finishWorkflow()">Merge &amp; Clean Up</button></div></div>`;
+    return;
+  }
+
+  const step = wf.steps[activeKey];
+  if (!step) { detail.innerHTML = '<div class="empty-state"><div>Step not started yet</div></div>'; return; }
+
+  const agents = step.agents || [];
+  const allDone = agents.length > 0 && agents.every(a => a.status === 'done' || a.status === 'error');
+  const allStuck = agents.length > 0 && agents.every(a => a.status === 'pending') && step.status === 'running';
+  const isCurrentStep = activeKey === wf.currentStep;
+  const doneCount = agents.filter(a => a.status === 'done').length;
+  const summary = allStuck ? 'Agents failed to launch' : agents.length > 0 ? `${doneCount}/${agents.length} done` : '';
+
+  const allStepDefs = [...(WF_STEPS.review || []), ...(WF_STEPS.execution || []), ...(WF_STEPS.kickoff || []),
+    { key: 'fix_review', name: 'Fix Review Issues' }, { key: 'fix_qa', name: 'Fix QA Issues' }, { key: 'fix_security', name: 'Fix Security Issues' }];
+  const stepDef = allStepDefs.find(s => s.key === activeKey);
+  let stepName = stepDef ? stepDef.name : activeKey;
+  if ((activeKey === 'team_review' || activeKey === 'reviewing') && wf.reviewMode) stepName += ` (${wf.reviewMode})`;
+
+  let html = `<div style="font-size:16px;font-weight:600;margin-bottom:4px;">${stepName} ${wf.round > 1 ? '— Round ' + wf.round : ''}</div><div style="font-size:12px;color:var(--text-dim);margin-bottom:16px;">${summary}</div>`;
+
+  // Task execution: show per-task progress from taskExecution state
+  if (activeKey === 'task_execution' && wf.taskExecution) {
+    const tex = wf.taskExecution;
+    const taskStates = tex.taskStates || {};
+    const tasks = (wf.taskPlan || {}).tasks || [];
+    if (tasks.length > 0) {
+      html += '<div class="wf-agent-grid">';
+      for (let i = 0; i < tasks.length; i++) {
+        const task = tasks[i];
+        const ts = taskStates[String(i)] || {};
+        const tsStatus = ts.status || 'pending';
+        const sc = tsStatus === 'done' ? 'done' : tsStatus === 'blocked' ? 'error' : ['implementing','reviewing','fixing'].includes(tsStatus) ? 'running' : '';
+        const badge = tsStatus === 'done' ? 'Done' : tsStatus === 'blocked' ? 'Blocked' : tsStatus === 'reviewing' ? 'Review' : tsStatus === 'fixing' ? 'Fix' : tsStatus === 'implementing' ? 'Running' : 'Pending';
+        const activeAgent = (ts.agents || []).find(a => a.status === 'running');
+        html += `<div class="wf-agent-card ${sc}"><div class="wf-agent-header"><span class="wf-agent-role">T${i+1}: ${escapeHtml(task.name || '')}</span><span class="wf-agent-badge ${sc}">${badge}</span></div>`;
+        if (activeAgent) {
+          html += `<div style="font-size:12px;color:var(--text-dim);">${escapeHtml(activeAgent.role)} working...</div>`;
+          if (activeAgent.window) html += `<button class="ghost-btn" style="margin-top:8px;font-size:11px;" onclick="viewAgentLog('${activeAgent.window}')">View Log</button>`;
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+  } else if (agents.length > 0) {
+    html += '<div class="wf-agent-grid">';
+    for (const agent of agents) {
+      const sc = agent.status === 'done' ? 'done' : agent.status === 'error' ? 'error' : 'running';
+      html += `<div class="wf-agent-card ${sc}"><div class="wf-agent-header"><span class="wf-agent-role">${agent.role}</span><span class="wf-agent-badge ${sc}">${agent.status === 'done' ? 'Done' : agent.status === 'error' ? 'Error' : 'Running'}</span></div>`;
+      if (agent.feedback) html += `<div class="wf-agent-feedback">${escapeHtml(agent.feedback)}</div>`;
+      else if (agent.status === 'running') html += '<div style="font-size:12px;color:var(--text-dim);">Working...</div>';
+      if (agent.error) html += `<div style="font-size:12px;color:var(--red);margin-top:4px;">${escapeHtml(agent.error)}</div>`;
+      if (agent.window) html += `<button class="ghost-btn" style="margin-top:8px;font-size:11px;" onclick="viewAgentLog('${agent.window}')">View Log</button>`;
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  if (step.mergeResults) {
+    html += '<div style="margin-bottom:16px;">';
+    for (const mr of step.mergeResults) {
+      const icon = mr.status === 'merged' ? '✓' : mr.status === 'conflict' ? '✗' : '○';
+      const color = mr.status === 'merged' ? 'var(--green)' : mr.status === 'conflict' ? 'var(--red)' : 'var(--text-dim)';
+      html += `<div style="font-family:var(--mono);font-size:12px;color:${color};margin-bottom:4px;">${icon} ${mr.branch}: ${mr.status}${mr.error ? ' — ' + escapeHtml(mr.error) : ''}</div>`;
+    }
+    html += '</div>';
+  }
+
+  if (allStuck && isCurrentStep) {
+    html += '<div class="wf-action-area"><div class="wf-action-label" style="color:var(--red);">Agents failed to launch — retry:</div><div class="wf-action-row"><button class="primary-btn orange" onclick="advanceWorkflow()">Retry Launch</button></div></div>';
+  } else if (isCurrentStep && step.status === 'pending' && agents.length === 0) {
+    html += `<div class="wf-action-area"><div class="wf-action-label">Ready to launch:</div><div class="wf-action-row"><button class="primary-btn" onclick="advanceWorkflow('launch')">Launch ${stepDef ? stepDef.name : activeKey}</button></div></div>`;
+  } else if (isCurrentStep && step.status !== 'pending') {
+    html += renderWorkflowActions(activeKey, allDone, step);
+  }
+
+  if (_htmlCache.wfDetail === html) return;
+  _htmlCache.wfDetail = html;
+  const prevScroll = detail.scrollTop;
+  detail.innerHTML = html;
+  detail.scrollTop = prevScroll;
+}
+
+function renderWorkflowActions(stepKey, allDone, step) {
+  const wf = state.workflow;
+  const dis = !allDone && step.status !== 'error' ? 'disabled' : '';
+
+  if (wf.type === 'review') {
+    if (stepKey === 'reviewing') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'All reviewers complete:' : 'Waiting for reviewers...'}</div><div class="wf-action-row"><textarea class="wf-notes" id="wf-notes" placeholder="Notes for PM (optional)..."></textarea><button class="primary-btn" onclick="advanceWorkflow('send_to_pm')" ${dis}>Send to PM</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Approve</button></div></div>`;
+    }
+    if (stepKey === 'pm_fix') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'PM revised the PRD:' : 'PM revising PRD...'}</div><div class="wf-action-row"><button class="primary-btn" onclick="advanceWorkflow('approve')" ${dis}>Send to Reviewers</button></div></div>`;
+    }
+  }
+
+  if (wf.type === 'kickoff') {
+    if (stepKey === 'ceo_synthesis') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'CEO vision complete:' : 'CEO synthesizing vision...'}</div><div class="wf-action-row"><button class="primary-btn" onclick="advanceWorkflow('approve')" ${dis}>Continue to PM Scoping</button></div></div>`;
+    }
+    if (stepKey === 'pm_scoping') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'PM scoping complete:' : 'PM defining scope...'}</div><div class="wf-action-row"><button class="primary-btn" onclick="advanceWorkflow('approve')" ${dis}>Start Team Review</button></div></div>`;
+    }
+    if (stepKey === 'team_review') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Team review complete:' : 'Team reviewing...'}</div><div class="wf-action-row"><button class="primary-btn" onclick="advanceWorkflow('approve')" ${dis}>Send to PM for Revision</button></div></div>`;
+    }
+    if (stepKey === 'pm_revision') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'PM revision complete — review outputs:' : 'PM revising...'}</div><div class="wf-action-row"><textarea class="wf-notes" id="wf-notes" placeholder="Notes for revisions (optional)..."></textarea><button class="primary-btn orange" onclick="advanceWorkflow('request_changes')" ${dis}>Request Changes</button><button class="primary-btn" onclick="advanceWorkflow('rerun_team_review')" ${dis}>Re-run Team Review</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Generate Companion Specs</button></div></div>`;
+    }
+    if (stepKey === 'companion_specs') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'All companion specs generated:' : 'Generating companion specs...'}</div><div class="wf-action-row"><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Approve & Init Project</button></div></div>`;
+    }
+    if (stepKey === 'devops_init') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Project scaffold ready:' : 'DevOps initializing project...'}</div><div class="wf-action-row"><button class="primary-btn orange" onclick="advanceWorkflow('skip')" ${dis}>Skip (already set up)</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Approve Kickoff</button></div></div>`;
+    }
+  }
+
+  if (wf.type === 'execution') {
+    if (stepKey === 'qa_tests') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Test cases written:' : 'QA writing tests...'}</div><div class="wf-action-row"><button class="primary-btn" onclick="advanceWorkflow('approve')" ${dis}>Continue</button></div></div>`;
+    }
+    if (stepKey === 'planning') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Task plan ready:' : 'Planning...'}</div><div class="wf-action-row"><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Approve & Launch Tasks</button></div></div>`;
+    }
+    if (stepKey === 'task_execution') {
+      const tex = (wf.taskExecution || {});
+      const taskStates = tex.taskStates || {};
+      const allTasksDone = Object.values(taskStates).length > 0 && Object.values(taskStates).every(ts => ts.status === 'done' || ts.status === 'blocked');
+      if (!allTasksDone) return `<div class="wf-action-area disabled"><div class="wf-action-label">Tasks running — auto-advances when complete...</div></div>`;
+      return '';
+    }
+    if (stepKey === 'ac_verification') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'AC verification complete:' : 'Verifying acceptance criteria...'}</div><div class="wf-action-row"><textarea class="wf-notes" id="wf-notes" placeholder="Notes for devs (optional)..."></textarea><button class="primary-btn orange" onclick="advanceWorkflow('send_to_devs')" ${dis}>Send to Devs</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Continue</button></div></div>`;
+    }
+    if (stepKey === 'visual_design') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Design complete:' : 'Creating visual design...'}</div><div class="wf-action-row"><button class="primary-btn orange" onclick="advanceWorkflow('skip')" ${dis}>Skip (no UI)</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Approve & Continue</button></div></div>`;
+    }
+    if (stepKey === 'api_contract') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'API contract defined:' : 'Architect defining API contracts...'}</div><div class="wf-action-row"><button class="primary-btn orange" onclick="advanceWorkflow('skip')" ${dis}>Skip (no API)</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Approve & Implement</button></div></div>`;
+    }
+    if (stepKey === 'implementation' || stepKey === 'fix_review' || stepKey === 'fix_qa' || stepKey === 'fix_security') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Dev complete:' : 'Developers working...'}</div><div class="wf-action-row"><button class="primary-btn" onclick="advanceWorkflow('approve')" ${dis}>Merge & Continue</button></div></div>`;
+    }
+    if (stepKey === 'merge_for_review' && step.status === 'error') {
+      return `<div class="wf-action-area"><div class="wf-action-label" style="color:var(--red);">Merge conflicts — resolve manually then retry:</div><div class="wf-action-row"><button class="primary-btn orange" onclick="advanceWorkflow('retry')">Retry Merge</button></div></div>`;
+    }
+    if (stepKey === 'code_review') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Code review complete:' : 'Reviewing...'}</div><div class="wf-action-row"><textarea class="wf-notes" id="wf-notes" placeholder="Notes for devs (optional)..."></textarea><button class="primary-btn orange" onclick="advanceWorkflow('send_to_devs')" ${dis}>Send to Devs</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Approve</button></div></div>`;
+    }
+    if (stepKey === 'qa_validation') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'QA validation complete:' : 'QA running tests...'}</div><div class="wf-action-row"><textarea class="wf-notes" id="wf-notes" placeholder="Notes for devs (optional)..."></textarea><button class="primary-btn orange" onclick="advanceWorkflow('send_to_devs')" ${dis}>Send to Devs</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Security Audit</button></div></div>`;
+    }
+    if (stepKey === 'security_audit') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Security audit complete:' : 'Security reviewing...'}</div><div class="wf-action-row"><textarea class="wf-notes" id="wf-notes" placeholder="Notes for devs (optional)..."></textarea><button class="primary-btn orange" onclick="advanceWorkflow('send_to_devs')" ${dis}>Send to Devs</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Continue</button></div></div>`;
+    }
+    if (stepKey === 'demo_review') {
+      return `<div class="wf-action-area"><div class="wf-action-label">Review the running app before merging:</div><div class="wf-action-row"><button class="primary-btn orange" onclick="advanceWorkflow('skip')">Skip Demo</button><button class="primary-btn green" onclick="advanceWorkflow('approve')">Approve & Merge</button></div></div>`;
+    }
+    if (stepKey === 'merge_to_main') {
+      if (step.status === 'error') {
+        return `<div class="wf-action-area"><div class="wf-action-label" style="color:var(--red);">Merge failed — resolve conflicts manually then retry:</div><div class="wf-action-row"><button class="primary-btn orange" onclick="advanceWorkflow()">Retry Merge</button></div></div>`;
+      }
+      return `<div class="wf-action-area"><div class="wf-action-label">Merging to main...</div></div>`;
+    }
+    if (stepKey === 'capture_learnings') {
+      return `<div class="wf-action-area ${dis ? 'disabled' : ''}"><div class="wf-action-label">${allDone ? 'Learnings captured:' : 'Extracting learnings from workflow...'}</div><div class="wf-action-row"><button class="primary-btn orange" onclick="advanceWorkflow('skip')" ${dis}>Skip</button><button class="primary-btn green" onclick="advanceWorkflow('approve')" ${dis}>Done</button></div></div>`;
+    }
+  }
+  return '';
+}
+
+async function startWorkflow() {
+  const input = document.getElementById('wf-input').value.trim();
+  if (!input) return alert(state.workflowType === 'kickoff' ? 'Enter a project name' : 'Enter a PRD reference (e.g. PRD-006)');
+  const autoCount = parseInt(document.getElementById('wf-auto-iterate').value) || 1;
+  const res = await fetch('/api/workflow/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: state.workflowType, input, reviewMode, autoIterateRemaining: autoCount - 1 }),
+  });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error);
+  state.workflow = data.workflow;
+  // Persist review mode to workflow state
+  if (reviewMode !== 'parallel') {
+    state.workflow.reviewMode = reviewMode;
+    fetch('/api/workflow/model-override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewMode }),
+    });
+  }
+  renderWorkflow();
+  await advanceWorkflow();
+}
+
+async function advanceWorkflow(action) {
+  const notes = document.getElementById('wf-notes')?.value?.trim() || '';
+  const res = await fetch('/api/workflow/advance', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, notes }),
+  });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error || 'Failed to advance workflow');
+  state.workflow = data.workflow;
+  renderWorkflow();
+  if (data.needsAdvance) await advanceWorkflow();
+  startWorkflowPolling();
+}
+
+async function cancelWorkflow() {
+  if (!confirm('Cancel the current workflow? This will kill agents and remove worktrees.')) return;
+  await fetch('/api/workflow/cancel', { method: 'POST' });
+  state.workflow = null;
+  stopWorkflowPolling();
+  renderWorkflow();
+}
+
+async function finishWorkflow() {
+  if (!confirm('Merge review branch to main, remove worktrees and branches?')) return;
+  const res = await fetch('/api/workflow/finish', { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error || 'Failed to finish workflow');
+  state.workflow = null;
+  stopWorkflowPolling();
+  renderWorkflow();
+}
+
+async function viewAgentLog(windowName) {
+  state.wfViewingLog = windowName;
+  await refreshAgentLog(windowName);
+}
+
+async function refreshAgentLog(windowName) {
+  const res = await fetch(`/api/workflow/log?window=${encodeURIComponent(windowName)}&lines=100`);
+  const data = await res.json();
+  const el = document.getElementById('wf-detail');
+  if (!el) return;
+  const pre = el.querySelector('pre.wf-log-content');
+  if (pre) {
+    // Update content only, preserve scroll
+    const prevScroll = pre.scrollTop;
+    pre.textContent = data.log || '(no output)';
+    pre.scrollTop = prevScroll;
+  } else {
+    _htmlCache.wfDetail = null;
+    const wrapper = document.createElement('div');
+    const header = document.createElement('div');
+    header.style.marginBottom = '12px';
+    const backBtn = document.createElement('button');
+    backBtn.className = 'ghost-btn';
+    backBtn.textContent = '\u2190 Back';
+    backBtn.onclick = closeAgentLog;
+    header.appendChild(backBtn);
+    const label = document.createElement('span');
+    label.style.cssText = 'font-family:var(--mono);font-size:12px;color:var(--text-dim);margin-left:12px;';
+    label.textContent = windowName;
+    header.appendChild(label);
+    wrapper.appendChild(header);
+    const logPre = document.createElement('pre');
+    logPre.className = 'wf-log-content';
+    logPre.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:16px;font-family:var(--mono);font-size:11px;color:var(--text);overflow:auto;max-height:calc(100vh - 200px);white-space:pre-wrap;word-break:break-all;';
+    logPre.textContent = data.log || '(no output)';
+    wrapper.appendChild(logPre);
+    el.replaceChildren(wrapper);
+  }
+}
+
+function closeAgentLog() {
+  state.wfViewingLog = null;
+  _htmlCache.wfDetail = null;
+  renderWorkflowDetail();
+}
+
+function startWorkflowPolling() {
+  stopWorkflowPolling();
+  state.wfLogPolling = setInterval(loadWorkflow, 5000);
+}
+
+function stopWorkflowPolling() {
+  if (state.wfLogPolling) { clearInterval(state.wfLogPolling); state.wfLogPolling = null; }
+}
+
+// ── SSE ──────────────────────────────────
+function connectSSE() {
+  const es = new EventSource('/api/sse');
+  es.onopen = () => setConnStatus(true);
+  es.onerror = () => setConnStatus(false);
+  es.onmessage = (evt) => {
+    try { handleChange(JSON.parse(evt.data)); } catch (_) {}
+  };
+}
+
+function setConnStatus(connected) {
+  const dot = document.getElementById('conn-dot');
+  const txt = document.getElementById('conn-text');
+  dot.style.background = connected ? 'var(--green)' : 'var(--red)';
+  dot.style.boxShadow  = connected ? '0 0 6px var(--green)' : '0 0 6px var(--red)';
+  txt.textContent = connected ? 'live' : 'disconnected';
+}
+
+function handleChange(msg) {
+  if (msg.event === 'worktrees-updated') { loadWorktrees(); return; }
+  if (msg.event === 'workflow-updated') { loadWorkflow(); loadAgents(); return; }
+
+  const { event: evtType, path: changedPath } = msg;
+  if (!changedPath) return;
+
+  if (changedPath === 'agent-status.json') loadAgents();
+  if (changedPath === 'execution-plan.md' && state.activeTab === 'plan') loadExecutionPlan();
+  if (changedPath === 'instructions-queue.md' && state.activeTab === 'queue') loadQueue();
+  if (changedPath === 'project-state.md') loadStatus();
+
+  state.recentFiles.add(changedPath);
+  setTimeout(() => { state.recentFiles.delete(changedPath); renderFileTree(); }, RECENT_TTL);
+  loadFiles();
+
+  if (state.activeFile === changedPath && evtType !== 'unlink') openFile(changedPath, { preserveScroll: true });
+}
+
+// ── Utils ────────────────────────────────
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Workflow modal ────────────────────────
+const WORKFLOWS = {
+  preparation: {
+    title: 'Preparation Phase',
+    desc: 'PRD + companion specs — all input documents approved before execution',
+    steps: [
+      { num: '1', roles: ['PM'], desc: 'Scope next iteration: one small PRD → docs/prds/' },
+      { num: '2–6', roles: ['Brand', 'UX', 'Architect', 'Marketing', 'Security'], type: 'parallel', desc: 'Review PRD in parallel rounds, iterate until approved' },
+      { num: '7', roles: ['UX'], type: 'parallel', desc: 'Interaction spec → docs/ux/UX-NNN-*.md', optional: true },
+      { num: '8', roles: ['Brand', 'PM'], type: 'parallel', desc: 'Copy spec → docs/brand/PRD-NNN-copy.md', optional: true },
+      { num: '9', roles: ['Architect'], type: 'parallel', desc: 'ADR → docs/adrs/ADR-NNN-*.md', optional: true },
+      { num: '⊘', roles: ['PM'], type: 'gate', desc: 'Gate: verify all §10 companion specs have file paths and files exist' },
+    ]
+  },
+  execution: {
+    title: 'Execution Phase',
+    desc: 'Tests, implementation, security audit, verification',
+    steps: [
+      { num: '1', roles: ['QA'], desc: 'Write E2E test spec from PRD + all companion specs → e2e/prd-NNN-*.spec.ts (tests fail intentionally)' },
+      { num: '2', roles: ['Designer'], desc: 'Visual design (Pencil) — create .pen file from PRD + UX spec + brand guidelines. Skippable for non-UI PRDs.' },
+      { num: '3', roles: ['Architect'], desc: 'API contract — define endpoints, request/response shapes, error codes before implementation. Skippable for non-API PRDs.' },
+      { num: '4', roles: ['Agent Team'], type: 'team', desc: 'Implement (lead + specialists in parallel; DevOps joins when PRD requires infra/CI/CD changes)' },
+      { num: '5', roles: ['Code Reviewer'], desc: 'Code review — review all changes, check quality, correctness, adherence to standards' },
+      { num: '6', roles: ['QA'], desc: 'Run PRD-scoped tests (new spec + directly affected existing tests); failures → send to devs' },
+      { num: '7', roles: ['Security'], desc: 'Code-level security audit scoped to PRD changes only; blocking findings → send to devs' },
+      { num: '8', roles: ['Owner'], desc: 'Demo review — owner reviews the running app before merge. Optional, skippable.' },
+      { num: '9', desc: 'Merge to main — review branch merged, branches cleaned up' },
+      { num: '10', roles: ['Knowledge Curator'], desc: 'Capture learnings — extract reusable patterns from workflow feedback into docs/learnings/. Auto-runs, skippable.' },
+    ]
+  },
+  kickoff: {
+    title: 'Kickoff Sequence',
+    desc: 'Run once before first iteration — establish direction and guardrails',
+    steps: [
+      { num: '0', desc: 'Review docs/inputs/ → read vision-draft.md + deep-research-report.md' },
+      { num: '1', roles: ['CEO'], desc: 'Define canonical vision → update Vision section' },
+      { num: '2', roles: ['PM'], desc: 'Break down vision into capability areas + Phase 1 scope (no PRD yet)' },
+      { num: '3', roles: ['Brand', 'UX', 'Marketing', 'Architect', 'DevOps'], type: 'parallel', desc: 'Companion specs: brand, UX, marketing, ADRs → docs/{brand,ux,marketing,adrs}/' },
+      { num: '⊘', type: 'gate', desc: 'Gate: founder reviews all outputs, approves or revises' },
+    ]
+  }
+};
+
+function openWorkflowModal() {
+  const modal = document.getElementById('workflow-modal');
+  modal.classList.add('visible');
+  renderWorkflowModal('preparation');
+}
+
+function closeWorkflowModal() {
+  document.getElementById('workflow-modal').classList.remove('visible');
+}
+
+function renderWorkflowModal(activeTab) {
+  const inner = document.getElementById('workflow-modal-inner');
+  const tabs = Object.keys(WORKFLOWS);
+  const tabsHtml = tabs.map(k =>
+    `<button class="wf-tab ${k === activeTab ? 'active' : ''}" onclick="renderWorkflowModal('${k}')">${WORKFLOWS[k].title}</button>`
+  ).join('');
+
+  const wf = WORKFLOWS[activeTab];
+  const stepsHtml = wf.steps.map((s, i) => {
+    const dotCls = s.type === 'gate' ? 'gate' : s.type === 'parallel' ? 'parallel' : s.type === 'team' ? 'team' : '';
+    const rolesHtml = (s.roles || []).map(r => {
+      const cls = s.type === 'gate' ? 'gate' : s.type === 'parallel' ? 'parallel' : s.type === 'team' ? 'team' : '';
+      return `<span class="wf-role ${cls}">${escapeHtml(r)}</span>`;
+    }).join(' ');
+    const optTag = s.optional ? ' <span style="color:var(--muted);font-size:10px;font-style:italic">(if needed)</span>' : '';
+    return `<div class="wf-step">
+      <div class="wf-step-track"><div class="wf-step-dot ${dotCls}"></div><div class="wf-step-line"></div></div>
+      <div class="wf-step-body">
+        <div class="wf-step-header"><span class="wf-step-num">${escapeHtml(s.num)}</span>${rolesHtml}</div>
+        <div class="wf-step-desc">${escapeHtml(s.desc)}${optTag}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  inner.innerHTML = `
+    <button class="wf-close" onclick="closeWorkflowModal()">✕</button>
+    <div class="wf-title">Workflows</div>
+    <div class="wf-tabs">${tabsHtml}</div>
+    <div class="wf-phase">
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px;">${escapeHtml(wf.desc)}</div>
+      <div class="wf-steps">${stepsHtml}</div>
+    </div>`;
+}
+
+// Close modal on backdrop click or Escape
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeWorkflowModal(); });
+document.addEventListener('click', e => { if (e.target.id === 'workflow-modal') closeWorkflowModal(); });
+
+init();
+</script>
+<div id="workflow-modal"><div id="workflow-modal-inner"></div></div>
+</body>
+</html>
