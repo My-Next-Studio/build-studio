@@ -85,10 +85,10 @@ test('spawn is called with argv array, not a shell string', async () => {
     // Must be separate argv array — not a shell string
     assert.equal(command, 'claude');
     assert.ok(Array.isArray(args), 'args must be an array');
-    assert.equal(args[0], '-p');
-    assert.ok(args[1].startsWith('@'), 'prompt arg must start with @');
-    assert.ok(args[1].endsWith('.prompt.txt'), 'prompt arg must point to a .prompt.txt file');
-    assert.equal(args.length, 2);
+    assert.deepEqual(args.slice(0, 3), ['--permission-mode', 'auto', '-p']);
+    assert.ok(args[3].startsWith('@'), 'prompt arg must start with @');
+    assert.ok(args[3].endsWith('.prompt.txt'), 'prompt arg must point to a .prompt.txt file');
+    assert.equal(args.length, 4);
   } finally {
     cleanDir(projectRoot);
   }
@@ -142,11 +142,11 @@ test('two-pass run fires spawn twice sequentially', async () => {
     for (const { command, args } of fakeSpawn.calls) {
       assert.equal(command, 'claude');
       assert.ok(Array.isArray(args));
-      assert.equal(args[0], '-p');
-      assert.ok(args[1].startsWith('@'));
+      assert.deepEqual(args.slice(0, 3), ['--permission-mode', 'auto', '-p']);
+      assert.ok(args[3].startsWith('@'));
     }
     // Pass 1 and pass 2 use different prompt files
-    assert.notEqual(fakeSpawn.calls[0].args[1], fakeSpawn.calls[1].args[1]);
+    assert.notEqual(fakeSpawn.calls[0].args[3], fakeSpawn.calls[1].args[3]);
   } finally {
     cleanDir(projectRoot);
   }
@@ -459,7 +459,7 @@ test('buildSpawnOptions: no agentDefaults → minimal argv, env preserved', () =
       promptFile: '/tmp/p.txt',
       projectRoot: '/tmp/proj',
     });
-    assert.deepEqual(argv, ['-p', '@/tmp/p.txt']);
+    assert.deepEqual(argv, ['--permission-mode', 'auto', '-p', '@/tmp/p.txt']);
     assert.equal(spawnOpts.cwd, '/tmp/proj');
     assert.deepEqual(spawnOpts.stdio, ['ignore', 'pipe', 'pipe']);
     assert.equal(spawnOpts.env.ANTHROPIC_API_KEY, 'sk-test', 'API key kept when not asked to drop');
@@ -468,15 +468,13 @@ test('buildSpawnOptions: no agentDefaults → minimal argv, env preserved', () =
   }
 });
 
-test('buildSpawnOptions: skip_permissions=true → adds --dangerously-skip-permissions', () => {
+test('buildSpawnOptions: legacy skip_permissions=true → bypassPermissions mode', () => {
   const { argv } = buildSpawnOptions({
     promptFile: '/tmp/p.txt',
     projectRoot: '/tmp/proj',
     agentDefaults: { skip_permissions: true },
   });
-  assert.ok(argv.includes('--dangerously-skip-permissions'),
-    'argv must include --dangerously-skip-permissions');
-  assert.deepEqual(argv, ['--dangerously-skip-permissions', '-p', '@/tmp/p.txt']);
+  assert.deepEqual(argv, ['--permission-mode', 'bypassPermissions', '-p', '@/tmp/p.txt']);
 });
 
 test('buildSpawnOptions: unset_api_key=true → ANTHROPIC_API_KEY removed from env', () => {
@@ -503,7 +501,7 @@ test('buildSpawnOptions: model=opus → --model claude-opus-4-6', () => {
     projectRoot: '/tmp/proj',
     agentDefaults: { model: 'opus' },
   });
-  assert.deepEqual(argv, ['--model', 'claude-opus-4-6', '-p', '@/tmp/p.txt']);
+  assert.deepEqual(argv, ['--model', 'claude-opus-4-6', '--permission-mode', 'auto', '-p', '@/tmp/p.txt']);
 });
 
 test('buildSpawnOptions: model=sonnet → --model claude-sonnet-4-6', () => {
@@ -535,7 +533,7 @@ test('buildSpawnOptions: full example-web-shaped agent_defaults → all three tr
       agentDefaults: { skip_permissions: true, unset_api_key: true, model: 'opus' },
     });
     assert.deepEqual(argv,
-      ['--model', 'claude-opus-4-6', '--dangerously-skip-permissions', '-p', '@/tmp/p.txt']);
+      ['--model', 'claude-opus-4-6', '--permission-mode', 'bypassPermissions', '-p', '@/tmp/p.txt']);
     assert.ok(!('ANTHROPIC_API_KEY' in spawnOpts.env));
   } finally {
     process.env = original;
@@ -565,7 +563,8 @@ test('runOneShot: agent_defaults are threaded into the spawn call', async () => 
     assert.equal(fakeSpawn.calls.length, 1, 'one pass = one spawn');
     const { command, args, options } = fakeSpawn.calls[0];
     assert.equal(command, 'claude');
-    assert.ok(args.includes('--dangerously-skip-permissions'));
+    assert.ok(args.includes('--permission-mode'));
+    assert.ok(args.includes('bypassPermissions'));
     assert.ok(args.includes('--model'));
     assert.ok(args.includes('claude-sonnet-4-6'));
     assert.ok(!('ANTHROPIC_API_KEY' in (options.env || {})),

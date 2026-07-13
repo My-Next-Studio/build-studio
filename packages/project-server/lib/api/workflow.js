@@ -1177,7 +1177,8 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     let sessionCreated = tmuxOps.hasSession(wf.sessionName);
     const results = [];
     const dashboardPort = config.port;
-    const skipPerms = config.agent_defaults.skip_permissions;
+    const { resolvePermissionMode, claudePermissionFlag } = require('../permission-mode');
+    const permissionMode = resolvePermissionMode(config.agent_defaults);
     const unsetKey = config.agent_defaults.unset_api_key;
     const resolvedStep = stepKey || wf.currentStep;
     const modelShortName = (wf.stepModelOverrides && wf.stepModelOverrides[resolvedStep])
@@ -1235,9 +1236,13 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       const useCodex =
         (isDeveloperRole(agent.role) && wf.developerCli === 'codex') ||
         reviewerOnCodex(wf, agent.role);
-      const dangerFlag = skipPerms
-        ? (useCodex ? ' --dangerously-bypass-approvals-and-sandbox' : ' --dangerously-skip-permissions')
-        : '';
+      // Claude gets --permission-mode (default resolves to 'auto': no routine
+      // prompts, classifier-reviewed). Codex has no classifier equivalent, so
+      // for the never-prompt intents (auto/bypassPermissions) it keeps its
+      // bypass flag; restrictive modes leave Codex prompting (attended only).
+      const dangerFlag = useCodex
+        ? (['auto', 'bypassPermissions'].includes(permissionMode) ? ' --dangerously-bypass-approvals-and-sandbox' : '')
+        : claudePermissionFlag(permissionMode);
       // Append efficiency + structured feedback instructions to ALL agents
       // (skip if already present in the instruction to avoid duplication)
       const hasEfficiency = agent.instruction.includes('CONTEXT BUDGET');

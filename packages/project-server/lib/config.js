@@ -5,7 +5,7 @@ const { resolvePreset, PRESETS } = require('./presets');
 
 const DEFAULTS = {
   docs_path: './docs',
-  agent_defaults: { skip_permissions: true, unset_api_key: true, model: 'opus' },
+  agent_defaults: { unset_api_key: true, model: 'opus' },
   max_review_rounds: 4,
   review_mode: 'parallel',
   // builder_strategy: how the monolithic task_execution builder is driven.

@@ -55,7 +55,11 @@ preset: web-app
 #                          # set to false for mobile-only or API-only projects
 
 agent_defaults:
-  skip_permissions: true
+  # Claude Code permission mode for agent sessions.
+  #   auto (default)    — no routine prompts; a classifier blocks risky actions
+  #   bypassPermissions — skip all checks (the old skip_permissions: true)
+  #   dontAsk           — allowlist-only; anything unapproved is denied
+  permission_mode: auto
   unset_api_key: true
 
 # Deployment and versioning strategy (optional):

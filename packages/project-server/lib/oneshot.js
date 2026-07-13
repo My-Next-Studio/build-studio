@@ -22,8 +22,9 @@ const MODEL_IDS = { opus: 'claude-opus-4-6', sonnet: 'claude-sonnet-4-6' };
 function buildSpawnOptions({ promptFile, projectRoot, agentDefaults }) {
   const argv = ['-p', '@' + promptFile];
 
-  const skipPerms = agentDefaults && agentDefaults.skip_permissions === true;
-  if (skipPerms) argv.unshift('--dangerously-skip-permissions');
+  const { resolvePermissionMode } = require('./permission-mode');
+  const permissionMode = resolvePermissionMode(agentDefaults);
+  if (permissionMode !== 'default') argv.unshift('--permission-mode', permissionMode);
 
   const modelKey = agentDefaults && agentDefaults.model;
   if (modelKey) {

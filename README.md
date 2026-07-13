@@ -217,7 +217,8 @@ Key fields in `.build-studio/config.yaml` (not exhaustive — presets set sensib
 | `workflow.kickoff` | No | Standard steps | Kickoff workflow step sequence |
 | `workflow.review` | No | Standard steps | Review workflow step sequence |
 | `workflow.execution` | No | Standard steps | Execution workflow step sequence |
-| `agent_defaults.skip_permissions` | No | `true` | Use `--dangerously-skip-permissions` |
+| `agent_defaults.permission_mode` | No | `auto` | Claude Code permission mode for agent sessions: `auto` (classifier-reviewed, no routine prompts), `bypassPermissions` (skip all checks), `dontAsk` (allowlist-only), `acceptEdits`, `default`, `plan` |
+| `agent_defaults.skip_permissions` | No | — | Legacy: `true` = `bypassPermissions`. Use `permission_mode` instead |
 | `agent_defaults.unset_api_key` | No | `true` | Unset `ANTHROPIC_API_KEY` in agent sessions |
 | `agent_defaults.model` | No | `opus` | Default model (`opus` or `sonnet`) |
 | `step_models` | No | `{}` | Per-step model overrides |
