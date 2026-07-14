@@ -94,6 +94,10 @@ function scaffoldProject(targetPath, options = {}) {
     }
   }
 
+  // Knowledge manifest — declares this repo's knowledge surface (file contract).
+  const { ensureManifest } = require('./knowledge-manifest');
+  if (ensureManifest(targetPath, { name: projectName })) log('docs/knowledge.yaml');
+
   // PRD template — the PM starts every PRD from this instead of
   // reverse-engineering the format from an older PRD.
   const prdsDir = path.join(docsDir, 'prds');

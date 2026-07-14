@@ -165,6 +165,13 @@ async function onboardProject(targetPath, options = {}) {
     path.join(targetPath, 'docs', 'prds', 'TEMPLATE.md'), 'docs/prds/TEMPLATE.md', written, skipped);
   copyIfAbsent(path.join(templateDir, 'docs', 'asset-register.md'),
     path.join(targetPath, 'docs', 'asset-register.md'), 'docs/asset-register.md', written, skipped);
+  {
+    const { ensureManifest } = require('./knowledge-manifest');
+    const manifestPath = path.join(targetPath, 'docs', 'knowledge.yaml');
+    const existed = fs.existsSync(manifestPath);
+    if (ensureManifest(targetPath, { name: options.name }) && !existed) written.push('docs/knowledge.yaml');
+    else if (existed) skipped.push('docs/knowledge.yaml');
+  }
   for (const cat of LEARNING_CATEGORIES) {
     ensureDirWithGitkeep(
       path.join(targetPath, 'docs', 'learnings', cat),
