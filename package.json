@@ -20,5 +20,8 @@
   "dependencies": {
     "@build-studio/project-server": "*",
     "@build-studio/shared": "*"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
   }
 }
