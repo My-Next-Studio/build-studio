@@ -1796,9 +1796,19 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
         let content;
         try { content = fs.readFileSync(fullPath, 'utf8'); } catch (_) { continue; }
 
-        // BLOCK: Real LLM API URLs
+        // BLOCK: Real LLM API URLs — unless the file is tagged @llm-url-fixture.
+        // Legitimate exception: tests that assert a real endpoint is REJECTED
+        // (e.g. an EU-residency guard test sets LLM_ENDPOINT=api.anthropic.com
+        // and expects validateEndpoint to throw). The URL is the fixture for
+        // the forbidden value; no network call occurs. The tag is a visible,
+        // reviewable waiver — reviewers should verify the file truly never
+        // reaches the network (same trust model as the @real-llm tag below).
         if (/api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com/i.test(content)) {
-          violations.push(`${relPath}: contains real LLM API URL. Tests must NOT call paid external APIs.`);
+          if (/@llm-url-fixture/.test(content)) {
+            console.log(`[workflow] llm-gate: ${relPath} contains a real LLM URL but is tagged @llm-url-fixture (URL asserted as rejected, not called) — allowed`);
+          } else {
+            violations.push(`${relPath}: contains real LLM API URL. Tests must NOT call paid external APIs. (If the URL is a fixture asserted as REJECTED — e.g. a residency-guard test — tag the file with @llm-url-fixture and explain why.)`);
+          }
         }
         // BLOCK: LLM SDK imports without a mock
         if (/from\s+['"](@anthropic-ai\/sdk|openai|@google\/generative)['"]/.test(content) || /require\s*\(\s*['"](@anthropic-ai\/sdk|openai)['"]\s*\)/.test(content)) {
