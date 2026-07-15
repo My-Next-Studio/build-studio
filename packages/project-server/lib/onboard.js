@@ -204,6 +204,16 @@ async function onboardProject(targetPath, options = {}) {
   );
   written.push('docs/onboarding/inventory.json');
 
+  // ─── 7. Claude Code folder trust ──────────────────────────────────────────
+  // Headless workflow agents can't answer the interactive trust dialog a
+  // never-before-seen folder triggers — seed it, same as scaffoldProject.
+  const { seedClaudeFolderTrust } = require('./claude-trust');
+  if (seedClaudeFolderTrust(targetPath)) {
+    written.push('~/.claude.json (folder trust ensured)');
+  } else {
+    console.warn('[onboard] could not seed Claude folder trust — first workflow may stall at the trust dialog');
+  }
+
   return {
     preset: presetResult.preset,
     deployment,

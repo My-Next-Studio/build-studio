@@ -161,6 +161,16 @@ function scaffoldProject(targetPath, options = {}) {
   });
   execFileSync('git', ['branch', '-M', 'main'], { cwd: targetPath, stdio: 'ignore' });
   log('git init + initial commit (branch: main)');
+
+  // Claude Code folder trust — a never-before-seen folder triggers Claude's
+  // interactive trust dialog, which headless tmux agents can't answer: every
+  // agent of the first workflow stalls silently until the idle timeout.
+  const { seedClaudeFolderTrust } = require('./claude-trust');
+  if (seedClaudeFolderTrust(targetPath)) {
+    log('Claude folder trust (~/.claude.json)');
+  } else {
+    console.warn('  ⚠ could not seed Claude folder trust — run `claude` in the project folder once and accept the dialog, or the first workflow will stall');
+  }
 }
 
 module.exports = { scaffoldProject };
