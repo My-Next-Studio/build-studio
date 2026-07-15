@@ -3065,6 +3065,23 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
     // Don't auto-advance blocked steps
     if (step.status === 'blocked') return;
 
+    // A step where EVERY agent errored without producing feedback has nothing
+    // to advance on. Approving it forward walks a dead workflow to 'completed'
+    // with zero output (finance-studio kickoff 2026-07-15: all agents stalled
+    // at Claude's folder-trust dialog and auto-advance marched all seven steps
+    // to a green "completed"). Halt loudly instead — the hub's paused banner
+    // surfaces autoAdvanceError; the owner fixes the cause and relaunches.
+    // Manual actions (approve/override/skip) stay available.
+    const allErrored = agents.length > 0 && agents.every(a => a.status === 'error');
+    if (allErrored && agents.every(a => !a.feedback)) {
+      if (!step.autoAdvanceError) {
+        step.autoAdvanceError = `all ${agents.length} agent(s) errored with no output — halted instead of advancing past a dead step; fix the cause (see agent errors) and relaunch`;
+        state.saveWorkflow(wf);
+        console.warn(`[auto-advance] halted on step=${wf.currentStep} — all agents errored with no output`);
+      }
+      return;
+    }
+
     let action = null;
 
     if (isPending) {
