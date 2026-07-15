@@ -7,6 +7,8 @@ node_modules/
 .build-studio/run-state.json
 .build-studio/snapshots/
 .build-studio/*.bak*
+# Support reports (owner call: low archival value — the durable artifact is the filed backlog item)
+.build-studio/support/
 docs/agent-status.json
 
 # Per-workflow agent launch artifacts

@@ -17,6 +17,7 @@ import { PortalTab } from './portal-tab'
 import { RunbooksTab } from './runbooks-tab'
 import { UITestsTab } from './uitests-tab'
 import { BacklogTab } from './backlog-tab'
+import { SupportTab } from './support-tab'
 import { PRDViewerPanel } from './prd-viewer-panel'
 import { BUILTIN_FUNCTIONS, WORKFLOW_TYPE_TO_FUNCTION, resolveFunctions, type FunctionDefinition, type PortalConfig } from '@/lib/functions'
 
@@ -234,6 +235,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
     { key: 'cicd', label: 'CI/CD' },
     { key: 'runbooks', label: 'Runbooks' },
     { key: 'uitests', label: 'UITests' },
+    { key: 'reports', label: 'Reports' },
     ...portals.map((p, i) => ({ key: `portal-${i}`, label: p.name })),
   ]
   const tabs = allTabs.filter(t => currentFn?.tabs?.includes(t.key) ?? true)
@@ -376,6 +378,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
               {tab === 'cicd' && <CicdTab />}
               {tab === 'runbooks' && <RunbooksTab />}
               {tab === 'uitests' && <UITestsTab />}
+              {tab === 'reports' && <SupportTab />}
               {tab.startsWith('portal-') && (() => {
                 const idx = parseInt(tab.split('-')[1])
                 const portal = portals[idx]

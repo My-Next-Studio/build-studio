@@ -39,6 +39,14 @@ export const BUILTIN_FUNCTIONS: FunctionDefinition[] = [
     tabs: ['services', 'cicd', 'runbooks'],
     enabledByDefault: true,
   },
+  {
+    id: 'support',
+    label: 'Support',
+    views: ['overview'],
+    workflowTypes: [],
+    tabs: ['reports'],
+    enabledByDefault: true,
+  },
 ]
 
 /** Maps workflow type → function id (used for notification attribution) */
@@ -54,6 +62,7 @@ export const FUNCTION_SHORT_LABELS: Record<string, string> = {
   project: 'proj',
   development: 'dev',
   operations: 'ops',
+  support: 'sup',
 }
 
 /**

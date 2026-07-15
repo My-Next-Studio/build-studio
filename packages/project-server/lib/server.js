@@ -21,6 +21,7 @@ const { createRunbooksRouter } = require('./api/runbooks');
 const { createOpsUITestsRouter } = require('./api/ops-uitests');
 const { createDemoSetupRouter } = require('./api/demo-setup');
 const { createBacklogRouter } = require('./api/backlog');
+const { createSupportRouter } = require('./api/support');
 const { createOverseer } = require('./overseer');
 
 function startServer(projectRoot, opts = {}) {
@@ -34,7 +35,25 @@ function startServer(projectRoot, opts = {}) {
   watchConfig(config);
 
   const app = express();
-  app.use(express.json());
+  // Default (small-limit) JSON parsing for every route EXCEPT the Support
+  // report-create endpoint, which accepts base64 attachments and mounts its own
+  // express.json({ limit: '40mb' }) route middleware.
+  //
+  // WHY this skip exists (do NOT "simplify" it away): body-parser runs in
+  // registration order and marks the body consumed on the first parser to touch
+  // it, so a global express.json() mounted here would ALWAYS run before any
+  // route-level parser and reject the request at its own limit first — the
+  // route-level 40mb cap could never take effect. base64 inflates payloads ~33%,
+  // so the default 100kb cap actually bites at ~75KB of raw attachment. Skipping
+  // exactly POST /api/support/reports lets its route-level parser govern that one
+  // endpoint while the app-wide limit (and its narrow DoS surface) stays 100kb
+  // everywhere else. Mounting the router before this line isn't an option — CORS
+  // is registered after it, so that would drop CORS/preflight for support routes.
+  const defaultJsonParser = express.json();
+  app.use((req, res, next) => {
+    if (req.method === 'POST' && req.path === '/api/support/reports') return next();
+    return defaultJsonParser(req, res, next);
+  });
 
   // CORS — allow hub and other origins to connect directly
   app.use((req, res, next) => {
@@ -156,6 +175,7 @@ function startServer(projectRoot, opts = {}) {
   const opsUITestsRouter = createOpsUITestsRouter(config);
   const demoSetupRouter = createDemoSetupRouter(config);
   const backlogRouter = createBacklogRouter(config);
+  const supportRouter = createSupportRouter(config);
 
   app.use('/api', filesRouter);
   app.use('/api', queueRouter);
@@ -168,6 +188,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', opsUITestsRouter);
   app.use('/api', demoSetupRouter);
   app.use('/api', backlogRouter);
+  app.use('/api', supportRouter);
 
   // Config endpoint for frontend
   const { listPresets } = require('./presets');

@@ -18,6 +18,7 @@ const ROLE_CONFIG: Record<string, { avatar: string; avatarImg: string; color: st
   'Code Review':  { avatar: '🔍', avatarImg: 'code-review',  color: '#e17055' },
   'Code Reviewer': { avatar: '🔍', avatarImg: 'code-review', color: '#e17055' },
   'Designer':     { avatar: '🖌️', avatarImg: 'designer',     color: '#e84393' },
+  'Support':      { avatar: '🛟', avatarImg: 'support',      color: '#2dd4bf' },
 }
 
 // `default` resolves to the Build Studio app icon — used for any role without
