@@ -169,6 +169,14 @@ export function BacklogTab({
     return { all, feat, bug, task }
   }, [groups, items])
 
+  // Item files with no line between the BACKLOG markers in project-state.md.
+  // They belong to no release group, so without this strip they render nowhere.
+  const unlisted = useMemo(() => {
+    const grouped = new Set<string>()
+    for (const g of groups) for (const id of g.items) grouped.add(id)
+    return Object.keys(items).filter(id => !grouped.has(id)).sort()
+  }, [groups, items])
+
   function shouldShow(item: Item | undefined): boolean {
     if (!item) return false
     if (typeFilter !== 'all' && item.type !== typeFilter) return false
@@ -297,6 +305,29 @@ export function BacklogTab({
       {error && (
         <div style={{ padding: '8px 12px', background: 'rgba(255,95,95,0.08)', border: '1px solid var(--red)', borderRadius: 4, color: 'var(--red)', fontSize: 11 }}>
           {error}
+        </div>
+      )}
+
+      {/* Unlisted items — orphaned item files that no release group renders */}
+      {!loading && !error && unlisted.length > 0 && (
+        <div style={{ padding: '8px 12px', background: 'rgba(245,158,11,0.08)', border: '1px solid var(--orange)', borderRadius: 4, fontSize: 11, lineHeight: 1.6 }}>
+          <span style={{ color: 'var(--orange)', fontWeight: 700 }}>
+            ⚠ {unlisted.length} unlisted item{unlisted.length === 1 ? '' : 's'}
+          </span>
+          <span style={{ color: 'var(--text-dim)' }}>
+            {' '}— item file exists in <Code>docs/backlog/</Code> but has no line between the BACKLOG markers in <Code>docs/project-state.md</Code>, so it belongs to no release. Tell PM to re-splice it, or add the line by hand.
+          </span>
+          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {unlisted.map(id => {
+              const it = items[id]
+              return (
+                <div key={id} style={{ color: 'var(--text)' }}>
+                  {id} — {it?.title || '(untitled)'}{' '}
+                  <span style={{ color: 'var(--muted)' }}>[{it?.type || '?'} · {it?.status || '?'}]</span>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
       {!loading && !error && groups.length === 0 && (
