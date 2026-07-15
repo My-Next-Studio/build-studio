@@ -40,6 +40,11 @@ const DEFAULTS = {
   //   Agents self-report which entries they applied; never-applied entries are
   //   auto-archived after 30 injections.
   learnings: { enabled: true, capture: 'failures', max_injected: 6, max_entries_per_domain: 25, auto_capture: true },
+  // bugfix workflow: a lean execution flow driven by a Bug backlog item (no PRD,
+  // no planning step, no review panel). auto_merge=true lands the fix
+  // automatically once code_review approves instead of waiting at the manual
+  // merge_to_main gate; default false keeps the merge a deliberate operator step.
+  bugfix: { auto_merge: false },
   dev_commands: [],
   deployment: {
     strategy: 'trunk',           // trunk | gitflow
@@ -130,6 +135,7 @@ function loadConfig(projectRoot) {
     agent_defaults: { ...DEFAULTS.agent_defaults, ...(raw.agent_defaults || {}) },
     deployment: { ...DEFAULTS.deployment, ...(raw.deployment || {}) },
     functions: { ...DEFAULTS.functions, ...(raw.functions || {}) },
+    bugfix: { ...DEFAULTS.bugfix, ...(raw.bugfix || {}) },
   };
 
   // Inferred default for `deployment.deployedOnPush` (PRD lifecycle status):

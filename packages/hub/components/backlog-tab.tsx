@@ -18,6 +18,7 @@ interface Item {
   type?: 'Feature' | 'Bug' | 'Task'
   status?:
     | 'Backlog' | 'Drafted' | 'Reviewed' | 'Implemented' | 'Done' | 'Blocked'  // current Feature lifecycle
+    | 'Fixing'                                                                 // Bug lifecycle (bugfix workflow in flight)
     | 'Ready' | 'In Progress' | 'In Review'                                    // legacy values
   release?: string | null
   created?: string
@@ -570,7 +571,9 @@ function TypeBadge({ type }: { type?: string }) {
 
 // Status options offered in the change-status popover. Excludes legacy values
 // (Ready / In Progress / In Review) — those still render correctly on existing
-// items but new picks should use the current lifecycle.
+// items but new picks should use the current lifecycle. Also excludes 'Fixing':
+// the bugfix workflow owns that transition (Backlog → Fixing → Done); picking it
+// by hand would strand the bug with no run attached.
 const STATUS_OPTIONS = ['Backlog', 'Drafted', 'Reviewed', 'Implemented', 'Done', 'Blocked']
 const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   // Feature lifecycle (PRD-004 follow-up)
@@ -580,6 +583,8 @@ const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   'Implemented': { color: 'var(--accent)',  bg: 'rgba(245,158,11,0.15)' },
   'Done':        { color: 'var(--green)',   bg: 'rgba(34,197,94,0.15)' },
   'Blocked':     { color: 'var(--red)',     bg: 'rgba(239,68,68,0.15)' },
+  // Bug lifecycle — set by the bugfix workflow, not the picker
+  'Fixing':      { color: 'var(--accent)',  bg: 'rgba(245,158,11,0.15)' },
   // Legacy — still accepted on existing items until they're touched
   'Ready':       { color: 'var(--yellow)',  bg: 'rgba(234,179,8,0.15)' },
   'In Progress': { color: 'var(--accent)',  bg: 'rgba(245,158,11,0.15)' },

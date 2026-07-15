@@ -77,7 +77,7 @@ interface OverseerState {
 
 interface Workflow {
   id: string
-  type: 'review' | 'execution' | 'kickoff' | 'onboarding'
+  type: 'review' | 'execution' | 'kickoff' | 'onboarding' | 'bugfix'
   input: string
   currentStep: string
   round: number
@@ -130,6 +130,16 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
     { key: 'companion_specs', name: 'Companion Specs' },
     { key: 'devops_init', name: 'DevOps Init' },
   ],
+  // Bugfix: lean execution subset driven by a single Bug backlog item (the bug
+  // file is the spec — no PRD, no planning). Order here is display-name fallback
+  // only; the canonical order comes from projectWorkflowSteps.bugfix.
+  bugfix: [
+    { key: 'task_execution', name: 'Fix Task' },
+    { key: 'qa_validation', name: 'QA Validation' },
+    { key: 'code_review', name: 'Code Review' },
+    { key: 'merge_to_main', name: 'Merge to Main' },
+    { key: 'capture_learnings', name: 'Capture Learnings' },
+  ],
   // PRD-001 v1: onboarding workflow for existing projects.
   onboarding: [
     { key: 'discovery',          name: 'Discovery' },
@@ -157,6 +167,7 @@ const WORKFLOW_TYPE_TO_FUNCTION: Record<string, string> = {
   onboarding: 'project',
   review: 'development',
   execution: 'development',
+  bugfix: 'development',
 }
 
 export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: autoAdvanceProp, onAutoAdvanceChange }: WorkflowViewProps = {}) {
@@ -428,7 +439,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     setStartError(null)
     const body: Record<string, string> = { type: wfType }
     if (wfType !== 'onboarding') body.input = input.trim()
-    if (wfType === 'execution') {
+    if (wfType === 'execution' || wfType === 'bugfix') {
       body.developerCli = developerCli
       body.reviewerCli = effectiveReviewerCli
     }
@@ -520,7 +531,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
       : (WF_STEPS[wfType] || [])  // fallback: no preset data yet, use catalog
   const steps = (() => {
     const s = [...baseSteps]
-    if (wfType === 'execution' && wf) {
+    if ((wfType === 'execution' || wfType === 'bugfix') && wf) {
       // code_review is post-merge_for_review and not in any preset's array.
       // Inject it just before qa_validation if it exists in wf.steps.
       if (wf.steps?.code_review && !s.find(x => x.key === 'code_review')) {
@@ -610,7 +621,9 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
               value={input}
               onChange={e => setInput(e.target.value)}
               disabled={!!wf}
-              placeholder="PRD name, or user story / task ID (e.g. EX-001)..."
+              placeholder={wfType === 'bugfix'
+                ? 'Bug ID (e.g. EX-029)...'
+                : 'PRD name, or user story / task ID (e.g. EX-001)...'}
               style={{
                 width: '100%', padding: '6px 10px', borderRadius: 4,
                 background: 'var(--surface2)', border: '1px solid var(--border)',
@@ -627,6 +640,14 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                 </span>.
               </div>
             )}
+            {wfType === 'bugfix' && (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+                Enter a backlog item of type{' '}
+                <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Bug</span>{' '}
+                with status Backlog or Blocked. The bug file is the spec — no PRD
+                needed. Starts on a fix/&lt;id&gt; branch; the bug flips to Fixing.
+              </div>
+            )}
           </div>
         )}
         {wfType === 'onboarding' && (
@@ -636,7 +657,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
         )}
 
         {/* Active workflow's CLI assignment — readonly indicator */}
-        {wf && wf.type === 'execution' && wf.developerCli && (
+        {wf && (wf.type === 'execution' || wf.type === 'bugfix') && wf.developerCli && (
           <div style={{
             marginBottom: 16, padding: '6px 10px', borderRadius: 4,
             background: 'var(--surface2)', border: '1px solid var(--border)',
@@ -660,8 +681,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
           </div>
         )}
 
-        {/* CLI selectors — only meaningful for execution workflows, only before start */}
-        {!wf && wfType === 'execution' && (
+        {/* CLI selectors — only meaningful for execution/bugfix workflows, only before start */}
+        {!wf && (wfType === 'execution' || wfType === 'bugfix') && (
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
               Developer CLI
@@ -1044,7 +1065,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
           </div>
         )}
         {/* Overseer card — execution workflows only (review workflows don't have mechanical fix issues) */}
-        {wf && wf.type === 'execution' && wf.currentStep !== 'completed' && wf.overseer && wf.overseer.status !== 'idle' && (
+        {wf && (wf.type === 'execution' || wf.type === 'bugfix') && wf.currentStep !== 'completed' && wf.overseer && wf.overseer.status !== 'idle' && (
           <OverseerCard overseer={wf.overseer} onDismiss={dismissOverseerEscalation} onNudgeAgent={nudgeAgent} />
         )}
         {viewingLog ? (
@@ -1145,6 +1166,7 @@ function StepDetail({
 
   if (activeKey === 'completed') {
     const msg = wf.type === 'execution' ? 'The review branch is ready to merge to main.'
+      : wf.type === 'bugfix' ? 'Bug fixed and merged — the fix branch is cleaned up.'
       : wf.type === 'kickoff' ? 'Kickoff complete — project is ready for PRD iterations.'
       : 'PRD has been approved.'
     return (

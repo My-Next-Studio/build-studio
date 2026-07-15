@@ -4,7 +4,7 @@ export interface FunctionDefinition {
   /** Which views this function provides */
   views: ('overview' | 'workflow')[]
   /** Which workflow types are available in this function */
-  workflowTypes: ('kickoff' | 'onboarding' | 'review' | 'execution')[]
+  workflowTypes: ('kickoff' | 'onboarding' | 'review' | 'execution' | 'bugfix')[]
   /** Tabs available in overview view (default: ['spec', 'status', 'agents']) */
   tabs?: string[]
   enabledByDefault: boolean
@@ -28,7 +28,7 @@ export const BUILTIN_FUNCTIONS: FunctionDefinition[] = [
     id: 'development',
     label: 'Development',
     views: ['workflow'],
-    workflowTypes: ['review', 'execution'],
+    workflowTypes: ['review', 'execution', 'bugfix'],
     enabledByDefault: true,
   },
   {
@@ -46,6 +46,7 @@ export const WORKFLOW_TYPE_TO_FUNCTION: Record<string, string> = {
   kickoff: 'project',
   review: 'development',
   execution: 'development',
+  bugfix: 'development',
 }
 
 /** Short labels for notification badges */

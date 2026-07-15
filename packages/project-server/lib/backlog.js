@@ -26,6 +26,10 @@ const VALID_TYPES = ['Feature', 'Bug', 'Task'];
 // dedicated lifecycles for those come later.
 const VALID_STATUSES = [
   'Backlog', 'Drafted', 'Reviewed', 'Implemented', 'Done', 'Blocked',
+  // Bug lifecycle: a bugfix workflow flips Backlog → Fixing at start, then
+  // Fixing → Done on merge (or back to Backlog on cancel). Bugs skip the
+  // PRD-shaped Drafted/Reviewed states unless routed through a PRD.
+  'Fixing',
   // Legacy — accepted on read/write so existing items aren't rejected:
   'Ready', 'In Progress', 'In Review',
 ];

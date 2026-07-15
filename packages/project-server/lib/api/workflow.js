@@ -4,7 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { stripAnsi } = require('../tmux');
-const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId } = require('../backlog');
+const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
 
 // Common instruction fragments injected into all agent prompts.
 // Placeholders {{CONTEXT_BUDGET}} and {{SOFT_THRESHOLD}} are replaced
@@ -112,6 +112,87 @@ function oppositeCli(cli) {
   return cli === 'codex' ? 'claude' : 'codex';
 }
 
+// ─── bugfix workflow (pure helpers — unit-testable, no I/O) ───────────────────
+// A bugfix run is a lean execution flow driven by a single Bug backlog item:
+// no PRD, no planning step, no review panel. The bug file IS the spec.
+
+// Default step sequence when config.workflow.bugfix isn't set.
+const DEFAULT_BUGFIX_STEPS = ['task_execution', 'qa_validation', 'code_review', 'merge_to_main', 'capture_learnings'];
+
+// Appended verbatim to the synthetic fix task's description. `id` is the bug id.
+function bugfixDisciplineBlock(id) {
+  return `## BUG-FIX DISCIPLINE — REPRO TEST FIRST
+1. Write a failing regression test that reproduces this bug BEFORE touching production code. Run it and paste the failing output in your feedback.
+2. Fix the bug. Re-run: paste the passing output.
+3. The regression test is part of the fix — it must be committed with it and named so its connection to ${id} is obvious.
+4. Keep the diff minimal: fix the bug, do not refactor around it.
+Report with the FIX-REPORT format; include the regression test path.`;
+}
+
+// The active step sequence for a bugfix run (config override or the default).
+function bugfixSequence(config) {
+  const configured = config && config.workflow && config.workflow.bugfix;
+  return (Array.isArray(configured) && configured.length) ? configured.slice() : DEFAULT_BUGFIX_STEPS.slice();
+}
+
+// The active step sequence for a workflow — bugfix uses its own list, everything
+// else uses the resolved execution list. Used by the step→step transitions so a
+// bugfix run advances by ITS dict order, not the (longer) execution order.
+function stepSequence(wf, config) {
+  if (wf && wf.type === 'bugfix') return bugfixSequence(config);
+  return (config && config.workflow && config.workflow.execution) || [];
+}
+
+// The step that follows `current` in a workflow's active sequence, or null at the end.
+function nextStepInSequence(wf, config, current) {
+  const seq = stepSequence(wf, config);
+  const idx = seq.indexOf(current);
+  return (idx >= 0 && idx < seq.length - 1) ? seq[idx + 1] : null;
+}
+
+// Validate a bugfix /workflow/start request against the resolved backlog item.
+// Returns { status, error } on rejection, or null when the item is startable.
+// NO PRD requirement — the prd-field gates that review/execution apply are
+// deliberately skipped; a Bug's own file is its spec.
+function validateBugfixStart(item, id) {
+  if (!item) return { status: 404, error: `Backlog item ${id} not found.` };
+  if (item.type !== 'Bug') {
+    return { status: 400, error: `bugfix runs accept Bugs only; ${id} is a ${item.type || 'item with no type'}. Features and Tasks go through the PRD flow.` };
+  }
+  if (item.status === 'Fixing') return { status: 409, error: `a fix run for ${id} already happened or is in flight` };
+  if (item.status === 'Done') return { status: 409, error: `${id} is already fixed (status Done).` };
+  if (item.status !== 'Backlog' && item.status !== 'Blocked') {
+    return { status: 409, error: `${id} is "${item.status || 'unset'}", but a bugfix run requires status Backlog or Blocked. Move the item there first.` };
+  }
+  return null;
+}
+
+// Resolve the builder role for a bugfix: honor the bug's frontmatter `role:`
+// (matched by role name or skill, case-insensitive) when present and resolvable;
+// otherwise fall back to the first execution role (the solo builder).
+function resolveBuilderRole(config, item) {
+  const { findRole } = require('../config');
+  if (item && item.role) {
+    const matched = findRole(config, String(item.role));
+    if (matched) return matched;
+  }
+  return (config.roles && config.roles.execution && config.roles.execution[0]) || null;
+}
+
+// Build the synthetic single-task plan entry for a bugfix. The bug body is the
+// spec; the discipline block enforces repro-test-first. `role` is a resolved
+// role object; task.role holds its canonical name so launchTaskImpl re-resolves it.
+function buildBugfixTask(id, item, role) {
+  const title = String(item.title || id).replace(/\s+/g, ' ').trim();
+  const body = String(item.body || '').trim();
+  const description = `${body ? body + '\n\n' : ''}${bugfixDisciplineBlock(id)}`;
+  return {
+    role: role ? role.role : undefined,
+    name: `Fix ${id} — ${title}`,
+    description,
+  };
+}
+
 function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   const router = express.Router();
   const { docsPath, projectRoot, worktreesPath, logsPath } = config;
@@ -138,6 +219,33 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
     } catch (e) {
       console.warn(`[backlog] advanceLinkedFeatures(${prdRelPath} → ${targetStatus}) failed:`, e.message);
     }
+  }
+
+  /**
+   * Set a backlog item's status (bugfix lifecycle: Backlog/Blocked → Fixing →
+   * Done, or Fixing → Backlog on cancel) and re-render the BACKLOG section of
+   * project-state.md so its marker line reflects the new status. `extraFields`
+   * merges additional frontmatter (e.g. `{ fixed_in: <sha> }` at merge).
+   *
+   * Uses the validated backlog `writeItem` — all three bugfix statuses (Fixing,
+   * Done, Backlog) are in VALID_STATUSES. Returns true when the item existed.
+   */
+  function setBugItemStatus(id, status, extraFields) {
+    const relDocs = config.docs_path || './docs';
+    const item = readItem(projectRoot, relDocs, id);
+    if (!item) return false;
+    const updated = { ...item, status, ...(extraFields || {}) };
+    writeItem(projectRoot, relDocs, updated);
+    try {
+      const statePath = path.join(projectRoot, relDocs, 'project-state.md');
+      if (fs.existsSync(statePath)) {
+        const groups = parseBacklogSection(fs.readFileSync(statePath, 'utf8'));
+        if (groups.length > 0) writeBacklogSection(projectRoot, relDocs, groups);
+      }
+    } catch (e) {
+      console.warn(`[bugfix] project-state re-render for ${id}→${status} failed:`, e.message);
+    }
+    return true;
   }
 
   /**
@@ -1100,6 +1208,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     '.build-studio/workflow-state.json',
     '.build-studio/run-state.json',
     '.build-studio/snapshots/',
+    '.build-studio/support/',
     '.build-studio/*.bak*',
   ];
   function ensureLauncherArtifactsIgnored(agentCwd) {
@@ -2180,6 +2289,9 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
       review: config.workflow.review || [],
       execution: config.workflow.execution || [],
       onboarding: config.workflow.onboarding || [],
+      // Resolved server-side (config.workflow.bugfix override or DEFAULT_BUGFIX_STEPS)
+      // so the hub can render the bugfix timeline the same way it does the others.
+      bugfix: bugfixSequence(config),
     } : null;
     // PRD-001 pathology signals — surfaces "is this monolithic run healthy?" signals.
     const pathologySignals = computePathologySignals(wf);
@@ -2359,7 +2471,7 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
   router.post('/workflow/start', (req, res) => {
     const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli } = req.body;
     if (!type) return res.status(400).json({ error: 'type required' });
-    if (!['review', 'execution', 'kickoff', 'onboarding'].includes(type)) return res.status(400).json({ error: 'type must be review, execution, kickoff, or onboarding' });
+    if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return res.status(400).json({ error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
     if (startDeveloperCli && !['claude', 'codex'].includes(startDeveloperCli)) {
       return res.status(400).json({ error: "developerCli must be 'claude' or 'codex'" });
     }
@@ -2382,6 +2494,7 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
     let prdPath = null;
     let itemId = null; // set when `input` named a backlog user story / task
     let steps, currentStep;
+    let taskPlan = null; // bugfix synthesizes its single-task plan up front (no planning step)
 
     if (type === 'kickoff') {
       steps = {
@@ -2416,6 +2529,47 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
         owner_signoff:       { status: 'pending', agents: [] },
       };
       currentStep = 'discovery';
+    } else if (type === 'bugfix') {
+      // Bugfix: a lean execution flow driven by a single Bug backlog item. No
+      // PRD, no planning, no review panel — the bug file is the spec. `input` is
+      // the bug id (e.g. LS-029). Validate the item, synthesize a one-task plan,
+      // and build the bugfix step dict. The Fixing status flip + fix/<id> branch
+      // happen below (after the clean-tree guard, so they land on the run branch).
+      const relDocsPath = config.docs_path || './docs';
+      const bugId = input.trim().toUpperCase().replace(/\s+/g, '-');
+      if (!isValidId(bugId)) {
+        return res.status(400).json({ error: `bugfix input must be a backlog item id (e.g. LS-029), got "${input}".` });
+      }
+      let bug = null;
+      try {
+        bug = readItem(projectRoot, relDocsPath, bugId);
+      } catch (e) {
+        return res.status(400).json({ error: `Could not read backlog item ${bugId}: ${e.message}` });
+      }
+      const invalid = validateBugfixStart(bug, bugId);
+      if (invalid) return res.status(invalid.status).json({ error: invalid.error });
+
+      const builderRole = resolveBuilderRole(config, bug);
+      if (!builderRole) {
+        return res.status(400).json({ error: `No execution role configured to build the fix for ${bugId}. Add at least one role under roles.execution in .build-studio/config.yaml.` });
+      }
+
+      itemId = bugId;
+      // wf.prdPath points downstream prompts at the bug file (derived the same way
+      // readItem locates it) — "PRD path: X" then hands agents the bug as the spec.
+      const docsRel = relDocsPath.replace(/^\.\//, '');
+      prdPath = path.posix.join(docsRel, 'backlog', `${bugId}.md`);
+      taskPlan = { tasks: [buildBugfixTask(bugId, bug, builderRole)] };
+
+      const bugfixSteps = bugfixSequence(config);
+      const BUGFIX_MANUAL_GATES = new Set(['merge_to_main']);
+      const BUGFIX_PER_STEP_EXTRAS = { task_execution: { completedTasks: [] } };
+      steps = {};
+      for (const stepKey of bugfixSteps) {
+        const base = BUGFIX_MANUAL_GATES.has(stepKey) ? { status: 'pending' } : { status: 'pending', agents: [] };
+        steps[stepKey] = { ...base, ...(BUGFIX_PER_STEP_EXTRAS[stepKey] || {}) };
+      }
+      currentStep = bugfixSteps[0] || 'task_execution';
     } else {
       // Resolve the PRD path. `input` is either a PRD name/description OR a
       // backlog user story / task ID (e.g. EX-001). When it names a backlog
@@ -2528,7 +2682,7 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
     // a run from stacking on a previous run's leftover branch / a dirty tree.
     let runBranch = null;
     let runDefaultBranch = 'main';
-    if (type === 'review' || type === 'execution') {
+    if (type === 'review' || type === 'execution' || type === 'bugfix') {
       const { execFileSync } = require('child_process');
       const g = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
       try { runDefaultBranch = (g(['rev-parse', '--abbrev-ref', 'origin/HEAD']) || '').replace(/^origin\//, '') || 'main'; } catch {}
@@ -2537,24 +2691,25 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
       if (curBranch !== runDefaultBranch) {
         return res.status(409).json({ error: `Cannot start a ${type} run: the working tree is on "${curBranch || '(detached HEAD)'}", not ${runDefaultBranch}. Finish, merge, or abort that branch first so the run starts from a clean ${runDefaultBranch}.`, currentBranch: curBranch });
       }
-      // Dirty-tree check applies to EXECUTION only: it does `checkout -b exec/<id>`,
-      // which carries uncommitted changes onto the run branch and would block the
-      // final merge_to_main (which refuses a dirty tree). Review creates no branch and
-      // commits to the default branch directly, so working with uncommitted drafts
-      // present is fine (and matches how the owner works — parallel PRD drafting).
-      if (type === 'execution') {
+      // Dirty-tree check applies to branch-creating runs (execution + bugfix):
+      // both do `checkout -b <run>/<id>`, which carries uncommitted changes onto
+      // the run branch and would block the final merge_to_main (which refuses a
+      // dirty tree). Review creates no branch and commits to the default branch
+      // directly, so working with uncommitted drafts present is fine (and matches
+      // how the owner works — parallel PRD drafting).
+      if (type === 'execution' || type === 'bugfix') {
         let dirty = '';
         try { dirty = g(['status', '--porcelain']); } catch {}
         if (dirty) {
-          return res.status(409).json({ error: `Cannot start an execution run: ${runDefaultBranch} has uncommitted changes — they'd be carried onto the run branch and block the final merge. Commit, stash, or discard them first.` });
+          return res.status(409).json({ error: `Cannot start a ${type} run: ${runDefaultBranch} has uncommitted changes — they'd be carried onto the run branch and block the final merge. Commit, stash, or discard them first.` });
         }
       }
-      // Branch CREATION is scoped to execution for now (the run whose code you
-      // install + device-test). The review WF only refines docs and has multiple
+      // Branch CREATION is scoped to execution + bugfix (the runs whose code lands
+      // on the default branch). The review WF only refines docs and has multiple
       // completion points, so its branch+merge lifecycle is a separate follow-up;
       // for now it commits to the (guardrail-clean) default branch directly.
-      if (type === 'execution') {
-        runBranch = `exec/${input.replace(/\s+/g, '-')}`;
+      if (type === 'execution' || type === 'bugfix') {
+        runBranch = type === 'bugfix' ? `fix/${itemId.toLowerCase()}` : `exec/${input.replace(/\s+/g, '-')}`;
         try { g(['rev-parse', '--verify', runBranch]); return res.status(409).json({ error: `Branch ${runBranch} already exists from a previous run. Merge or delete it first.` }); } catch (_) { /* good — does not exist */ }
         try {
           g(['checkout', '-b', runBranch, runDefaultBranch]);
@@ -2564,16 +2719,28 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
       }
     }
 
+    // Bugfix flips the bug's status to Fixing AFTER the run branch is checked out,
+    // so the status write lands on fix/<id> (not the default branch) and gets
+    // captured by the pre-merge docs auto-commit. Doing it before the clean-tree
+    // guard above would make the tree dirty and abort the run.
+    if (type === 'bugfix' && itemId) {
+      try { setBugItemStatus(itemId, 'Fixing'); }
+      catch (e) { console.warn(`[bugfix] failed to flip ${itemId} → Fixing:`, e.message); }
+    }
+
     const wf = {
       id: `${type}-${timestamp}`,
       type, input, prdPath, itemId, currentStep, steps,
+      // Bugfix synthesizes its single-task plan at start (no planning step). Left
+      // undefined for other types, which build taskPlan during their planning step.
+      ...(taskPlan ? { taskPlan } : {}),
       round: 1, feedback: [],
       sessionName: `wf-${timestamp}`,
       // The run's working branch (checked out in the main dir). Everything commits
       // here; merge_to_main / review-end merges it to `defaultBranch` then deletes it.
       branch: runBranch,
       defaultBranch: runDefaultBranch,
-      reviewBranch: type === 'execution' ? runBranch : null,
+      reviewBranch: (type === 'execution' || type === 'bugfix') ? runBranch : null,
       returnTo: null,
       reviewMode: startReviewMode || config.review_mode || 'parallel',
       autoIterateRemaining: startAutoIterate || 0,
@@ -2585,6 +2752,11 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+
+    // Bugfix enters at task_execution with its plan already synthesized — mirror
+    // the taskExecution shape the monolithic execution path builds after planning
+    // so advancing the pending task_execution step launches the fix task normally.
+    if (type === 'bugfix' && wf.taskPlan) initTaskExecution(wf);
 
     state.saveWorkflow(wf);
     res.json({ workflow: wf });
@@ -2687,6 +2859,17 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
     const wf = state.loadWorkflow();
     if (!wf) return res.status(404).json({ error: 'no active workflow' });
     const deleteWorktrees = req.body?.deleteWorktrees === true;
+    // Cancelling a bugfix run releases the bug back to Backlog so it can be
+    // re-run later. Do this BEFORE stopWorkflow: if the Fixing flip was still
+    // uncommitted, reverting it makes the tree clean again so stopWorkflow can
+    // return the checkout to the default branch. Only touch an in-flight Fixing
+    // bug — never a bug that already reached Done via a completed merge.
+    if (wf.type === 'bugfix' && wf.itemId) {
+      try {
+        const bug = readItem(projectRoot, config.docs_path || './docs', wf.itemId);
+        if (bug && bug.status === 'Fixing') setBugItemStatus(wf.itemId, 'Backlog');
+      } catch (e) { console.error('[bugfix] cancel status revert failed:', e.message); }
+    }
     stopWorkflow(wf);
     if (deleteWorktrees) {
       try { cleanupBranches(wf); } catch (e) { console.error('[workflow] cancel cleanup error:', e.message); }
@@ -3119,8 +3302,11 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
         return handleReviewAdvance(wf, effectiveAction, notes, res);
       }
 
-      // --- Execution workflow transitions ---
-      if (wf.type === 'execution') {
+      // --- Execution + bugfix workflow transitions ---
+      // Bugfix reuses the execution engine (task_execution → qa_validation →
+      // code_review → merge_to_main → capture_learnings); the handler branches on
+      // wf.type where the bugfix step sequence diverges from execution's.
+      if (wf.type === 'execution' || wf.type === 'bugfix') {
         return handleExecutionAdvance(wf, effectiveAction, notes, res, req.body);
       }
 
@@ -3360,12 +3546,27 @@ Use the /${role.skill} skill. Commit your changes when done. ${COMMIT_ON_CURRENT
     // Find first pending task
     const idx = tasks.findIndex((_, i) => tex.taskStates[String(i)]?.status === 'pending');
     if (idx === -1) {
+      wf.steps.task_execution.status = 'completed';
+      const fakeRes = { json: () => {}, status: () => ({ json: () => {} }) };
+      // Bugfix has no merge_for_review step and runs the single fix task directly
+      // on wf.branch (no worktree dev branches to integrate). Advance to the next
+      // step in ITS sequence (qa_validation) and launch it, rather than the
+      // execution-only merge_for_review path below.
+      if (wf.type === 'bugfix') {
+        const next = nextStepInSequence(wf, config, 'task_execution') || 'qa_validation';
+        console.log(`[workflow] Bugfix task complete. Advancing to ${next}.`);
+        wf.currentStep = next;
+        if (!wf.steps[next]) wf.steps[next] = { status: 'pending', agents: [] };
+        state.saveWorkflow(wf);
+        try { handleExecutionAdvance(wf, 'launch', null, fakeRes, {}); } catch (e) {
+          console.error(`[workflow] bugfix advance to ${next} failed:`, e.message);
+        }
+        return;
+      }
       // All tasks done — merge any worktree branches, then advance to code_review
       console.log('[workflow] All tasks complete. Merging branches for final review.');
-      wf.steps.task_execution.status = 'completed';
       wf.currentStep = 'merge_for_review';
       state.saveWorkflow(wf);
-      const fakeRes = { json: () => {}, status: () => ({ json: () => {} }) };
       try { mergeDevBranches(wf, fakeRes); } catch (e) {
         console.error('[workflow] merge after task execution failed:', e.message);
       }
@@ -5748,6 +5949,23 @@ ${EFFICIENCY_INSTRUCTIONS}`,
 
     if (wf.currentStep === 'code_review' && action === 'approve') {
       wf.steps.code_review.status = 'completed';
+      // Bugfix runs code_review AFTER qa_validation, as the last gate before the
+      // merge — advance FORWARD in its own sequence (→ merge_to_main), never back
+      // into the execution review→qa fix loop below. When config.bugfix.auto_merge
+      // is true, proceed straight into the merge via the same code path the manual
+      // merge action runs (on any gate failure it surfaces the error identically);
+      // default false stops at the manual merge_to_main gate, exactly like execution.
+      if (wf.type === 'bugfix') {
+        const next = nextStepInSequence(wf, config, 'code_review') || 'merge_to_main';
+        wf.currentStep = next;
+        if (!wf.steps[next]) wf.steps[next] = { status: 'pending' };
+        if (next === 'merge_to_main' && config.bugfix && config.bugfix.auto_merge === true) {
+          state.saveWorkflow(wf);
+          return handleExecutionAdvance(wf, action, notes, res, body);
+        }
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf, needsAdvance: true });
+      }
       // Route to the coverage_matrix critic when the project's flow includes it
       // (web-app / api-only / mobile-app); otherwise fall straight through to QA.
       const crExecSteps = (config.workflow && config.workflow.execution) || [];
@@ -6128,15 +6346,11 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
       }
 
       wf.steps.qa_validation.status = 'completed';
-      // Compute the next step from the resolved workflow.execution list (same
-      // pattern as ac_verification/security_audit below) — the solo preset goes
-      // straight from QA to the merge gate; classic presets continue to
-      // ac_verification, which is also the fallback for legacy configs.
-      const qvExecSteps = (config.workflow && config.workflow.execution) || [];
-      const qvIdx = qvExecSteps.indexOf('qa_validation');
-      const qvNext = (qvIdx >= 0 && qvIdx < qvExecSteps.length - 1)
-        ? qvExecSteps[qvIdx + 1]
-        : 'ac_verification';
+      // Compute the next step from the workflow's ACTIVE sequence (same pattern as
+      // ac_verification/security_audit below) — the solo preset goes straight from
+      // QA to the merge gate; classic presets continue to ac_verification (also the
+      // fallback for legacy configs); a bugfix run continues to code_review.
+      const qvNext = nextStepInSequence(wf, config, 'qa_validation') || 'ac_verification';
       wf.steps[qvNext] = { ...(wf.steps[qvNext] || {}), status: 'pending', agents: [] }; // reset for re-run on round > 1
       wf.currentStep = qvNext;
       state.saveWorkflow(wf);
@@ -6516,6 +6730,29 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
         const { execFileSync } = require('child_process');
         const run = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
         const def = wf.defaultBranch || 'main';
+        // Bugfix pre-merge gates. Execution runs the LLM-URL + hygiene scans at its
+        // merge_for_review step (mergeDevBranches); a bugfix run has no such step, so
+        // run them here — against the fix branch's diff vs the default branch — before
+        // anything mutates. The bug-fix discipline mandates a new regression test on
+        // every run, exactly the file class these scans protect (a test URL hitting a
+        // real LLM API already billed tokens on life-graph). Failure blocks the merge
+        // with the scan's error surfaced, same as execution — operator fixes or waives
+        // (@llm-url-fixture / config.hygiene.allow) and retries. Guarded to bugfix so
+        // execution's path is byte-identical.
+        if (wf.type === 'bugfix') {
+          const llmScan = scanTestFilesForLlmViolations(projectRoot, def);
+          if (llmScan.violations.length > 0) {
+            wf.steps.merge_to_main = { status: 'error', error: `${llmScan.violations.length} test file(s) on ${wf.branch} would call real LLM APIs. Fix them (or, for a URL asserted as REJECTED, tag the file @llm-url-fixture), commit, and retry the merge.\n\n${llmScan.violations.join('\n')}`, violations: llmScan.violations };
+            state.saveWorkflow(wf);
+            return res.status(400).json({ workflow: wf, error: `bugfix merge blocked: ${llmScan.violations.length} LLM test violation(s)`, violations: llmScan.violations });
+          }
+          const hygieneScan = scanSourceForTestScaffolding(projectRoot, def, config.hygiene || {});
+          if (hygieneScan.violations.length > 0) {
+            wf.steps.merge_to_main = { status: 'error', error: `${hygieneScan.violations.length} production source file(s) on ${wf.branch} contain test scaffolding that must not ship (env failure hooks / test seams). Remove it (or exempt via config.hygiene.allow), commit, and retry the merge.\n\n${hygieneScan.violations.join('\n')}`, violations: hygieneScan.violations, advisories: hygieneScan.advisories || [] };
+            state.saveWorkflow(wf);
+            return res.status(400).json({ workflow: wf, error: `bugfix merge blocked: ${hygieneScan.violations.length} hygiene violation(s)`, violations: hygieneScan.violations, advisories: hygieneScan.advisories || [] });
+          }
+        }
         // Apply the backlog status transition BEFORE the merge so these doc edits are
         // captured by the pre-merge docs auto-commit below and land inside the merge
         // commit — instead of being written to main post-merge and left uncommitted.
@@ -6597,6 +6834,17 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
         }
         wf.steps.merge_to_main = { status: 'completed' };
         // markPrdDone + advanceLinkedFeatures already ran pre-merge → included in the merge commit.
+        // Bugfix: the fixed Bug is still 'Fixing' (a bug has no PRD link, so the
+        // markPrdDone/advanceLinkedFeatures item-lifecycle above are no-ops for it).
+        // Flip it Fixing → Done and stamp the merge commit sha into `fixed_in`, then
+        // commit that doc change on the default branch so the tree stays clean.
+        if (wf.type === 'bugfix' && wf.itemId) {
+          try {
+            const mergeSha = run(['rev-parse', 'HEAD']);
+            setBugItemStatus(wf.itemId, 'Done', { fixed_in: mergeSha });
+            commitWorkflowDocs(`docs(${wf.itemId}): mark Done (fixed_in ${mergeSha.slice(0, 7)})`);
+          } catch (e) { console.error(`[bugfix] finalize ${wf.itemId} → Done failed:`, e.message); }
+        }
         // cleanupBranches removes fix worktrees + deletes wf.reviewBranch (= wf.branch) locally.
         try { cleanupBranches(wf); } catch (e) { console.error('[workflow] cleanupBranches:', e.message); }
         // Delete the remote copy too, if the run branch was ever pushed.
@@ -7411,4 +7659,15 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
   return router;
 }
 
-module.exports = { createWorkflowRouter };
+module.exports = {
+  createWorkflowRouter,
+  // Exported for unit tests (pure bugfix helpers — no I/O).
+  DEFAULT_BUGFIX_STEPS,
+  bugfixDisciplineBlock,
+  bugfixSequence,
+  stepSequence,
+  nextStepInSequence,
+  validateBugfixStart,
+  resolveBuilderRole,
+  buildBugfixTask,
+};
