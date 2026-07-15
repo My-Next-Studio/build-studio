@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectApi } from '@/lib/use-project-api'
+import { roleConfig, avatarSrc } from '@/lib/roles'
 
 // ─── Types (mirror the server's summarizeReport shape) ──────────────────────
 type ReportStatus = 'new' | 'triaging' | 'proposed' | 'filed' | 'rejected' | 'dismissed'
@@ -165,23 +166,40 @@ export function SupportTab() {
   }, [api, updateReport])
 
   // ─── Render ───────────────────────────────────────────────────────────────
+  const supportCfg = roleConfig('Support')
+  const supportAvatar = avatarSrc('Support', 88)
   return (
     <div style={{ padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 16, fontFamily: 'var(--mono)', overflow: 'auto' }}>
       {/* Header */}
       <div>
         <h1 style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, letterSpacing: '0.02em' }}>Support</h1>
-        <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5, margin: 0, maxWidth: 700 }}>
-          Report an issue in your own words. A propose-only triage agent classifies it; approved
-          outcomes are filed to the backlog. Bugs are filed automatically — features and tasks wait for
-          your decision.
-        </p>
       </div>
 
-      {/* Composer */}
+      {/* Composer — fronted by the Support agent (same card pattern as CI/CD's DevOps) */}
       <div style={{
         background: 'var(--surface)', border: '1px solid var(--border)',
         borderRadius: 'var(--radius)', padding: 16, display: 'flex', flexDirection: 'column', gap: 10,
       }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          {supportAvatar
+            ? <img src={supportAvatar} alt="Support" style={{ width: 88, height: 88, flexShrink: 0, borderRadius: 8 }} />
+            : <span style={{ fontSize: 22, lineHeight: '28px', flexShrink: 0 }}>{supportCfg.avatar}</span>}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>Support</span>
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 8, fontWeight: 700,
+                textTransform: 'uppercase', letterSpacing: '0.06em',
+                color: 'var(--muted)', opacity: 0.8,
+              }}>triage</span>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5, maxWidth: 700 }}>
+              Report an issue in your own words. A propose-only triage agent classifies it; approved
+              outcomes are filed to the backlog. Bugs are filed automatically — features and tasks wait
+              for your decision.
+            </div>
+          </div>
+        </div>
         <SectionHeader>New report</SectionHeader>
         <textarea
           value={text}
