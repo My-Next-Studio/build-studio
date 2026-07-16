@@ -41,6 +41,10 @@ export function AgentTerminal({ agentWindow }: { agentWindow: string }) {
           selectionBackground: '#2a2e3a',
         },
         cursorBlink: true,
+        // History scrolling is tmux's (the server enables mouse mode on the
+        // view session, so the wheel drives tmux copy-mode); this buffer only
+        // covers pre-attach output. Hold Shift to select text locally.
+        scrollback: 5000,
       })
 
       const fitAddon = new FitAddon()
@@ -110,7 +114,7 @@ export function AgentTerminal({ agentWindow }: { agentWindow: string }) {
         }} />
         <span style={{ color: 'var(--muted)' }}>
           {errorMsg ? errorMsg
-            : status === 'connected' ? 'live — keystrokes go to the agent'
+            : status === 'connected' ? 'live — keystrokes go to the agent · wheel scrolls history · shift+drag selects'
             : status === 'connecting' ? 'attaching…'
             : 'disconnected'}
         </span>

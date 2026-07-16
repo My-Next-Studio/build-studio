@@ -282,6 +282,12 @@ function startServer(projectRoot, opts = {}) {
       agentPty = pty.spawn('tmux', [
         'new-session', '-t', target.sessionName, '-s', viewSession, ';',
         'set-option', 'destroy-unattached', 'on', ';',
+        // Mouse mode on the VIEW session only (grouped sessions keep their own
+        // options, so the agent's session is untouched): the hub viewer's wheel
+        // enters tmux copy-mode and scrolls real pane history — without this,
+        // scrolling is impossible in the hub (tmux runs the alternate screen,
+        // so xterm.js has no scrollback of its own to offer).
+        'set-option', 'mouse', 'on', ';',
         'select-window', '-t', `${viewSession}:=${target.window}`,
       ], { name: 'xterm-256color', cols: 220, rows: 50, cwd: config.projectRoot, env });
     } catch (e) {
