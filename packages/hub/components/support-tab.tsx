@@ -42,6 +42,23 @@ export function SupportTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // "Hide done" — terminal reports (filed/rejected/dismissed) need no further
+  // support action; hide them so the list is the working queue. Sticky across
+  // sessions, mirroring the Backlog tab's chip.
+  const [hideDone, setHideDoneInternal] = useState<boolean>(false)
+  useEffect(() => {
+    if (window.localStorage.getItem('build-studio:support:hideDone') === 'true') {
+      setHideDoneInternal(true)
+    }
+  }, [])
+  const setHideDone = (value: boolean) => {
+    setHideDoneInternal(value)
+    try { window.localStorage.setItem('build-studio:support:hideDone', String(value)) } catch { /* private mode */ }
+  }
+  const DONE_STATUSES: ReportStatus[] = ['filed', 'rejected', 'dismissed']
+  const visibleReports = hideDone ? reports.filter(r => !DONE_STATUSES.includes(r.status)) : reports
+  const hiddenCount = reports.length - visibleReports.length
+
   // Composer state
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -271,14 +288,33 @@ export function SupportTab() {
       )}
 
       {/* Reports list */}
-      <SectionHeader>Reports</SectionHeader>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <SectionHeader>Reports</SectionHeader>
+        <span style={{ flex: 1 }} />
+        <button
+          onClick={() => setHideDone(!hideDone)}
+          style={{
+            fontSize: 11, color: hideDone ? 'var(--accent)' : 'var(--text-dim)',
+            padding: '4px 10px', borderRadius: 4,
+            background: hideDone ? 'var(--accent-dim)' : 'var(--surface2)',
+            border: `1px solid ${hideDone ? 'var(--accent)' : 'var(--border)'}`,
+            cursor: 'pointer', fontFamily: 'var(--mono)',
+          }}>
+          Hide done{hideDone && hiddenCount > 0 ? ` · ${hiddenCount}` : ''}
+        </button>
+      </div>
       {!loading && reports.length === 0 && (
         <div style={{ padding: '16px 0', color: 'var(--muted)', fontSize: 12 }}>
           No reports yet. File one above.
         </div>
       )}
+      {!loading && reports.length > 0 && visibleReports.length === 0 && (
+        <div style={{ padding: '16px 0', color: 'var(--muted)', fontSize: 12 }}>
+          All {hiddenCount} report{hiddenCount === 1 ? '' : 's'} are resolved and hidden.
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {reports.map(r => (
+        {visibleReports.map(r => (
           <ReportRow key={r.id} report={r} onRunTriage={runTriage} onDecide={decide} />
         ))}
       </div>
