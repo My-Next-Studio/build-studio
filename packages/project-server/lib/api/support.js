@@ -28,6 +28,7 @@ const {
   backlogDir, projectStatePath, parseBacklogSection, writeBacklogSection,
 } = require('../backlog');
 const { assertInside } = require('../path-guard');
+const { scopedCommit } = require('../scoped-commit');
 const {
   runOneShot: defaultRunOneShot,
   getOneShotStatus: defaultGetOneShotStatus,
@@ -288,9 +289,34 @@ function createSupportRouter(config, {
     return newId;
   }
 
+  /**
+   * Auto-commit a filed item + its project-state marker line so the owner
+   * never has to commit filings manually (owner decision 2026-07-17,
+   * `support.auto_commit`, default on). Commits land on WHATEVER branch is
+   * checked out — during an execution run that is the feature branch, which
+   * merges to main with the PRD; the report itself lives branch-independent
+   * in .build-studio/support/. The pathspec-scoped commit never sweeps
+   * concurrent agent work, and a failed commit NEVER fails the filing — the
+   * files stay in the tree and the report carries a visible note instead.
+   */
+  async function autoCommitFiling(report, newId) {
+    const enabled = !(config.support && config.support.auto_commit === false);
+    if (!enabled || !newId || !fs.existsSync(path.join(projectRoot, '.git'))) return;
+    const paths = [
+      path.relative(projectRoot, path.join(projectRoot, docsPath || 'docs', 'backlog', `${newId}.md`)),
+      path.relative(projectRoot, projectStatePath(projectRoot, docsPath)),
+    ];
+    const result = await scopedCommit(projectRoot, paths, `chore(support): file ${newId} (from ${report.id})`);
+    if (result.committed) {
+      report.filed_commit = result.sha || 'concurrent';
+    } else {
+      report.body = appendNote(report.body, `Filed as ${newId} but NOT committed — ${result.reason}. Commit docs/backlog/${newId}.md + project-state.md manually.`);
+    }
+  }
+
   // Apply a completed triage run's proposal.json to the report. `bug` verdicts
   // are filed immediately; everything else parks in `proposed` for a decision.
-  function applyProposal(id) {
+  async function applyProposal(id) {
     const reportDir = path.join(reportsDir(), id);
     const report = readReport(reportDir);
     let proposal = null;
@@ -312,6 +338,7 @@ function createSupportRouter(config, {
       try {
         report.linked_item = materializeItem(report, proposal);
         report.status = 'filed';
+        await autoCommitFiling(report, report.linked_item);
       } catch (e) {
         // Filing failed (e.g. no project-state.md markers) — surface the proposal
         // so the owner can act rather than losing the triage.
@@ -435,7 +462,7 @@ function createSupportRouter(config, {
   });
 
   // ─── GET /support/reports/:id/triage/status — poll the triage run ────────────
-  router.get('/support/reports/:id/triage/status', (req, res) => {
+  router.get('/support/reports/:id/triage/status', async (req, res) => {
     const id = req.params.id;
     if (!isValidReportId(id)) return res.status(400).json({ error: 'invalid report id' });
     let reportDir;
@@ -455,7 +482,7 @@ function createSupportRouter(config, {
 
     const proposalExists = fs.existsSync(path.join(reportDir, 'proposal.json'));
     if (proposalExists) {
-      return res.json({ state: 'complete', report: applyProposal(id) });
+      return res.json({ state: 'complete', report: await applyProposal(id) });
     }
 
     const runId = triageRunByReport.get(id);
@@ -482,7 +509,7 @@ function createSupportRouter(config, {
   });
 
   // ─── POST /support/reports/:id/decision — accept/reject a proposed report ─────
-  router.post('/support/reports/:id/decision', (req, res) => {
+  router.post('/support/reports/:id/decision', async (req, res) => {
     const id = req.params.id;
     if (!isValidReportId(id)) return res.status(400).json({ error: 'invalid report id' });
     let reportDir;
@@ -533,6 +560,7 @@ function createSupportRouter(config, {
         report.linked_item = materializeItem(report, proposal);
         report.status = 'filed';
         if (note) report.body = appendNote(report.body, `Filed: ${note}`);
+        await autoCommitFiling(report, report.linked_item);
       }
     } catch (e) {
       return res.status(500).json({ error: `Could not apply decision: ${e.message}` });

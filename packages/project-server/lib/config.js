@@ -45,6 +45,9 @@ const DEFAULTS = {
   // automatically once code_review approves instead of waiting at the manual
   // merge_to_main gate; default false keeps the merge a deliberate operator step.
   bugfix: { auto_merge: false },
+  // support view: auto-commit filed items (pathspec-scoped, on the current
+  // branch) so filings never wait on a manual Operations-tab commit.
+  support: { auto_commit: true },
   dev_commands: [],
   deployment: {
     strategy: 'trunk',           // trunk | gitflow
@@ -136,6 +139,7 @@ function loadConfig(projectRoot) {
     deployment: { ...DEFAULTS.deployment, ...(raw.deployment || {}) },
     functions: { ...DEFAULTS.functions, ...(raw.functions || {}) },
     bugfix: { ...DEFAULTS.bugfix, ...(raw.bugfix || {}) },
+    support: { ...DEFAULTS.support, ...(raw.support || {}) },
   };
 
   // Inferred default for `deployment.deployedOnPush` (PRD lifecycle status):
