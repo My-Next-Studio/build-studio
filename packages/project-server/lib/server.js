@@ -371,6 +371,11 @@ function startServer(projectRoot, opts = {}) {
   // isn't marked as timed out while it's actively producing logs.
   const AGENT_IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 min of log silence = stalled
   const AGENT_MIN_RUNTIME_MS = 5 * 60 * 1000; // don't apply idle check before this
+  // Dead-process discrimination + auto-resume (see lib/agent-recovery.js):
+  const AGENT_DEAD_CONFIRM_MS = 2 * 60 * 1000;  // shell pane + this much silence = process dead
+  const AGENT_RESUME_GRACE_MS = 3 * 60 * 1000;  // after firing a resume, let the CLI boot before re-judging
+  const AGENT_MAX_AUTO_RESUMES = 2;             // then fall through to the loud halt
+  const agentRecovery = require('./agent-recovery');
 
   // Periodic stale session + timeout check (every 30s)
   setInterval(() => {
@@ -410,6 +415,49 @@ function startServer(projectRoot, opts = {}) {
           } catch (_) {
             // Log missing — fall back to elapsed time so we still time out a runaway agent
             idleMs = elapsed;
+          }
+
+          // Just fired a resume — let the CLI boot and start repainting before
+          // any further dead/stall judgement (the 30s tick would double-fire).
+          if (agentRecovery.inResumeGrace(agent, now, AGENT_RESUME_GRACE_MS)) continue;
+
+          // Dead-vs-stalled discrimination: a DEAD process (pane fell back to
+          // the login shell — SIGKILL, crash fallout, CLI update) is recovered
+          // immediately via the pre-written resume script (claude --resume with
+          // the pinned session id = context intact). A live-but-silent process
+          // (e.g. waiting at an interactive dialog) falls through to the slow
+          // stall timeout below — resuming that one would destroy context.
+          const target = `${activeWf.sessionName}:${agent.window}`;
+          const cls = agentRecovery.classifyAgentProcess({
+            paneCommand: tmuxOps.paneCommand(target),
+            idleMs,
+            deadConfirmMs: AGENT_DEAD_CONFIRM_MS,
+          });
+          if (cls !== 'alive') {
+            const decision = cls === 'dead'
+              ? agentRecovery.decideRecovery(agent, { maxAutoResumes: AGENT_MAX_AUTO_RESUMES })
+              : 'halt'; // window gone — nowhere to resume in place
+            if (decision === 'resume') {
+              try {
+                tmuxOps.sendKeys(target, `bash ${agent.resumeScript}`, config.projectRoot);
+                agent.autoResumeCount = (agent.autoResumeCount || 0) + 1;
+                agent.lastAutoResumeAt = new Date(now).toISOString();
+                changed = true;
+                console.log(`[agent-recovery] ${agent.role} process died in ${activeWf.currentStep} — auto-resumed with context (attempt ${agent.autoResumeCount}/${AGENT_MAX_AUTO_RESUMES}, session ${agent.cliSessionId})`);
+              } catch (e) {
+                agent.status = 'error';
+                agent.error = `Agent process died and auto-resume failed (${e.message}). Relaunch the step.`;
+                changed = true;
+              }
+            } else {
+              agent.status = 'error';
+              agent.error = cls === 'gone'
+                ? 'Agent window disappeared — cannot recover in place. Relaunch the step.'
+                : `Agent process died (pane returned to a shell prompt)${agent.cliSessionId ? ` — auto-resume exhausted after ${agent.autoResumeCount || 0} attempt(s)` : ' — auto-resume unavailable for this CLI'}. Relaunch the step.`;
+              changed = true;
+              console.log(`[agent-recovery] ${agent.role} ${cls} in ${activeWf.currentStep} — halted (${agent.error})`);
+            }
+            continue;
           }
 
           if (idleMs > AGENT_IDLE_TIMEOUT_MS) {

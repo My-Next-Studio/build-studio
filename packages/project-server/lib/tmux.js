@@ -130,6 +130,38 @@ function createTmuxOps(config) {
     } catch (_) { return ''; }
   }
 
+  // The foreground command of a window's pane (#{pane_current_command}) —
+  // the agent-recovery discriminator: a live agent shows its CLI binary
+  // (claude/codex/node); a dead one has fallen back to the login shell.
+  // Returns null when the window/pane cannot be found.
+  function paneCommand(target) {
+    try {
+      const out = execFileSync('tmux', ['display-message', '-p', '-t', target, '#{pane_current_command}'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).toString().trim();
+      return out || null;
+    } catch (_) {}
+    // Same ambiguous-name fallback as capturePane: resolve "session:name" to a
+    // concrete index when duplicate window names confuse the direct lookup.
+    const m = target.match(/^([^:]+):(.+)$/);
+    if (!m) return null;
+    const [, sess, nameOrIdx] = m;
+    if (/^\d+$/.test(nameOrIdx)) return null;
+    try {
+      const list = execFileSync('tmux', ['list-windows', '-t', sess, '-F', '#{window_index} #{window_name}'], { stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+      const matches = list.split('\n').filter(Boolean).map(l => {
+        const sp = l.indexOf(' ');
+        return [l.slice(0, sp), l.slice(sp + 1)];
+      }).filter(([, n]) => n === nameOrIdx);
+      if (matches.length === 0) return null;
+      const idx = matches[matches.length - 1][0];
+      const out = execFileSync('tmux', ['display-message', '-p', '-t', `${sess}:${idx}`, '#{pane_current_command}'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).toString().trim();
+      return out || null;
+    } catch (_) { return null; }
+  }
+
   function sendMessage(target, message) {
     execFileSync('tmux', ['set-buffer', '-b', 'agent-msg', message]);
     execFileSync('tmux', ['paste-buffer', '-t', target, '-b', 'agent-msg']);
@@ -152,6 +184,7 @@ function createTmuxOps(config) {
     killWindowAndChildren,
     killSessionAndDevPorts,
     capturePane,
+    paneCommand,
     sendMessage,
     openTerminal,
   };

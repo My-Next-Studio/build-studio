@@ -1389,9 +1389,13 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       // Codex has no effort-equivalent CLI flag; only Claude takes --effort.
       const effortFlag = (!useCodex && effortLevel) ? ` --effort ${effortLevel}` : '';
       const cliBin = useCodex ? 'codex' : 'claude';
+      // Pin the Claude session id at launch so a killed agent process can be
+      // auto-resumed WITH its context (`claude --resume <id>` — see the
+      // agent-recovery monitor in server.js). Codex has no resume equivalent.
+      const cliSessionId = useCodex ? null : require('crypto').randomUUID();
       const cliInvocation = useCodex
         ? `codex exec${dangerFlag} "$(cat '${promptFileName}')"`
-        : `claude${dangerFlag}${modelFlag}${effortFlag} "$(cat '${promptFileName}')"`;
+        : `claude --session-id ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${promptFileName}')"`;
       // Write prompt to a separate file to avoid shell escaping issues with backticks, quotes, etc.
       fs.writeFileSync(path.join(agentCwd, promptFileName), prompt, 'utf-8');
       ensureLauncherArtifactsIgnored(agentCwd);
@@ -1454,6 +1458,34 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
       // "New MCP server found in this project" prompt can't stall the agent.
       require('../claude-settings').ensureMcpAutoApprove(agentCwd);
       fs.writeFileSync(path.join(agentCwd, scriptName), startScript, { mode: 0o755 });
+
+      // Agent-recovery artifacts (claude only): a pre-written resume script the
+      // monitor (server.js) fires into the pane's surviving shell when the
+      // agent PROCESS dies (SIGKILL under memory pressure, daemon-crash
+      // fallout, CLI update — launch-studio PRD-010 qa_validation, 2026-07-17).
+      // Everything recovery needs is captured here at launch; the pane's shell
+      // keeps sitting in agentCwd after the process dies, so `bash <script>`
+      // resolves relative paths, and --resume restores the pinned session's
+      // full conversation context.
+      if (!useCodex) {
+        const resumePromptFile = `prompt-resume-${windowName}.txt`;
+        const resumeScriptName = `start-${windowName}-resume.sh`;
+        fs.writeFileSync(path.join(agentCwd, resumePromptFile),
+          'Your CLI process was killed mid-run by an external event (system pressure, a crash, or an update) and this session has been resumed automatically with your context intact. Re-establish your bearings first: check the working tree and the outcome of whatever command was running when you were killed (it may have been interrupted or may have completed), then continue your assigned task from where you left off. Your original instructions — including reporting your structured feedback via the curl POST at the end — still apply in full.', 'utf-8');
+        const resumeScript = `#!/bin/zsh
+eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null
+unset PORT
+${unsetKey ? 'unset ANTHROPIC_API_KEY\n' : ''}if ! command -v claude >/dev/null 2>&1; then
+  for p in /opt/homebrew/bin /usr/local/bin "$HOME/.npm-global/bin" "$HOME/.local/bin"; do
+    if [ -x "$p/claude" ]; then PATH="$p:$PATH"; break; fi
+  done
+fi
+${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${resumePromptFile}')"
+`;
+        fs.writeFileSync(path.join(agentCwd, resumeScriptName), resumeScript, { mode: 0o755 });
+        agent.cliSessionId = cliSessionId;
+        agent.resumeScript = resumeScriptName;
+      }
 
       const logFile = path.join(logsPath, `${windowName}-${wf.id}.log`);
       const keyUnset = unsetKey ? 'unset ANTHROPIC_API_KEY && ' : '';
