@@ -7391,14 +7391,21 @@ Before adding new entries, scan existing files in docs/learnings/:
             console.log(`[workflow] fix_plan 0-task override accepted (source=${sourceStep}, failures=${failureCount}, blocking=${blockingCount}): ${body.overrideReason || '(no reason)'}`);
           }
         }
-        // Advance to the step AFTER the source step in the preset's execution
-        // sequence — NOT hard-coded to demo_review. Previously this skipped any
-        // intermediate gates (ac_verification, device_testing, security_audit)
+        // Advance to the step AFTER the source step in the workflow's OWN active
+        // sequence — NOT hard-coded to the execution preset. Previously this skipped
+        // any intermediate gates (ac_verification, device_testing, security_audit)
         // whenever fix_plan resolved with 0 tasks. Observed on example-ios PRD-012
         // (2026-05-25): qa_validation → fix_plan (0 tasks) → demo_review, with
         // ac_verification + device_testing + security_audit all silently skipped.
-        const execSteps = (config.workflow && config.workflow.execution) || [];
-        const srcIdx = sourceStep ? execSteps.indexOf(sourceStep) : -1;
+        // A SEPARATE bug (fazon FAZ-187, 2026-07-18): this used to read
+        // `config.workflow.execution` unconditionally, so a bugfix run whose
+        // qa_validation reported pre-existing-only failures (0 fix tasks, correctly)
+        // advanced into `ac_verification` — a step that exists in the execution
+        // preset but NOT in the bugfix sequence, wedging the workflow on a step no
+        // launch handler recognizes. `stepSequence()` is type-aware (bugfix vs
+        // execution) and already exists for exactly this; use it here too.
+        const seq = stepSequence(wf, config);
+        const srcIdx = sourceStep ? seq.indexOf(sourceStep) : -1;
         // Manual human gates (device_testing, demo_review) must be RE-RUN after a
         // send-back, not advanced past — the owner re-tests on the device / re-reviews
         // the demo. For a REVIEW source step, advancing to srcIdx+1 is correct (re-running
@@ -7406,12 +7413,19 @@ Before adding new entries, scan existing files in docs/learnings/:
         // srcIdx+1 silently SKIPS the re-test — e.g. on example-app device_testing is
         // immediately followed by demo_review, so a 0-task fix_plan jumped straight to
         // demo_review and the owner never got to re-test. Route back to the gate instead.
+        // (Both gates are execution-only concepts; RERUN_GATES.has(sourceStep) is
+        // simply false for every bugfix sourceStep, so this is inert there.)
         const RERUN_GATES = new Set(['device_testing', 'demo_review']);
+        // Terminal fallback (source step not found, or already last in sequence):
+        // 'demo_review' is a reasonable default for an execution run (everything
+        // funnels toward it) but doesn't exist in the bugfix sequence at all —
+        // fall back to re-running the source step instead, same treatment as a
+        // RERUN_GATES hit.
         const advanceTo = RERUN_GATES.has(sourceStep)
           ? sourceStep
-          : (srcIdx >= 0 && srcIdx < execSteps.length - 1)
-            ? execSteps[srcIdx + 1]
-            : 'demo_review';
+          : (srcIdx >= 0 && srcIdx < seq.length - 1)
+            ? seq[srcIdx + 1]
+            : (wf.type === 'bugfix' ? (sourceStep || seq[0]) : 'demo_review');
         console.log(`[workflow] Fix plan has 0 tasks — advancing ${sourceStep || '?'} → ${advanceTo}${RERUN_GATES.has(sourceStep) ? ' (re-run manual gate)' : ''}`);
         wf.steps.fix_plan.status = 'completed';
         wf.fixPlan = fixPlan;
