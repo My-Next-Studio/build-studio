@@ -6701,6 +6701,13 @@ This is round ${wf.round}.`,
     // the out-of-band adversarial pass, moved in-flow. Blocking → fix loop.
     if (wf.currentStep === 'final_review' && (wf.steps.final_review.status === 'pending' || !wf.steps.final_review.agents?.length)) {
       const frEffort = (config.final_review && config.final_review.effort) || 'high';
+      // Wrap-up mode (rounds past the owner-approved cap): the spec-forward
+      // fresh-lens method is an unbounded finding generator — post-cap rounds
+      // switch the contract to closure (regressions/incomplete fixes block;
+      // new-lens discoveries file as follow-up proposals). lib/review-wrapup.js.
+      const { wrapupActive, buildWrapupBlock } = require('../review-wrapup');
+      const frWrapup = wrapupActive(wf.round || 1, MAX_REVIEW_ROUNDS, config);
+      if (frWrapup) console.log(`[workflow] final_review launching in WRAP-UP mode (round ${wf.round}, cap ${MAX_REVIEW_ROUNDS})`);
       const frAgent = [{
         role: 'Final Reviewer', window: 'final-review', status: 'pending', reportFeedback: true,
         instruction: `## YOU ARE AN INDEPENDENT FINAL REVIEWER — NOT A FIX AGENT — READ THIS FIRST
@@ -6741,9 +6748,10 @@ Review the change for this PRD. Do not raise pre-existing issues outside the PRD
 ### Action Items
 - [ ] [role] — description
 
-Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; those route into the fix loop. Otherwise **Approved: yes**, **Blocking: 0** (Medium/Low are recorded but do not block).`,
+Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; those route into the fix loop. Otherwise **Approved: yes**, **Blocking: 0** (Medium/Low are recorded but do not block).${frWrapup ? buildWrapupBlock(wf.round || 1, MAX_REVIEW_ROUNDS) : ''}`,
       }];
       wf.steps.final_review = { status: 'running', agents: launchWorkflowAgents(wf, frAgent, { useWorktrees: false, cwd: projectRoot }) };
+      if (frWrapup) wf.steps.final_review.wrapupMode = true;
       state.saveWorkflow(wf);
       return res.json({ workflow: wf });
     }

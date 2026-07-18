@@ -48,6 +48,10 @@ const DEFAULTS = {
   // support view: auto-commit filed items (pathspec-scoped, on the current
   // branch) so filings never wait on a manual Operations-tab commit.
   support: { auto_commit: true },
+  // final_review: rounds past the owner-approved cap run in wrap-up mode
+  // (closure contract — regressions block, fresh-lens findings file as
+  // follow-up proposals). `effort` may also be set here (default 'high').
+  final_review: { wrapup_past_cap: true },
   dev_commands: [],
   deployment: {
     strategy: 'trunk',           // trunk | gitflow
@@ -140,6 +144,7 @@ function loadConfig(projectRoot) {
     functions: { ...DEFAULTS.functions, ...(raw.functions || {}) },
     bugfix: { ...DEFAULTS.bugfix, ...(raw.bugfix || {}) },
     support: { ...DEFAULTS.support, ...(raw.support || {}) },
+    final_review: { ...DEFAULTS.final_review, ...(raw.final_review || {}) },
   };
 
   // Inferred default for `deployment.deployedOnPush` (PRD lifecycle status):
