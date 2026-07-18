@@ -1575,71 +1575,9 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     const psFile = path.join(docsPath, 'project-state.md');
     if (!fs.existsSync(psFile)) return;
     const original = fs.readFileSync(psFile, 'utf8');
-    let content = original;
     const prdId = prdInput.replace(/\s+/g, '-');
     const today = new Date().toISOString().slice(0, 10);
-
-    // ---- Backlog table row update ----
-    // The previous regex assumed a specific column order (PRD column immediately
-    // followed by status column with one of `**Active**` / `**In Progress**` /
-    // `**PRD Ready**` / `Pending`). Real projects vary: Status usually comes
-    // BEFORE the PRD column, and some projects (e.g. example-ios) use narrative
-    // status text like `**Active — Preparation.** PRD-002 drafted ...`.
-    //
-    // New approach: walk rows under `## Backlog`, find any row containing the
-    // PRD ID with word-boundary, then locate its status cell by scanning for
-    // an "active-status" keyword regardless of column position. Replace that
-    // cell with a compact "Done" line.
-    const ACTIVE_PATTERNS = [
-      /\*\*Active\b/i,            // **Active**, **Active — Preparation**, etc.
-      /\*\*In Progress\*\*/i,
-      /\*\*PRD Ready\*\*/i,
-      /\*\*Preparation\b/i,
-      /\bPending\b/,
-    ];
-    const lines = content.split('\n');
-    const prdIdRe = new RegExp(`\\b${prdId}\\b`, 'i');
-    let inBacklog = false;
-    let backlogRowChanged = false;
-    for (let i = 0; i < lines.length; i++) {
-      if (/^##\s+Backlog\b/i.test(lines[i])) { inBacklog = true; continue; }
-      if (inBacklog && /^##\s+/.test(lines[i]) && !/^##\s+Backlog\b/i.test(lines[i])) {
-        inBacklog = false;
-      }
-      if (!inBacklog) continue;
-      if (!lines[i].startsWith('|')) continue;
-      // Skip header + separator lines
-      if (/^\|\s*[-:|\s]+\s*$/.test(lines[i])) continue;
-      if (!prdIdRe.test(lines[i])) continue;
-
-      // Split into cells. A line like `| a | b | c |` yields ['', ' a ', ' b ', ' c ', ''].
-      const cells = lines[i].split('|');
-      let statusIdx = -1;
-      for (let c = 1; c < cells.length - 1; c++) {
-        if (ACTIVE_PATTERNS.some(p => p.test(cells[c]))) { statusIdx = c; break; }
-      }
-      if (statusIdx === -1) continue;
-      cells[statusIdx] = ` **Done.** ${prdId} shipped ${today}. `;
-      lines[i] = cells.join('|');
-      backlogRowChanged = true;
-    }
-    if (backlogRowChanged) content = lines.join('\n');
-
-    // ---- Active PRD section update ----
-    // Replace the first bullet under `## Active PRD`. If that section is
-    // structured with multiple paragraphs (example-ios), only the lead bullet is
-    // touched — subsections like "Completed prep work" and "Deferred" stay.
-    const activePrdPattern = /^(## Active PRD\n+)(.*)$/m;
-    if (activePrdPattern.test(content)) {
-      content = content.replace(activePrdPattern, `$1None — ${prdId} complete. Next: scope next PRD.`);
-    }
-
-    // ---- Phase line + Last updated ----
-    content = content.replace(
-      /- \*\*Phase:\*\* Phase (\d+) — Iteration (\d+) complete\..*/,
-      (match, phase, iter) => `- **Phase:** Phase ${phase} — Iteration ${parseInt(iter, 10) + 1} complete. ${prdId} done.`
-    );
-    content = content.replace(/- \*\*Last updated:\*\* \d{4}-\d{2}-\d{2}/, `- **Last updated:** ${today}`);
+    const { content, backlogRowChanged } = markPrdDoneContent(original, prdId, today);
 
     if (content === original) {
       console.log(`[workflow] markPrdDone(${prdId}): no changes to project-state.md (no active row matched + no Active PRD/Phase update applied)`);
@@ -7730,6 +7668,78 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
   return router;
 }
 
+// Pure project-state.md rewrite for a completed PRD (no I/O — exported for
+// unit tests; markPrdDone wraps it with read/write/commit).
+// Returns { content, backlogRowChanged }.
+function markPrdDoneContent(original, prdId, today) {
+  let content = original;
+
+  // ---- Backlog table row update ----
+  // The previous regex assumed a specific column order (PRD column immediately
+  // followed by status column with one of `**Active**` / `**In Progress**` /
+  // `**PRD Ready**` / `Pending`). Real projects vary: Status usually comes
+  // BEFORE the PRD column, and some projects (e.g. example-ios) use narrative
+  // status text like `**Active — Preparation.** PRD-002 drafted ...`.
+  //
+  // New approach: walk rows under `## Backlog`, find any row containing the
+  // PRD ID with word-boundary, then locate its status cell by scanning for
+  // an "active-status" keyword regardless of column position. Replace that
+  // cell with a compact "Done" line.
+  const ACTIVE_PATTERNS = [
+    /\*\*Active\b/i,            // **Active**, **Active — Preparation**, etc.
+    /\*\*In Progress\*\*/i,
+    /\*\*PRD Ready\*\*/i,
+    /\*\*Preparation\b/i,
+    /\bPending\b/,
+  ];
+  const lines = content.split('\n');
+  const prdIdRe = new RegExp(`\\b${prdId}\\b`, 'i');
+  let inBacklog = false;
+  let backlogRowChanged = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^##\s+Backlog\b/i.test(lines[i])) { inBacklog = true; continue; }
+    if (inBacklog && /^##\s+/.test(lines[i]) && !/^##\s+Backlog\b/i.test(lines[i])) {
+      inBacklog = false;
+    }
+    if (!inBacklog) continue;
+    if (!lines[i].startsWith('|')) continue;
+    // Skip header + separator lines
+    if (/^\|\s*[-:|\s]+\s*$/.test(lines[i])) continue;
+    if (!prdIdRe.test(lines[i])) continue;
+
+    // Split into cells. A line like `| a | b | c |` yields ['', ' a ', ' b ', ' c ', ''].
+    const cells = lines[i].split('|');
+    let statusIdx = -1;
+    for (let c = 1; c < cells.length - 1; c++) {
+      if (ACTIVE_PATTERNS.some(p => p.test(cells[c]))) { statusIdx = c; break; }
+    }
+    if (statusIdx === -1) continue;
+    cells[statusIdx] = ` **Done.** ${prdId} shipped ${today}. `;
+    lines[i] = cells.join('|');
+    backlogRowChanged = true;
+  }
+  if (backlogRowChanged) content = lines.join('\n');
+
+  // ---- Active PRD section update ----
+  // Replace the first PARAGRAPH under `## Active PRD` — contiguous non-blank,
+  // non-heading lines. Entries are often multi-line (title link + wrapped
+  // description); replacing only the first line strips the title and orphans
+  // the rest. Subsections like "Completed prep work" (example-ios) still stay.
+  const activePrdPattern = /^(## Active PRD\n+)(.*(?:\n(?!\s*$)(?!#).*)*)/m;
+  if (activePrdPattern.test(content)) {
+    content = content.replace(activePrdPattern, `$1None — ${prdId} complete. Next: scope next PRD.`);
+  }
+
+  // ---- Phase line + Last updated ----
+  content = content.replace(
+    /- \*\*Phase:\*\* Phase (\d+) — Iteration (\d+) complete\..*/,
+    (match, phase, iter) => `- **Phase:** Phase ${phase} — Iteration ${parseInt(iter, 10) + 1} complete. ${prdId} done.`
+  );
+  content = content.replace(/- \*\*Last updated:\*\* \d{4}-\d{2}-\d{2}/, `- **Last updated:** ${today}`);
+
+  return { content, backlogRowChanged };
+}
+
 module.exports = {
   createWorkflowRouter,
   // Exported for unit tests (pure bugfix helpers — no I/O).
@@ -7741,4 +7751,5 @@ module.exports = {
   validateBugfixStart,
   resolveBuilderRole,
   buildBugfixTask,
+  markPrdDoneContent,
 };
