@@ -10,12 +10,14 @@
  * runs orphan their clones, which then accumulate (the directory grew to 66 GB
  * on this machine before this script existed).
  *
- * SAFETY INVARIANT — a clone is reaped only when BOTH hold:
- *   1. state === "Shutdown"  — an active run (in ANY project) keeps its clones
- *      Booted, so they are skipped regardless of which project owns them.
- *   2. its directory has not been modified within --guard-minutes (default 10)
- *      — protects the brief window where a freshly cloned sim exists but has
- *      not booted yet.
+ * SAFETY INVARIANT — no sweep happens at all while any `xcodebuild test` is
+ * running on the machine (parallel testing keeps NOT-yet-booted / phase-idle
+ * clones in Shutdown state, so state alone cannot identify a live clone —
+ * 2026-07-18 incident: the sweep deleted mid-run clones and aborted the run).
+ * On an idle machine, a clone is reaped only when BOTH hold:
+ *   1. state === "Shutdown".
+ *   2. its directory mtime is KNOWN and older than --guard-minutes (default
+ *      10) — an unstatable dir counts as fresh, never stale.
  * This is what makes cleanup in one project safe while another project tests.
  * We deliberately NEVER `simctl shutdown all` and NEVER touch Booted clones:
  * we cannot tell an orphaned-Booted clone from an in-use one across projects,
@@ -158,6 +160,24 @@ function deleteRegistered(setPath, udid) {
   });
 }
 
+// True while any `xcodebuild test...` (test / test-without-building) is running
+// anywhere on the machine. xcodebuild pre-creates clones that legitimately sit
+// in Shutdown state between phases of a live run, and their dir mtimes are not
+// a reliable freshness signal (APFS clones inherit source timestamps; stat can
+// also fail in restricted launchd contexts). State + mtime therefore CANNOT
+// distinguish a mid-run clone from a leak — so we never sweep during a run;
+// leaks are reclaimed on the next idle tick, at most 15 minutes later.
+function xcodebuildTestActive() {
+  try {
+    const out = execFileSync('/bin/ps', ['-axo', 'command'], {
+      env: CHILD_ENV, encoding: 'utf8', timeout: 15000, maxBuffer: 32 * 1024 * 1024,
+    });
+    return out.split('\n').some(l => /(^|\/| )xcodebuild(\s|$)/.test(l) && /\btest\b|\btest-without-building\b/.test(l));
+  } catch (_) {
+    return false; // ps failed — fall through to the per-clone guards
+  }
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   const result = {
@@ -169,10 +189,16 @@ function main() {
     skippedFresh: 0,
     reclaimedKB: 0,
     lockBusy: false,
+    testRunActive: false,
   };
 
   if (!fs.existsSync(opts.setPath)) {
     return finish(opts, result); // nothing to do
+  }
+
+  if (xcodebuildTestActive()) {
+    result.testRunActive = true;
+    return finish(opts, result); // never sweep under a live test run
   }
 
   const release = acquireLock(path.join(os.tmpdir(), 'xctest-clean.lock'));
@@ -190,9 +216,11 @@ function main() {
     for (const d of devices) {
       if (d.state !== 'Shutdown') { result.skippedBooted++; continue; }
       const dir = path.join(opts.setPath, d.udid);
+      // Fail-safe: an unstatable dir counts as FRESH (skip), not stale — a stat
+      // failure says nothing about age, and reaping on it kills live clones.
       let mtime = 0;
       try { mtime = fs.statSync(dir).mtimeMs; } catch (_) { mtime = 0; }
-      if (mtime && mtime > cutoffMs) { result.skippedFresh++; continue; }
+      if (!mtime || mtime > cutoffMs) { result.skippedFresh++; continue; }
       const kb = dirSizeKB(dir);
       if (!opts.dryRun) {
         try { deleteRegistered(opts.setPath, d.udid); }
@@ -211,9 +239,10 @@ function main() {
       if (!ent.isDirectory() || !UUID_RE.test(ent.name)) continue;
       if (registered.has(ent.name)) continue;
       const dir = path.join(opts.setPath, ent.name);
+      // Same fail-safe as above: unstatable = fresh, never stale.
       let mtime = 0;
       try { mtime = fs.statSync(dir).mtimeMs; } catch (_) { mtime = 0; }
-      if (mtime && mtime > cutoffMs) { result.skippedFresh++; continue; }
+      if (!mtime || mtime > cutoffMs) { result.skippedFresh++; continue; }
       const kb = dirSizeKB(dir);
       if (!opts.dryRun) {
         try { fs.rmSync(dir, { recursive: true, force: true }); }
