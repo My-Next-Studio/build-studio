@@ -89,6 +89,7 @@ interface Workflow {
   reviewerCli?: 'claude' | 'codex'
   autoAdvance?: boolean
   autoAdvanceStrict?: boolean
+  prdPath?: string
   steps: Record<string, WorkflowStep>
   taskPlan?: TaskPlan
   taskExecution?: TaskExecution
@@ -117,6 +118,7 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
     { key: 'device_testing', name: 'Device Testing' },
     { key: 'security_audit', name: 'Security Audit' },
     { key: 'final_review', name: 'Final Review' },
+    { key: 'owner_verification', name: 'Owner Verification' },
     { key: 'demo_review', name: 'Demo Review' },
     { key: 'merge_to_main', name: 'Merge to Main' },
     { key: 'capture_learnings', name: 'Capture Learnings' },
@@ -324,7 +326,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // owner_signoff fires the single onboarding commit; team_review for onboarding
     // also requires owner judgment (artifacts are backfills, not fresh decisions).
     // owner_consultations: kickoff manual gate between pm_scoping and team_review.
-    const alwaysManual = ['demo_review', 'device_testing', 'owner_signoff', 'owner_consultations']
+    const alwaysManual = ['demo_review', 'device_testing', 'owner_verification', 'owner_signoff', 'owner_consultations']
     if (alwaysManual.includes(wf.currentStep)) return
     if (wf.type === 'onboarding' && wf.currentStep === 'team_review') return
     if (round <= 1 && reviewSteps.includes(wf.currentStep)) return
@@ -1391,11 +1393,12 @@ function StepDetail({
       {/* Actions */}
       {isCurrentStep && step.status === 'pending' && agents.length === 0 && (() => {
         // Manual steps that don't launch agents — show approve/skip instead
-        const manualSteps = ['demo_review', 'device_testing', 'merge_to_main', 'merge_for_review', 'owner_signoff', 'owner_consultations']
+        const manualSteps = ['demo_review', 'device_testing', 'owner_verification', 'merge_to_main', 'merge_for_review', 'owner_signoff', 'owner_consultations']
         if (manualSteps.includes(activeKey)) {
           const isOwnerConsult = activeKey === 'owner_consultations'
           const isDeviceTest = activeKey === 'device_testing'
-          const hasTextarea = activeKey === 'demo_review' || activeKey === 'owner_signoff' || isOwnerConsult || isDeviceTest
+          const isOwnerVerify = activeKey === 'owner_verification'
+          const hasTextarea = activeKey === 'demo_review' || activeKey === 'owner_signoff' || isOwnerConsult || isDeviceTest || isOwnerVerify
           return (
             <div>
               {isDeviceTest && wf.branch && (
@@ -1417,9 +1420,36 @@ function StepDetail({
               {isOwnerConsult && (
                 <OwnerConsultationContext wf={wf} />
               )}
+              {isOwnerVerify && (() => {
+                const checklist = (step as { checklist?: { ac: string; text: string }[] }).checklist || []
+                const prdBase = wf.prdPath ? wf.prdPath.replace(/^.*\//, '').replace(/\.md$/, '') : '<prd>'
+                return (
+                  <div style={{
+                    fontFamily: 'var(--mono)', fontSize: 11, marginBottom: 8,
+                    padding: '8px 12px', background: 'var(--surface)',
+                    border: '1px solid var(--border)', borderRadius: 6, color: 'var(--muted)',
+                  }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
+                      Owner-gated ACs — run each against the packaged app
+                    </div>
+                    {checklist.map(item => (
+                      <div key={item.ac} style={{ marginBottom: 3 }}>
+                        <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{item.ac}</span>
+                        {' '}{item.text.replace(new RegExp(`^${item.ac}[:\\s—-]*`), '')}
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 6, color: 'var(--text-dim)' }}>
+                      Record each result in a committed .md under{' '}
+                      <span style={{ color: 'var(--text)' }}>docs/pr-evidence/{prdBase}/manual-verification/</span>
+                      {' '}— Approve verifies every AC above appears there.
+                    </div>
+                  </div>
+                )
+              })()}
               <ActionArea label={
                 activeKey === 'demo_review' ? 'Manual verification:'
                 : isDeviceTest ? 'Physical device verification — run the suite on a real device:'
+                : isOwnerVerify ? 'Owner verification — evidence-gated approve:'
                 : activeKey === 'owner_signoff' ? 'Final review — first onboarding commit:'
                 : isOwnerConsult ? 'Owner consultation — read PM output, add notes, approve:'
                 : 'Manual step:'
@@ -1435,7 +1465,9 @@ function StepDetail({
                           ? 'Owner answers, decisions, additional input for the team review (optional). Saved to docs/inputs/owner-consultation-round-N.md.'
                           : isDeviceTest
                             ? 'If sending back to devs: what failed on the physical device that did not surface in the simulator? (required for send-back)'
-                            : 'Describe issues found during demo (required for send-back)...'
+                            : isOwnerVerify
+                              ? 'If sending back to devs: which owner check failed, and what you observed (required for send-back)'
+                              : 'Describe issues found during demo (required for send-back)...'
                     }
                     style={{
                       width: '100%', minHeight: isOwnerConsult ? 120 : 50, resize: 'vertical', marginBottom: 8,
@@ -1446,7 +1478,7 @@ function StepDetail({
                   />
                 )}
                 <div style={{ display: 'flex', gap: 8 }}>
-                  {(activeKey === 'demo_review' || isDeviceTest) && (
+                  {(activeKey === 'demo_review' || isDeviceTest || isOwnerVerify) && (
                     <button
                       onClick={() => onAdvance('send_to_devs')}
                       disabled={!notes.trim()}

@@ -26,6 +26,20 @@ preset: web-app
 #     add:
 #       - step: staging_deploy
 #         after: demo_review   # insert after a specific step
+#
+# owner_verification — recommended for desktop-app projects (Electron etc.).
+# A human-at-the-machine gate for owner-gated ACs (Dock launch, native OS
+# dialogs, DevTools probes on the running packaged app). The engine builds its
+# checklist from the AC verifier's `### Owner action items`; auto-skips when
+# empty; Approve requires every checklist AC to appear in a committed .md under
+# docs/pr-evidence/<PRD>/manual-verification/ (override available). Without
+# this step, the AC verifier defers owner-gated evidence downstream while the
+# final reviewer blocks on its absence — an unresolvable dispute.
+# workflow:
+#   execution:
+#     add:
+#       - step: owner_verification
+#         after: final_review
 
 # Override model assignments per step (optional):
 # step_models:

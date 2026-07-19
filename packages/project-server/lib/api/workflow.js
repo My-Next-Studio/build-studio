@@ -193,6 +193,56 @@ function buildBugfixTask(id, item, role) {
   };
 }
 
+// ─── owner_verification step helpers (pure, exported for unit tests) ─────────
+//
+// The owner_verification step (inserted per-project via workflow.execution.add,
+// after final_review) is where owner-gated ACs actually close: checks that need
+// a human at the machine — Dock launch, native Keychain dialogs, DevTools
+// probes on the running packaged app. The AC verifier defers these rows
+// (UNTESTABLE, Approved: yes) and lists them under `### Owner action items`;
+// before this step existed nothing consumed that list, so the AC verifier
+// deferred evidence downstream while final review blocked on its absence —
+// both self-consistent, structurally unresolvable (finance-studio PRD-004,
+// 2026-07-19, capped at round 5 over exactly this).
+
+// Extract the owner checklist from the AC verifier's feedback: bullets under
+// `### Owner action items` that name an AC/US id. Returns [{ ac, text }],
+// deduped by id. Empty array ⇒ nothing owner-gated ⇒ the step auto-skips.
+function extractOwnerChecklist(acFeedback) {
+  const text = String(acFeedback || '');
+  const header = text.match(/^###\s+Owner action items[ \t]*$/mi);
+  if (!header) return [];
+  const bodyStart = header.index + header[0].length;
+  // Section runs to the next markdown heading or end of feedback. (Not a
+  // lookahead terminator — multiline `$` matches at every line end and
+  // silently truncates the section to its first line.)
+  const nextHeading = text.slice(bodyStart).search(/\n#{1,6}\s/);
+  const body = nextHeading >= 0 ? text.slice(bodyStart, bodyStart + nextHeading) : text.slice(bodyStart);
+  const seen = new Set();
+  const items = [];
+  for (const line of body.split('\n')) {
+    const b = line.match(/^\s*[-*]\s*(?:\[[ xX]\]\s*)?(.*)$/);
+    if (!b) continue;
+    const idMatch = b[1].match(/\b((?:AC|US)-[\w.]+)/);
+    if (!idMatch || seen.has(idMatch[1])) continue;
+    seen.add(idMatch[1]);
+    items.push({ ac: idMatch[1], text: b[1].trim() });
+  }
+  return items;
+}
+
+// Which checklist ACs have no committed evidence? `evidenceText` is the
+// concatenated content of every markdown file in the PRD's
+// pr-evidence/<prd>/manual-verification/ dir; an AC counts as evidenced when
+// its id appears there. Deliberately id-presence only — the evidence format is
+// human-authored prose/tables (see finance-studio PRD-004's owner-manual-run),
+// and anything stricter re-creates the brittle-parse failure mode the AC
+// evidence gate's comma bug just demonstrated.
+function ownerVerificationMissing(checklist, evidenceText) {
+  const text = String(evidenceText || '');
+  return (checklist || []).filter(item => !new RegExp(`\\b${item.ac.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text));
+}
+
 // Pure verdict for the qa_validation strict gate — exported for unit tests;
 // the approve handler applies its result to the response/state.
 //
@@ -3142,7 +3192,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     // Steps that always require manual intervention — owner_consultations is
     // the manual gate where the owner reviews PM output and provides notes;
     // demo_review and device_testing need a human in front of the device.
-    const alwaysManual = ['demo_review', 'device_testing', 'owner_consultations'];
+    const alwaysManual = ['demo_review', 'device_testing', 'owner_verification', 'owner_consultations'];
     if (alwaysManual.includes(wf.currentStep)) return;
 
     // Review steps used below for verdict-based routing (send_to_devs on blocking).
@@ -6458,7 +6508,7 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
 **APPROVED VS NOT APPROVED — DISTINGUISH OWNER-GATED FROM DEV-GATED:**
 Reserve \`**Approved:** no\` for cases where the **implementing role** (iOS Dev, Backend Dev, Frontend Dev, etc.) needs to do more work — broken code, missing implementation, missing evidence the dev should have captured (screenshots from simulator runs, font-output pastes the test could emit, etc.). Those route into a fix loop.
 
-**ACs that are UNTESTABLE solely because they depend on owner-only actions** — opening the project in Xcode IDE, archiving + uploading to TestFlight / App Store Connect, installing on a physical device, capturing a home-screen photo after install, manual smoke on a preview deploy, etc. — are **NOT a reason to set Approved: no**. The dev cannot close those gates; only the owner can, and they close at \`device_testing\` / \`demo_review\` / post-deploy, not via a fix loop. For these:
+**ACs that are UNTESTABLE solely because they depend on owner-only actions** — opening the project in Xcode IDE, archiving + uploading to TestFlight / App Store Connect, installing on a physical device, capturing a home-screen photo after install, manual smoke on a preview deploy, etc. — are **NOT a reason to set Approved: no**. The dev cannot close those gates; only the owner can, and they close at \`owner_verification\` / \`device_testing\` / \`demo_review\` / post-deploy, not via a fix loop. Your \`### Owner action items\` section is not advisory — when the project has an \`owner_verification\` step, the engine parses it into that step's checklist, and each listed AC blocks the merge until the owner records committed evidence. One bullet per AC, each starting with its id (e.g. \`- AC-2: launch from the Dock, …\`). For these:
 - Set \`**Approved:** yes\`
 - Keep the AC row marked \`UNTESTABLE\` in the matrix
 - Add an \`### Owner action items\` section listing each pending owner gate (one bullet per AC) so demo_review has a checklist
@@ -6485,7 +6535,7 @@ PRD path: ${wf.prdPath}
       - MANUAL: Requires human verification (e.g., real LLM output quality, visual conformance, app icon appearance)
    d. **For MANUAL ACs, verify an EVIDENCE ARTIFACT exists**: every AC marked MANUAL in your matrix MUST cite a concrete file path in its Evidence column (e.g. \`docs/pr-evidence/PRD-001-ios-scaffolding/visual/today-screen.png\`, \`docs/pr-evidence/PRD-001-ios-scaffolding.md#fonts\`). **Every evidence path MUST be FULLY QUALIFIED — no \`...\` ellipsis, no \`<PRD>\` placeholder, no relative shorthand.** Write the same full path on every row even when it gets repetitive — the approval gate file-exists-checks each cited path literally, and a row with \`docs/pr-evidence/.../visual/foo.png\` will be rejected as a missing artifact even when the real file is present. You MUST verify each cited file exists in the worktree via \`ls\` or \`fs\`. **Marking MANUAL as MET without a committed evidence artifact is a hard error.** If no artifact exists, classify which kind of MANUAL it is:
       - **Dev-captureable MANUAL** (simulator screenshot, font-output paste, byte-check log, runbook excerpt — anything the implementing agent could produce by running the code): mark UNTESTABLE and **Approved: no** with an Action Item for the implementing role to capture the evidence. This routes back through fix loop.
-      - **Owner-gated MANUAL** (Xcode IDE open, TestFlight upload, on-device install, home-screen photo after install, manual preview-deploy smoke): mark UNTESTABLE but keep **Approved: yes**, list it under \`### Owner action items\`. Owner closes the gate at device_testing / demo_review — fix loop cannot help.
+      - **Owner-gated MANUAL** (Xcode IDE open, TestFlight upload, on-device install, home-screen photo after install, manual preview-deploy smoke): mark UNTESTABLE but keep **Approved: yes**, list it under \`### Owner action items\` (one bullet per AC, starting with its id). Owner closes the gate at owner_verification / device_testing / demo_review — fix loop cannot help.
    e. If possible, run the feature flow end-to-end to verify it works
    f. Rate each AC:
       - MET: Code exists AND verified by automated test with no mocked external dependencies (or project doesn't use mocks) — OR for MANUAL gates, the cited evidence artifact exists and substantively supports the claim
@@ -6660,6 +6710,64 @@ This is round ${wf.round}.`,
       return res.json({ workflow: wf });
     }
 
+    // Owner verification — the human-at-the-machine gate for owner-gated ACs
+    // (desktop projects insert it after final_review via workflow.execution.add).
+    // Checklist was materialized at entry (final_review approve). Approve is
+    // evidence-gated: every checklist AC must appear in a committed markdown
+    // file under docs/pr-evidence/<prd>/manual-verification/ — evidence is a
+    // gate artifact here, not a review-time opinion, which is what makes the
+    // AC-verifier-defers / final-reviewer-blocks dispute structurally
+    // impossible (finance-studio PRD-004). Skip and override stay available;
+    // both are the owner's explicit, logged call.
+    if (wf.currentStep === 'owner_verification' && (action === 'approve' || action === 'skip')) {
+      if (action === 'approve') {
+        const overrideRequested = body?.override === true || body?.forceApprove === true;
+        const checklist = (wf.steps.owner_verification || {}).checklist || [];
+        if (checklist.length > 0 && !overrideRequested) {
+          const prdBase = wf.prdPath ? path.basename(wf.prdPath, '.md') : null;
+          const evidenceDir = prdBase ? path.join(docsPath, 'pr-evidence', prdBase, 'manual-verification') : null;
+          let evidenceText = '';
+          try {
+            if (evidenceDir && fs.existsSync(evidenceDir)) {
+              for (const f of fs.readdirSync(evidenceDir)) {
+                if (f.endsWith('.md')) evidenceText += fs.readFileSync(path.join(evidenceDir, f), 'utf8') + '\n';
+              }
+            }
+          } catch (_) {}
+          const missing = ownerVerificationMissing(checklist, evidenceText);
+          if (missing.length > 0) {
+            return res.status(400).json({
+              error: `Cannot approve owner verification: ${missing.length} owner-gated AC(s) have no committed evidence under docs/pr-evidence/${prdBase || '<prd>'}/manual-verification/. Run the checks, record each AC's result in a markdown file there (PASS with what you observed, or NOT RUN with why), commit, and retry. To bypass, retry with {"override": true}.\n\nMissing:\n${missing.map(m => `  - ${m.ac}: ${m.text}`).join('\n')}`,
+              missing,
+              canOverride: true,
+            });
+          }
+        }
+        if (overrideRequested) {
+          wf.steps.owner_verification.overrides = (wf.steps.owner_verification.overrides || []).concat({
+            at: new Date().toISOString(), step: 'owner_verification', round: wf.round || 1,
+            reason: body.note || 'operator override of owner-verification evidence gate',
+          });
+          console.log(`[workflow] owner_verification operator override: round=${wf.round}`);
+        }
+      }
+      wf.steps.owner_verification.status = action === 'skip' ? 'skipped' : 'completed';
+      const execSteps = (config.workflow && config.workflow.execution) || [];
+      const ovIdx = execSteps.indexOf('owner_verification');
+      const nextStep = (ovIdx >= 0 && ovIdx < execSteps.length - 1)
+        ? execSteps[ovIdx + 1]
+        : 'demo_review';
+      wf.steps[nextStep] = { ...(wf.steps[nextStep] || {}), status: 'pending', agents: [] };
+      wf.currentStep = nextStep;
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf, needsAdvance: true });
+    }
+    if (wf.currentStep === 'owner_verification' && action === 'send_to_devs') {
+      const ovNotes = notes || 'Owner verification surfaced issues — see user notes.';
+      launchFixPlan(wf, 'owner_verification', ovNotes, '', prdId);
+      return res.json({ workflow: wf });
+    }
+
     // Demo review step — owner reviews the running app before merge (optional, skippable)
     if (wf.currentStep === 'demo_review' && (action === 'approve' || action === 'skip')) {
       wf.steps.demo_review.status = action === 'skip' ? 'skipped' : 'completed';
@@ -6719,7 +6827,9 @@ Use the /code-review skill at ${frEffort} effort (its multi-angle finder→verif
 8. **Spec conformance** — every AC actually satisfied across all its variants, not just demoed on the happy path.
 
 ## SCOPE
-Review the change for this PRD. Do not raise pre-existing issues outside the PRD's blast radius, and respect the PRD's "Out of scope" section. Be conservative labeling BLOCKING, but do not suppress a real correctness/spec-violation finding to be polite.
+Review the change for this PRD. Do not raise pre-existing issues outside the PRD's blast radius, and respect the PRD's "Out of scope" section. Be conservative labeling BLOCKING, but do not suppress a real correctness/spec-violation finding to be polite.${((config.workflow && config.workflow.execution) || []).includes('owner_verification') ? `
+
+**Owner-gated ACs close DOWNSTREAM, not here.** This project's execution flow has an \`owner_verification\` step after you: ACs that need a human at the machine (Dock launch, native OS dialogs, DevTools probes on the running packaged app) are verified there, evidence-gated by the engine — the merge is blocked until the owner commits evidence for every AC on the checklist. So absent owner-execution evidence is NOT a blocking finding for you. What you DO verify: the AC verifier's \`### Owner action items\` section exists and covers every owner-gated AC — a missing or incomplete checklist IS blocking, because it is what feeds that gate.` : ''}
 
 ## FEEDBACK FORMAT — MANDATORY (machine-parsed)
 
@@ -6749,9 +6859,27 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
       // presets that have it, merge_to_main for api-only (no demo gate).
       const execSteps = (config.workflow && config.workflow.execution) || [];
       const frIdx = execSteps.indexOf('final_review');
-      const nextStep = (frIdx >= 0 && frIdx < execSteps.length - 1)
+      let nextStep = (frIdx >= 0 && frIdx < execSteps.length - 1)
         ? execSteps[frIdx + 1]
         : 'demo_review';
+      // Entering owner_verification: materialize the checklist from the AC
+      // verifier's `### Owner action items` once, at entry. No owner-gated
+      // ACs ⇒ auto-skip — the step only ever surfaces when there is something
+      // for a human to do, so non-desktop PRDs see zero added friction.
+      if (nextStep === 'owner_verification') {
+        const acFb = ((wf.steps.ac_verification || {}).agents || []).map(a => a.feedback || '').join('\n');
+        const checklist = extractOwnerChecklist(acFb);
+        if (checklist.length === 0) {
+          wf.steps.owner_verification = { status: 'skipped', agents: [], checklist: [], skipReason: 'no owner-gated ACs in the AC verification matrix' };
+          const ovIdx = execSteps.indexOf('owner_verification');
+          nextStep = (ovIdx >= 0 && ovIdx < execSteps.length - 1) ? execSteps[ovIdx + 1] : 'demo_review';
+        } else {
+          wf.steps.owner_verification = { status: 'pending', agents: [], checklist };
+          wf.currentStep = 'owner_verification';
+          state.saveWorkflow(wf);
+          return res.json({ workflow: wf });
+        }
+      }
       wf.steps[nextStep] = { ...(wf.steps[nextStep] || {}), status: 'pending', agents: [] };
       wf.currentStep = nextStep;
       state.saveWorkflow(wf);
@@ -7803,4 +7931,6 @@ module.exports = {
   markPrdDoneContent,
   collectMissingAcArtifacts,
   qaStrictGateVerdict,
+  extractOwnerChecklist,
+  ownerVerificationMissing,
 };
