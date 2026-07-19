@@ -193,6 +193,74 @@ function buildBugfixTask(id, item, role) {
   };
 }
 
+// Scan an AC verifier's matrix for MET rows whose cited evidence doesn't hold
+// up, and return [{ ac, path }] for each failure. Pure apart from the injected
+// `exists` probe — exported so the citation parsing can be unit-tested without
+// a workflow or a filesystem.
+//
+// Two rules, matching the gate's intent:
+//   - MANUAL-only + MET   → every cited path must resolve on disk. There's no
+//                           test backing the claim, so the artifact IS the proof.
+//                           (AUTOMATED+MANUAL hybrids are exempt — the automated
+//                           test is load-bearing, the manual layer supplementary.)
+//   - AUTOMATED + MET     → under `strict`, must cite a test name or a file path,
+//                           catching the "tests pass so the AC is met" cop-out.
+// Rows that aren't MET (UNMET/PARTIAL/UNTESTABLE/…) are never gated here.
+function collectMissingAcArtifacts(acFb, { projectRoot, strict = false, exists }) {
+  const missing = [];
+  // Match matrix rows: `| <id> | <desc> | <status> | <type> | <evidence> |`
+  const rowRe = /^\|\s*(AC-[\w.]+|US-[\w.]+)\s*\|[^|]*\|\s*(MET|PARTIAL|UNMET|UNTESTABLE|MOCK-ONLY|AT-RISK)\s*\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|/gm;
+  // Path candidates inside the evidence column — backticked or bare, ending in
+  // a file extension or a fragment. The char class must exclude the punctuation
+  // that separates or wraps paths in prose: verifiers routinely cite several
+  // artifacts as `a.txt, b.txt, c.txt`, and a class that swallows the comma
+  // stats `a.txt,` → ENOENT → a real, committed artifact reported missing.
+  // (Observed on finance-studio PRD-004 AC-1: all four files were committed,
+  // but only the last — the one with no trailing comma — resolved, so the gate
+  // blocked approval on three phantom paths and auto-advance stalled.)
+  const pathRe = /`?(docs\/pr-evidence\/[^\s`)\],;]+|docs\/[A-Za-z0-9_\/.\-]+\.(?:md|png|jpg|jpeg|svg|txt|html|json))`?/g;
+  // Test-name patterns the verifier might cite as evidence (loose match —
+  // covers `Suite.testName`, `Suite/testName`, `testFooBar()` etc.).
+  const testNameRe = /\b[A-Z][A-Za-z0-9_]*(?:Tests?|Suite|Spec)[\/.][a-zA-Z_][\w]*\b|\btest[A-Z][\w]*\b/;
+
+  for (const m of acFb.matchAll(rowRe)) {
+    const id = m[1];
+    const status = m[2].toUpperCase();
+    const type = m[3].toUpperCase();
+    const evidence = m[4];
+    if (status !== 'MET') continue;
+    const isManual = /MANUAL/.test(type);
+    const isAutomated = /AUTOMATED/.test(type);
+
+    if (isManual && !isAutomated) {
+      let foundAny = false;
+      for (const p of evidence.matchAll(pathRe)) {
+        // Strip a trailing sentence period the char class can't exclude (an
+        // extension needs the dot, so `.` stays legal mid-path).
+        const rel = p[1].split('#')[0].trim().replace(/\.+$/, '');
+        const abs = path.isAbsolute(rel) ? rel : path.join(projectRoot, rel);
+        if (exists(abs)) foundAny = true;
+        else missing.push({ ac: id, path: rel });
+      }
+      if (!foundAny && !/(docs\/pr-evidence|\.png|\.jpg|\.md|\.html|\.txt|\.json)/.test(evidence)) {
+        missing.push({ ac: id, path: '(no path cited)' });
+      }
+      continue;
+    }
+
+    if (strict && isAutomated) {
+      const hasPath = pathRe.test(evidence);
+      const hasTest = testNameRe.test(evidence);
+      if (!hasPath && !hasTest) {
+        missing.push({ ac: id, path: '(strict mode: AUTOMATED row cites no test name or file path in evidence column)' });
+      }
+      // Reset regex state — sticky (g flag) and would skip rows otherwise.
+      pathRe.lastIndex = 0;
+    }
+  }
+  return missing;
+}
+
 function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   const router = express.Router();
   const { docsPath, projectRoot, worktreesPath, logsPath } = config;
@@ -6472,56 +6540,13 @@ This is round ${wf.round}.`,
       //   ac_verification:
       //     strict: true
       const acStrict = (config.ac_verification && config.ac_verification.strict) === true;
-      const missingArtifacts = [];
-      if (acFb.trim() && !overrideRequested) {
-        // Match matrix rows: `| <id> | <desc> | <status> | <type> | <evidence> |`
-        const rowRe = /^\|\s*(AC-[\w.]+|US-[\w.]+)\s*\|[^|]*\|\s*(MET|PARTIAL|UNMET|UNTESTABLE|MOCK-ONLY|AT-RISK)\s*\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|/gm;
-        // Path candidates inside the evidence column — backticked or bare, ending in a file extension or a fragment.
-        const pathRe = /`?(docs\/pr-evidence\/[^\s`)]+|docs\/[A-Za-z0-9_\/.\-]+\.(?:md|png|jpg|jpeg|svg|txt|html|json))`?/g;
-        // Test-name patterns the verifier might cite as evidence (loose match —
-        // covers `Suite.testName`, `Suite/testName`, `testFooBar()` etc.).
-        const testNameRe = /\b[A-Z][A-Za-z0-9_]*(?:Tests?|Suite|Spec)[\/.][a-zA-Z_][\w]*\b|\btest[A-Z][\w]*\b/;
-        for (const m of acFb.matchAll(rowRe)) {
-          const id = m[1];
-          const status = m[2].toUpperCase();
-          const type = m[3].toUpperCase();
-          const evidence = m[4];
-          if (status !== 'MET') continue;
-          const isManual = /MANUAL/.test(type);
-          const isAutomated = /AUTOMATED/.test(type);
-
-          // Existing behavior — MANUAL-only rows always require a real path.
-          // AUTOMATED+MANUAL hybrid is exempted (automated test is the load-
-          // bearing proof; manual layer is supplementary).
-          if (isManual && !isAutomated) {
-            let foundAny = false;
-            for (const p of evidence.matchAll(pathRe)) {
-              const rel = p[1].split('#')[0].trim();
-              const abs = path.isAbsolute(rel) ? rel : path.join(projectRoot, rel);
-              if (fs.existsSync(abs)) { foundAny = true; }
-              else { missingArtifacts.push({ ac: id, path: rel }); }
-            }
-            if (!foundAny && !/(docs\/pr-evidence|\.png|\.jpg|\.md|\.html|\.txt|\.json)/.test(evidence)) {
-              missingArtifacts.push({ ac: id, path: '(no path cited)' });
-            }
-            continue;
-          }
-
-          // PRD-003 strict mode: AUTOMATED+MET rows must cite a recognizable
-          // test reference in the evidence column. Catches the "tests pass so
-          // AC is met" cop-out where the verifier doesn't actually point at
-          // a test that exercises this AC's surface.
-          if (acStrict && isAutomated) {
-            const hasPath = pathRe.test(evidence);
-            const hasTest = testNameRe.test(evidence);
-            if (!hasPath && !hasTest) {
-              missingArtifacts.push({ ac: id, path: '(strict mode: AUTOMATED row cites no test name or file path in evidence column)' });
-            }
-            // Reset regex state — these are sticky (g flag) and would skip rows otherwise.
-            pathRe.lastIndex = 0;
-          }
-        }
-      }
+      const missingArtifacts = (acFb.trim() && !overrideRequested)
+        ? collectMissingAcArtifacts(acFb, {
+            projectRoot,
+            strict: acStrict,
+            exists: p => fs.existsSync(p),
+          })
+        : [];
       if (missingArtifacts.length > 0) {
         const missingList = missingArtifacts.map(m => `  - ${m.ac}: ${m.path}`).join('\n');
         return res.status(400).json({
@@ -7752,4 +7777,5 @@ module.exports = {
   resolveBuilderRole,
   buildBugfixTask,
   markPrdDoneContent,
+  collectMissingAcArtifacts,
 };
