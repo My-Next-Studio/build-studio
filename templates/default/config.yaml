@@ -156,16 +156,18 @@ worktree_env_files: []
 #   strict (default true): any failing test blocks approval (main is the
 #     zero-failing-tests baseline). Bypass one approval with
 #     {"action":"approve","override":true}; relax permanently with strict: false.
-#   honor_clean_approval (default false): when the QA agent certifies a clean
-#     verdict (Approved: yes + Blocking: 0 — it triaged every failure as
-#     non-blocking), the strict gate approves WITHOUT a manual override. Opt in
-#     for projects whose suites throw occasional environmental flakes the agent
-#     reliably triages (e.g. iOS XCUITests). Real regressions still block (the
-#     agent reports Blocking > 0). Trusts the agent's triage — leave off if you
+#   honor_clean_approval (default TRUE since 2026-07-19): when the QA agent
+#     certifies a clean verdict (Approved: yes + Blocking: 0 — it triaged every
+#     failure as non-blocking), the strict gate approves WITHOUT a manual
+#     override, and the bypass is recorded on the step. This matches the
+#     auto-advance tick, which has always honored the certified verdict — the
+#     old default-off gate contradicted it and stalled green runs on triaged
+#     flakes. Real regressions still block (the agent reports Approved: no /
+#     Blocking > 0, or failures with no certification). Set to false if you
 #     want a human to consciously accept every failure.
 # qa_validation:
 #   strict: true
-#   honor_clean_approval: false
+#   honor_clean_approval: true
 #
 # hygiene — mechanical pre-merge grep gate for test scaffolding leaked into
 #   production source. Runs at merge_for_review. BLOCKS the merge only on actual

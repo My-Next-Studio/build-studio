@@ -193,6 +193,57 @@ function buildBugfixTask(id, item, role) {
   };
 }
 
+// Pure verdict for the qa_validation strict gate — exported for unit tests;
+// the approve handler applies its result to the response/state.
+//
+// Strict mode (default on): any failing test in the QA feedback blocks
+// approval — UNLESS the QA agent certified a clean verdict (Approved: yes +
+// Blocking: 0, i.e. it triaged every failure as non-blocking: pre-existing /
+// flaky / out-of-scope) and honor_clean_approval is not disabled.
+//
+// honor_clean_approval DEFAULTS ON (owner decision 2026-07-19). It began as
+// opt-in ("don't trust the agent's pre-existing classification", 2026-05-25),
+// but the auto-advance tick has always honored the certified verdict
+// unconditionally, so the default-off gate contradicted the default-on tick:
+// tick fires approve, gate 400s, step pauses after the rejection cap. Three
+// green-with-triaged-failures runs stalled that way (example-ios PRD-026,
+// example-app PRD-025, launch-studio PRD-016) and every one was resolved by a
+// manual override; the block never caught a real regression. Uncertified
+// failures (Approved: no, Blocking > 0, or missing markers) still block —
+// that is the strict property that matters. Opt out with
+// qa_validation.honor_clean_approval: false to require a conscious operator
+// override for every failure again.
+//
+// Returns { blocked, failingCount, cleanApproval, honoredBypass }:
+//   blocked       → reject the approval (strict, failures, no bypass)
+//   honoredBypass → approval proceeds on the agent's certified verdict DESPITE
+//                   a non-zero failing count (record it on the step; a clean
+//                   zero-failure run is NOT a bypass and must not log one)
+function qaStrictGateVerdict(qaFeedback, config, operatorOverride) {
+  const strict = (config.qa_validation && config.qa_validation.strict) !== false;
+  const honorCleanApproval = !(config.qa_validation && config.qa_validation.honor_clean_approval === false);
+  const cleanApproval = /\*\*Approved:\*\*\s*yes\b/i.test(qaFeedback) && /\*\*Blocking:\*\*\s*0\b/i.test(qaFeedback);
+  // Negative lookbehind `(?<![\w-])` prevents a PRD number from being read
+  // as a failure count: without it, "0 PRD-080 failures" matches "080 failures"
+  // → parseInt("080") = 80, blocking a clean run. The digit run must not be
+  // preceded by a word char or hyphen (i.e. not the tail of "PRD-080").
+  const failMatch = qaFeedback.match(/(?<![\w-])(\d+)\s+(?:failed|failures)\b/i)
+    || qaFeedback.match(/\*\*Failures:\*\*\s*(\d+)/i)
+    || qaFeedback.match(/\((\d+)\s+failed/i);
+  const failingCount = failMatch ? parseInt(failMatch[1]) : 0;
+
+  if (!strict || failingCount === 0) {
+    return { blocked: false, failingCount, cleanApproval, honoredBypass: false };
+  }
+  if (operatorOverride) {
+    return { blocked: false, failingCount, cleanApproval, honoredBypass: false };
+  }
+  if (honorCleanApproval && cleanApproval) {
+    return { blocked: false, failingCount, cleanApproval, honoredBypass: true };
+  }
+  return { blocked: true, failingCount, cleanApproval, honoredBypass: false };
+}
+
 // Scan an AC verifier's matrix for MET rows whose cited evidence doesn't hold
 // up, and return [{ ac, path }] for each failure. Pure apart from the injected
 // `exists` probe — exported so the citation parsing can be unit-tested without
@@ -6348,50 +6399,23 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
         }
       }
 
-      // PRD-002: STRICT-MODE GATE — any failing tests block approval.
-      // Owner's precondition (2026-05-25): `main` is kept clean (zero failing
-      // tests). Therefore any failure in the review branch is, by definition,
-      // a regression introduced by this PRD. Don't trust the agent's
-      // "pre-existing failure" classification — the agent has no way to
-      // verify it without rerunning on main, which we're not doing because
-      // the precondition makes it unnecessary.
-      //
-      // Override: operator can pass `{"action":"approve","override":true}`
-      // to ship anyway (e.g. known infra-level flakes). Override is logged.
-      // Opt-in (per project): honor the QA agent's certified-clean verdict.
-      // When qa_validation.honor_clean_approval is true AND the agent gave a
-      // clean approval (Approved: yes + Blocking: 0 — i.e. it triaged every
-      // failure as non-blocking: pre-existing / flaky / out-of-scope), the
-      // strict gate treats the run as approvable without a manual override.
-      // Mirrors the auto-advance tick's cleanApproval logic so the two agree
-      // (they disagreeing is what stalled example-app — tick won't send-to-devs,
-      // gate won't approve). Default OFF preserves strict's "operator must
-      // consciously override any failure" behavior everywhere else.
-      const honorCleanApproval = config.qa_validation && config.qa_validation.honor_clean_approval === true;
-      const cleanApproval = /\*\*Approved:\*\*\s*yes\b/i.test(qaFeedback) && /\*\*Blocking:\*\*\s*0\b/i.test(qaFeedback);
-      const strictBypass = operatorOverride || (honorCleanApproval && cleanApproval);
-      if (qaStrict && !strictBypass) {
-        // Negative lookbehind `(?<![\w-])` prevents a PRD number from being read
-        // as a failure count: without it, "0 PRD-080 failures" matches "080 failures"
-        // → parseInt("080") = 80, blocking a clean run. The digit run must not be
-        // preceded by a word char or hyphen (i.e. not the tail of "PRD-080").
-        const failMatch = qaFeedback.match(/(?<![\w-])(\d+)\s+(?:failed|failures)\b/i)
-          || qaFeedback.match(/\*\*Failures:\*\*\s*(\d+)/i)
-          || qaFeedback.match(/\((\d+)\s+failed/i);
-        const failingCount = failMatch ? parseInt(failMatch[1]) : 0;
-        if (failingCount > 0) {
-          return res.status(400).json({
-            error: `Cannot approve QA: ${failingCount} test(s) failed. Project is configured with qa_validation.strict=true and \`main\` is the precondition baseline (zero failing tests on main). All test failures must be addressed before merge. To bypass for this specific approval (e.g. known flake), use {"action":"approve","override":true}. To permanently relax, set qa_validation.strict: false in .build-studio/config.yaml.`,
-            failingCount,
-            strict: true,
-          });
-        }
+      // PRD-002: STRICT-MODE GATE — see qaStrictGateVerdict (module scope) for
+      // the full policy, its history, and why honor_clean_approval defaults ON
+      // (owner decision 2026-07-19: the gate must agree with the auto-advance
+      // tick, which has always honored the certified-clean verdict).
+      const gate = qaStrictGateVerdict(qaFeedback, config, operatorOverride);
+      if (gate.blocked) {
+        return res.status(400).json({
+          error: `Cannot approve QA: ${gate.failingCount} test(s) failed and the QA agent did not certify a clean verdict (Approved: yes + Blocking: 0). Project is configured with qa_validation.strict=true and \`main\` is the precondition baseline (zero failing tests on main). All test failures must be addressed before merge. To bypass for this specific approval (e.g. known flake), use {"action":"approve","override":true}. To permanently relax, set qa_validation.strict: false in .build-studio/config.yaml.`,
+          failingCount: gate.failingCount,
+          strict: true,
+        });
       }
-      if (qaStrict && honorCleanApproval && cleanApproval && !operatorOverride) {
-        console.log(`[workflow] qa_validation honor_clean_approval: approving on agent's clean verdict (Approved:yes + Blocking:0) despite failing-test count, round=${wf.round}`);
+      if (gate.honoredBypass) {
+        console.log(`[workflow] qa_validation honor_clean_approval: approving on agent's clean verdict (Approved:yes + Blocking:0) despite ${gate.failingCount} failing test(s), round=${wf.round}`);
         wf.steps.qa_validation.overrides = (wf.steps.qa_validation.overrides || []).concat({
           at: new Date().toISOString(), step: 'qa_validation', round: wf.round || 1,
-          reason: 'honor_clean_approval: QA certified Approved:yes + Blocking:0 (failures triaged non-blocking)',
+          reason: `honor_clean_approval: QA certified Approved:yes + Blocking:0 (${gate.failingCount} failing test(s) triaged non-blocking)`,
         });
       }
       if (qaStrict && operatorOverride) {
@@ -7778,4 +7802,5 @@ module.exports = {
   buildBugfixTask,
   markPrdDoneContent,
   collectMissingAcArtifacts,
+  qaStrictGateVerdict,
 };
