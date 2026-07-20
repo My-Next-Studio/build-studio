@@ -214,7 +214,13 @@ worktree_env_files: []
 #   Injection is capped and relevance-ranked; agents self-report which entries
 #   they applied (`**Learnings applied:**` in feedback), and entries injected
 #   30× without ever being applied are auto-archived to docs/learnings/_archive/.
+#   BUGFIX runs are different: instead of a WF retrospective, the curator runs a
+#   fault SLIP-THROUGH analysis (why the bug was introduced + which original
+#   gate missed it), and a clean fix run does NOT skip it — that's when the
+#   lesson is available. "No durable lesson" is a valid outcome. Disable with
+#   bugfix_slip_analysis: false (bugfix then follows the standard failures gate).
 # learnings:
 #   capture: failures    # failures (default) | always | off
+#   bugfix_slip_analysis: true   # fault slip-through analysis on bug fixes
 #   max_injected: 6      # Known Learnings entries per agent prompt
 #   max_entries_per_domain: 25

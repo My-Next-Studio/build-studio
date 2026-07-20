@@ -7384,9 +7384,17 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
       const hadFixWork = (wf.round || 1) > 1 || !!wf.steps.fix_plan || !!wf.steps.fix_execution || fixCycleCount > 0;
       const runSignal = { rounds: wf.round || 1, hadFixWork, fixCycleCount, overrideCount, hygieneTrips };
       const cleanRun = !hadFixWork && overrideCount === 0 && hygieneTrips === 0;
+      // Bugfix runs a fault SLIP-THROUGH analysis (why the bug was introduced +
+      // why the original PRD's gates missed it), NOT a WF-run retrospective. A
+      // clean fix run is the normal case and must NOT skip it — that's exactly
+      // when the slip lesson is available. Disable with
+      // learnings.bugfix_slip_analysis: false (then bugfix falls back to the
+      // standard failures-gated retrospective).
+      const isBugfix = wf.type === 'bugfix';
+      const bugfixSlip = isBugfix && !(config.learnings && config.learnings.bugfix_slip_analysis === false);
       if ((config.learnings && config.learnings.auto_capture === false)
           || captureMode === 'off'
-          || (captureMode === 'failures' && cleanRun)) {
+          || (captureMode === 'failures' && cleanRun && !bugfixSlip)) {
         wf.steps.capture_learnings.status = 'skipped';
         wf.steps.capture_learnings.skipReason = captureMode === 'failures' && cleanRun
           ? 'clean run (no fix rounds, overrides, or gate trips) — nothing signal-bearing to capture'
@@ -7414,6 +7422,63 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
       } catch {}
       const agentDashboardPath = path.join(__dirname, '../..');
       const logFile = path.join(config.tmpPath, 'logs', `workflow-${wf.id}.md`);
+
+      // ── Bugfix: fault slip-through analysis ──
+      if (bugfixSlip) {
+        const slipAgent = [{
+          role: 'Knowledge Curator', window: 'learnings', status: 'pending', reportFeedback: true,
+          instruction: `You are a Knowledge Curator running a FAULT SLIP-THROUGH ANALYSIS on a bug that was just fixed.
+
+**This is NOT a retrospective on the fix workflow.** The fix run went fine — that is not interesting. The interesting question is about the ORIGINAL defect: **why did this bug exist, and why did the gates that were supposed to catch it let it through?** The goal is to prevent the *class* of bug, not to praise the fix.
+
+Bug item: ${wf.prdPath}   (read it — description, repro, and fix design)
+Fix diff: run \`git diff ${wf.defaultBranch || 'main'}...HEAD\` to see exactly what changed. Use \`git log\`/\`git blame\` on the touched lines to find when and how the original code was introduced if it helps the analysis.
+
+## ANALYZE (write your reasoning in feedback, briefly)
+
+1. **Root cause — why was the bug introduced?** Classify the mistake, don't just restate the symptom: missing edge case / wrong assumption / unhandled error or state / contract drift between caller and callee / race or ordering / off-by-one / copy-paste divergence / etc.
+2. **Slip-through — which gate SHOULD have caught it, and why didn't it?** Be specific about the ORIGINAL PRD's gates:
+   - **Test coverage** — was there a missing test case that would have failed? (usually the answer for logic bugs)
+   - **Code review** — was there a review angle that would have flagged it? (contract drift, a whole-class-of-input miss)
+   - **AC verification** — was an acceptance criterion under-specified or unverified?
+   - Or was it **genuinely unforeseeable / environmental / a dependency change** — nobody's gate could reasonably have caught it.
+3. **Durable lesson — is there one?** Only if there is a GENERALIZABLE pattern that would prevent this whole class of bug: a test you should always write for this kind of code, a review angle to add, a code idiom to prefer.
+
+## OUTPUT — 0 to 2 learnings; ZERO IS A FULLY VALID, COMMON OUTCOME
+
+Many bugs teach nothing durable — a one-off typo, an unforeseeable dependency break, a genuinely novel edge. When that's the case, write NO learning file and say so plainly in your feedback: state the root cause, the slip point, and "no durable/generalizable lesson — not capturing." Do not manufacture a learning to look productive.
+
+Write a learning ONLY when the lesson is reusable AND cross-project. Classification:
+- **CROSS-PROJECT** (→ a learning file): a pattern that applies to any project on similar tech (e.g. "always test the retry path after a partial-commit failure with the target repointed", "cross-product state must be keyed on productId, not draftId").
+- **PROJECT-SPECIFIC** (→ NOT a learning): this project's paths, schema, config, or infra. Mention it in feedback and, if the repo has ARCHITECTURE.md, propose the exact edit there instead.
+
+## FILE FORMAT (only if you are writing a learning)
+
+\`docs/learnings/<category>/<slug>.md\` — categories: architecture, backend, frontend, devops, qa, security, workflow.
+\`\`\`
+---
+title: "<the reusable lesson, phrased as guidance — not 'we had a bug'>"
+date: <YYYY-MM-DD>
+severity: high | medium | low
+tags: [3-8 lowercase keywords]
+component: <testing | api | rendering | auth | database | general | ...>
+evidence: "${wf.input} — <the slip point, e.g. 'no test for repointed-target retry; original code_review missed the contract drift'>"
+---
+
+1-3 sentences: the root cause, the slip point (which gate should catch it next time), and the concrete prevention (the test/pattern/angle).
+\`\`\`
+Slug from the title (lowercase, hyphens, ≤60 chars). Write BOTH copies: \`docs/learnings/<category>/<slug>.md\` (project) AND \`${agentDashboardPath}/docs/learnings/<category>/<slug>.md\` (global, so other projects benefit).
+
+## RULES
+- Merge before create: scan existing docs/learnings/ first; UPDATE an overlapping entry (sharpen it, add this evidence) instead of duplicating.
+- The lesson must be about PREVENTING THE CLASS, not this one instance.
+- Commit your changes (even a zero-learning run: nothing to commit is fine — just report the analysis). ${COMMIT_ON_CURRENT_BRANCH}${promotionHint}`,
+        }];
+        wf.steps.capture_learnings = { status: 'running', agents: launchWorkflowAgents(wf, slipAgent, { useWorktrees: false }) };
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf });
+      }
+
       const captureAgent = [{
         role: 'Knowledge Curator', window: 'learnings', status: 'pending', reportFeedback: true,
         instruction: `You are a Knowledge Curator. Review the completed workflow and extract reusable learnings.
