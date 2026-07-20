@@ -1358,6 +1358,189 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     state.saveWorkflow(wf);
   }
 
+  // Detect the project's backlog id prefix from existing item files (e.g. LS,
+  // FS). Falls back to a 2-letter uppercase code from the project dir name.
+  // Backlog helpers join projectRoot + a RELATIVE docs path; config.docsPath is
+  // absolute (path.resolve'd), which path.join would nest into garbage. Always
+  // pass this relative form to backlog.js helpers.
+  const docsRel = config.docs_path || path.relative(projectRoot, docsPath) || 'docs';
+  function detectBacklogPrefix() {
+    try {
+      const dir = require('../backlog').backlogDir(projectRoot, docsRel);
+      const counts = {};
+      for (const f of fs.readdirSync(dir)) {
+        const m = f.match(/^([A-Z]{2,5})-\d{1,5}\.md$/);
+        if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
+      }
+      const top = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+      if (top) return top;
+    } catch (_) {}
+    const base = path.basename(projectRoot).replace(/[^a-zA-Z]/g, '');
+    return (base.slice(0, 2) || 'BL').toUpperCase();
+  }
+
+  // File-findings proposer: reads a review step's findings and drafts a
+  // grouped set of backlog items into a staging dir — it does NOT touch
+  // docs/backlog or project-state.md and does NOT commit. The owner reviews
+  // the proposal in the hub; commit_findings then files the approved items
+  // deterministically (two-place contract) via the engine. Aggressive grouping
+  // is the point: the owner does not want 15 findings to become 15 items, each
+  // dragging its own bugfix-workflow regression cycle.
+  const FINDINGS_PROPOSAL_DIR = path.join(projectRoot, 'tmp', 'finding-proposals');
+  function launchFindingsProposal(wf, sourceStep, note) {
+    const feedback = ((wf.steps[sourceStep] || {}).agents || [])
+      .filter(a => a.feedback).map(a => a.feedback).join('\n\n---\n\n');
+    const prefix = detectBacklogPrefix();
+    let releases = [];
+    try {
+      const psFile = path.join(docsPath, 'project-state.md');
+      const ps = fs.existsSync(psFile) ? fs.readFileSync(psFile, 'utf8') : '';
+      releases = require('../backlog').parseBacklogSection(ps).map(g => g.release);
+    } catch (_) {}
+    // Clean the staging dir so a re-propose never mixes with a stale run.
+    try { fs.rmSync(FINDINGS_PROPOSAL_DIR, { recursive: true, force: true }); } catch (_) {}
+    fs.mkdirSync(FINDINGS_PROPOSAL_DIR, { recursive: true });
+
+    const stagingRel = path.relative(projectRoot, FINDINGS_PROPOSAL_DIR);
+    const agent = [{
+      role: 'Findings Filer', window: 'file-findings', status: 'pending', reportFeedback: true,
+      instruction: `## YOU FILE REVIEW FINDINGS AS BACKLOG ITEMS — YOU DO NOT FIX ANYTHING
+
+A review step ("${sourceStep}") produced findings. Your job: turn them into the
+SMALLEST sensible set of self-contained backlog items, staged for the owner's
+approval. You write ONLY into \`${stagingRel}/\`. You do NOT edit docs/backlog/,
+you do NOT edit docs/project-state.md, you do NOT commit, you do NOT fix code.
+
+## GROUPING — BE AGGRESSIVE (this is the whole point)
+
+The owner does not want one item per finding. Minimize item count:
+- **Same locus / same subsystem** → one item (e.g. a BLOCKING and a MEDIUM both in publish.ts step-7 → one bug).
+- **Small, unrelated one-liners** → combine into ONE "cheap sweep" item EVEN IF unrelated, so they ride a single bugfix workflow and a single regression cycle. The owner explicitly does not want to fix a one-line bug, wait for regression, then fix another one-line bug and wait again.
+- Give a **substantial** finding its own item only when its fix + test genuinely needs independent review (most BLOCKING findings; anything large or risky).
+- Never merge two things that truly need independent verification just to cut the count.
+
+Aim: 15 findings → a handful of items, not 15.
+
+## TYPE — Bug vs Task
+
+- **Bug**: a defect in behavior that shipped or should work — needs repro test + fix + regression.
+- **Task**: non-defect work — refactor, dead-code removal, doc fix, test-only hardening, hygiene.
+- A finding that actually needs a PRD (a real feature, multi-surface) → a **Task** titled "Scope PRD for <X>". Findings rarely need this.
+
+## SELF-CONTAINED BODIES (mandatory)
+
+Whoever picks up the item sees only the file — never this review. Each item body MUST have:
+- A one-paragraph statement of the problem.
+- **Every absorbed finding as its own \`### <SEVERITY> — <short label>\` subsection**, carrying that finding's failure scenario + \`file:line\` anchors. VERIFY each anchor against the CURRENT source before writing it; fix stale line numbers.
+- A **Fix design** section (concrete, per the review's suggested direction).
+- **Acceptance** bullets, including the regression test each bug needs.
+
+## OUTPUT — write these files, nothing else
+
+For each proposed item, in \`${stagingRel}/\`:
+1. \`<tempId>.md\` — the item BODY ONLY (markdown; NO YAML frontmatter — the engine adds it). tempId = a short slug like \`a\`, \`b\`, \`sweep\`.
+2. Then write \`${stagingRel}/manifest.json\` LAST (its presence signals you are done):
+\`\`\`json
+{
+  "sourceStep": "${sourceStep}",
+  "prefix": "${prefix}",
+  "summary": "<N> findings (<b> blocking, <m> medium, <l> low) → <k> items",
+  "items": [
+    { "tempId": "a", "title": "<concise, specific>", "type": "Bug", "release": "<one of the releases below>",
+      "absorbs": ["BLOCKING: <label>", "MEDIUM: <label>"], "bodyFile": "a.md", "rationale": "<why grouped this way>" }
+  ]
+}
+\`\`\`
+
+## PROJECT FACTS
+
+- Backlog id prefix: **${prefix}** (the engine assigns real numbers on commit — your tempIds are placeholders).
+- Existing release headings (pick the best fit per item; bugs usually go to a "Bugs — fix next" heading if present, else the earliest active release):
+${releases.length ? releases.map(r => `  - ${r}`).join('\n') : '  (none parsed — use "Bugs — fix next")'}
+- All items are filed with status Backlog and prd: null (the engine sets these).
+
+## FINDINGS FROM ${sourceStep}
+
+${feedback || '(no findings feedback captured — if truly empty, write a manifest with an empty items array and a note)'}
+${note ? `\n## OWNER REGROUPING INSTRUCTIONS (this is a re-proposal — honor these)\n\n${note}\n` : ''}
+
+When done, your final message: one line — "Staged <k> items from <N> findings." The manifest is what the owner reads.
+
+${EFFICIENCY_INSTRUCTIONS}`,
+    }];
+    wf.findingsProposal = { status: 'running', sourceStep, dir: FINDINGS_PROPOSAL_DIR, agentWindow: 'file-findings', startedAt: new Date().toISOString(), note: note || null };
+    // Launch in a dedicated window; keep it OFF wf.steps so it never disturbs
+    // the source step's own agents / completion detection.
+    launchWorkflowAgents(wf, agent, { useWorktrees: false, stepKey: sourceStep });
+    state.saveWorkflow(wf);
+  }
+
+  // Read the staged proposal (manifest + each item body). Returns null if the
+  // agent hasn't written the manifest yet (still working or never launched).
+  function readFindingsProposal() {
+    try {
+      const manifestPath = path.join(FINDINGS_PROPOSAL_DIR, 'manifest.json');
+      if (!fs.existsSync(manifestPath)) return null;
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const items = (manifest.items || []).map(it => {
+        let body = '';
+        try { body = fs.readFileSync(path.join(FINDINGS_PROPOSAL_DIR, it.bodyFile || `${it.tempId}.md`), 'utf8'); } catch (_) {}
+        return { ...it, body };
+      });
+      return { ...manifest, items };
+    } catch (_) { return null; }
+  }
+
+  // Deterministically file approved proposal items: allocate a real id, write
+  // the item file (frontmatter + body), add the marker line under the chosen
+  // release heading (creating it if absent), then commit all of it scoped.
+  // Returns { filed: [{id, title}], error? }. The engine owns this — never the
+  // agent — so the two-place backlog contract can't be half-applied.
+  function commitFindingsItems(approvedItems) {
+    const bl = require('../backlog');
+    // Prefix is a deterministic project fact — always derive it server-side.
+    // Never trust the agent's manifest value (it invented "LA" for a project
+    // whose 65 items are all "LS").
+    const prefix = detectBacklogPrefix();
+    const psFile = path.join(projectRoot, docsRel, 'project-state.md');
+    if (!fs.existsSync(psFile)) return { filed: [], error: 'project-state.md not found' };
+    const filed = [];
+    const today = new Date().toISOString().slice(0, 10);
+    for (const it of approvedItems) {
+      const id = bl.nextItemId(projectRoot, docsRel, prefix);
+      const type = ['Bug', 'Task', 'Feature', 'Chore'].includes(it.type) ? it.type : 'Task';
+      const release = it.release || 'Bugs — fix next';
+      bl.writeItem(projectRoot, docsRel, {
+        id, title: it.title || id, type, status: 'Backlog',
+        release, created: `${today}T00:00:00.000Z`, prd: null,
+        body: (it.body || '').trim() + '\n',
+      });
+      // Splice the marker line: find/create the release group, append the id.
+      const groups = bl.parseBacklogSection(fs.readFileSync(psFile, 'utf8'));
+      let group = groups.find(g => g.release === release);
+      if (!group) { group = { release, items: [] }; groups.unshift(group); }
+      if (!group.items.includes(id)) group.items.push(id);
+      bl.writeBacklogSection(projectRoot, docsRel, groups);
+      filed.push({ id, title: it.title || id });
+    }
+    if (filed.length === 0) return { filed: [] };
+    // Scoped commit — item files + project-state.md only, race-safe against
+    // any concurrently-staging agent.
+    try {
+      const { execFileSync } = require('child_process');
+      const paths = filed.map(f => path.join(path.relative(projectRoot, bl.backlogDir(projectRoot, docsRel)), `${f.id}.md`));
+      paths.push(path.relative(projectRoot, psFile));
+      execFileSync('git', ['add', ...paths], { cwd: projectRoot });
+      const idList = filed.map(f => f.id).join(', ');
+      execFileSync('git', ['commit', '-m',
+        `docs(backlog): file review findings as ${idList}\n\nFiled from a workflow review step via the file-findings button.\n\nCo-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`,
+        '--', ...paths], { cwd: projectRoot });
+    } catch (e) {
+      return { filed, error: `Items written but commit failed: ${e.stderr ? e.stderr.toString() : e.message}` };
+    }
+    return { filed };
+  }
+
   // Launcher artifacts (start-*.sh, prompt-*.txt, goal-*.txt) are written into
   // the agent's working directory, which is a git checkout — agents have
   // committed them by accident (EX-157's builder committed its goal file, then
@@ -3404,6 +3587,18 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     }
   }
 
+  // Staged findings proposal for the hub's file-findings review-button flow.
+  // { status: 'none'|'running'|'ready'|'filed', proposal?, filed? }
+  router.get('/workflow/finding-proposal', (req, res) => {
+    const wf = state.loadWorkflow();
+    const fp = wf && wf.findingsProposal;
+    const proposal = readFindingsProposal();
+    if (proposal) return res.json({ status: 'ready', proposal });
+    if (fp && fp.status === 'filed') return res.json({ status: 'filed', filed: fp.filed || [] });
+    if (fp && fp.status === 'running') return res.json({ status: 'running', sourceStep: fp.sourceStep, agentWindow: fp.agentWindow });
+    return res.json({ status: 'none' });
+  });
+
   router.post('/workflow/advance', (req, res) => {
     const { action, notes } = req.body;
     const wf = state.loadWorkflow();
@@ -5043,6 +5238,42 @@ Fix only the issues raised. Commit your changes.`,
   // --- Execution workflow ---
   function handleExecutionAdvance(wf, action, notes, res, body = {}) {
     const prdId = wf.input.replace(/\s+/g, '-');
+
+    // ── File review findings as backlog items (step-agnostic side action) ──
+    // Runs alongside any review step without advancing the workflow — the owner
+    // still separately approves / sends back the step. See launchFindingsProposal.
+    if (action === 'propose_findings') {
+      const sourceStep = body.sourceStep || wf.currentStep;
+      launchFindingsProposal(wf, sourceStep, body.note || notes || null);
+      return res.json({ workflow: wf });
+    }
+    if (action === 'discard_findings') {
+      try { fs.rmSync(FINDINGS_PROPOSAL_DIR, { recursive: true, force: true }); } catch (_) {}
+      delete wf.findingsProposal;
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf });
+    }
+    if (action === 'commit_findings') {
+      const proposal = readFindingsProposal();
+      if (!proposal) return res.status(400).json({ error: 'No staged findings proposal to commit (the file-findings agent has not produced a manifest yet).' });
+      // body.items is the owner's approved/edited selection: [{ tempId, title?, type?, release? }].
+      // Absent → file the proposal as-is. Each entry maps to a staged item by tempId; owner
+      // edits to title/type/release override the manifest; unlisted tempIds are dropped.
+      const byTemp = Object.fromEntries(proposal.items.map(it => [it.tempId, it]));
+      const selection = Array.isArray(body.items) && body.items.length
+        ? body.items.map(sel => {
+            const base = byTemp[sel.tempId];
+            if (!base) return null;
+            return { ...base, prefix: proposal.prefix, title: sel.title || base.title, type: sel.type || base.type, release: sel.release || base.release, body: sel.body || base.body };
+          }).filter(Boolean)
+        : proposal.items.map(it => ({ ...it, prefix: proposal.prefix }));
+      const result = commitFindingsItems(selection);
+      if (result.error && result.filed.length === 0) return res.status(500).json({ error: result.error });
+      try { fs.rmSync(FINDINGS_PROPOSAL_DIR, { recursive: true, force: true }); } catch (_) {}
+      if (wf.findingsProposal) { wf.findingsProposal.status = 'filed'; wf.findingsProposal.filed = result.filed; }
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf, filed: result.filed, warning: result.error || undefined });
+    }
 
     if (wf.currentStep === 'qa_tests' && wf.steps.qa_tests.status === 'pending') {
       // qa_tests WRITES + commits pre-implementation tests (the approve gate below hard-

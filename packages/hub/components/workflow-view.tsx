@@ -10,6 +10,7 @@ import { CommitRibbon } from './commit-ribbon'
 import { AgentTerminal } from './agent-terminal'
 import { PathologyPanel, type PathologySignals } from './pathology-panel'
 import { FindingsChecklist, type Finding } from './findings-checklist'
+import { FindingsFiler } from './findings-filer'
 
 interface WorkflowAgent {
   role: string
@@ -1546,6 +1547,13 @@ function StepDetail({
           setNotes={setNotes}
           onAdvance={onAdvance}
         />
+      )}
+
+      {/* File-findings button: turn a review step's findings into grouped
+          backlog items. Findings that outlive the fix loop go to the backlog
+          (final_review no longer loops), so this is the closure path. */}
+      {isCurrentStep && allDone && ['final_review', 'code_review', 'security_audit'].includes(activeKey) && (
+        <FindingsFiler sourceStep={activeKey} />
       )}
     </div>
   )
