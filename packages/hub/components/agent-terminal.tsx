@@ -50,7 +50,30 @@ export function AgentTerminal({ agentWindow }: { agentWindow: string }) {
       const fitAddon = new FitAddon()
       term.loadAddon(fitAddon)
       term.open(containerRef.current)
-      fitAddon.fit()
+
+      // Re-fit and push the new size to the server. tmux sizes the agent's
+      // window to this client (window-size latest), so an over-count here
+      // leaves the live pane taller than the visible container — its bottom
+      // rows sit off-screen and the wheel can't reach them (xterm/tmux eat the
+      // wheel for copy-mode, so the outer container never scrolls). Fitting
+      // once right after open() is not enough: the JetBrains Mono webfont often
+      // loads AFTER that first measure, and the taller real glyph cell shrinks
+      // how many rows actually fit — but ResizeObserver only fires on container
+      // SIZE changes, never on a font swap, so the stale row count is never
+      // corrected. Re-fit on fonts.ready and next frame to catch both.
+      const applyFit = () => {
+        if (cancelled || !containerRef.current) return
+        try { fitAddon.fit() } catch { return }
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        }
+      }
+      applyFit()
+      requestAnimationFrame(applyFit)
+      // document.fonts may be absent in old runtimes; guard it.
+      if (typeof document !== 'undefined' && document.fonts?.ready) {
+        document.fonts.ready.then(applyFit).catch(() => {})
+      }
 
       const wsUrl = `${baseUrl.replace('http', 'ws')}/?agentWindow=${encodeURIComponent(agentWindow)}`
       const ws = new WebSocket(wsUrl)
@@ -58,7 +81,10 @@ export function AgentTerminal({ agentWindow }: { agentWindow: string }) {
 
       ws.onopen = () => {
         setStatus('connected')
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        // Fit again now that the socket is open — the earlier fits may have run
+        // before the container settled, and onopen is the first moment a resize
+        // can actually reach the pane.
+        applyFit()
       }
 
       ws.onmessage = (event) => {
@@ -78,12 +104,7 @@ export function AgentTerminal({ agentWindow }: { agentWindow: string }) {
         }
       })
 
-      const observer = new ResizeObserver(() => {
-        fitAddon.fit()
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-        }
-      })
+      const observer = new ResizeObserver(() => applyFit())
       observer.observe(containerRef.current)
 
       return () => {
