@@ -166,8 +166,16 @@ worktree_env_files: []
 #   effort: high        # low | medium | high | max
 #
 # code_review — in-flow review effort (the mid-flow multi-angle pass).
+#   effort (default high): depth of the /code-review skill's fan-out on a
+#     feature-PRD review round.
+#   bugfix_full_review (default false): bug fixes get a single-pass, diff-scoped
+#     focused review instead of the heavy skill fan-out (a small fix doesn't need
+#     the feature-PRD-sized pass — it was making code_review outrun fix + QA).
+#     The regression-test check still blocks. Set true to force the full skill
+#     review on bug fixes too.
 # code_review:
 #   effort: high
+#   bugfix_full_review: false
 #
 # qa_validation — the post-merge test-run gate.
 #   strict (default true): any failing test blocks approval (main is the
