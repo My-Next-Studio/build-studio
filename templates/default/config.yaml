@@ -35,11 +35,14 @@ preset: web-app
 # docs/pr-evidence/<PRD>/manual-verification/ (override available). Without
 # this step, the AC verifier defers owner-gated evidence downstream while the
 # final reviewer blocks on its absence — an unresolvable dispute.
+# Place it right AFTER ac_verification (mirrors device_testing): the owner does
+# the manual checks the moment the AC gate flags them, so security_audit and
+# final_review run against evidence that already exists.
 # workflow:
 #   execution:
 #     add:
 #       - step: owner_verification
-#         after: final_review
+#         after: ac_verification
 
 # Override model assignments per step (optional):
 # step_models:

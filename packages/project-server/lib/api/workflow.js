@@ -243,6 +243,28 @@ function ownerVerificationMissing(checklist, evidenceText) {
   return (checklist || []).filter(item => !new RegExp(`\\b${item.ac.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text));
 }
 
+// Called when a step's computed next is `owner_verification`. Materializes the
+// checklist from the AC verifier's `### Owner action items` and decides whether
+// the step runs (owner-gated ACs exist → stop here) or auto-skips (none → fall
+// through to the step after it). Placement-agnostic: works wherever
+// owner_verification sits in the sequence (it belongs right after
+// ac_verification, mirroring device_testing — the owner does the manual checks
+// as soon as the AC gate identifies them, before security_audit/final_review
+// depend on the evidence). Mutates wf.steps.owner_verification; returns
+// { stop, nextStep }.
+function computeOwnerVerificationEntry(wf, execSteps) {
+  const acFb = ((wf.steps.ac_verification || {}).agents || []).map(a => a.feedback || '').join('\n');
+  const checklist = extractOwnerChecklist(acFb);
+  if (checklist.length === 0) {
+    wf.steps.owner_verification = { status: 'skipped', agents: [], checklist: [], skipReason: 'no owner-gated ACs in the AC verification matrix' };
+    const ovIdx = execSteps.indexOf('owner_verification');
+    const after = (ovIdx >= 0 && ovIdx < execSteps.length - 1) ? execSteps[ovIdx + 1] : 'demo_review';
+    return { stop: false, nextStep: after };
+  }
+  wf.steps.owner_verification = { status: 'pending', agents: [], checklist };
+  return { stop: true, nextStep: 'owner_verification' };
+}
+
 // Pure verdict for the qa_validation strict gate — exported for unit tests;
 // the approve handler applies its result to the response/state.
 //
@@ -6869,9 +6891,16 @@ This is round ${wf.round}.`,
       // (e.g. example-app) don't include security_audit in their execution flow.
       const execSteps = (config.workflow && config.workflow.execution) || [];
       const acIdx = execSteps.indexOf('ac_verification');
-      const nextStep = (acIdx >= 0 && acIdx < execSteps.length - 1)
+      let nextStep = (acIdx >= 0 && acIdx < execSteps.length - 1)
         ? execSteps[acIdx + 1]
         : 'security_audit'; // legacy fallback
+      // owner_verification (desktop preset) sits right after ac_verification:
+      // materialize its checklist now and stop here if the owner has manual ACs.
+      if (nextStep === 'owner_verification') {
+        const entry = computeOwnerVerificationEntry(wf, execSteps);
+        if (entry.stop) { wf.currentStep = 'owner_verification'; state.saveWorkflow(wf); return res.json({ workflow: wf }); }
+        nextStep = entry.nextStep;
+      }
       wf.steps[nextStep] = { status: 'pending', agents: [] };
       wf.currentStep = nextStep;
       state.saveWorkflow(wf);
@@ -7093,23 +7122,12 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
       let nextStep = (frIdx >= 0 && frIdx < execSteps.length - 1)
         ? execSteps[frIdx + 1]
         : 'demo_review';
-      // Entering owner_verification: materialize the checklist from the AC
-      // verifier's `### Owner action items` once, at entry. No owner-gated
-      // ACs ⇒ auto-skip — the step only ever surfaces when there is something
-      // for a human to do, so non-desktop PRDs see zero added friction.
+      // Placement-agnostic: if a project still sequences owner_verification
+      // after final_review, honor it via the shared helper.
       if (nextStep === 'owner_verification') {
-        const acFb = ((wf.steps.ac_verification || {}).agents || []).map(a => a.feedback || '').join('\n');
-        const checklist = extractOwnerChecklist(acFb);
-        if (checklist.length === 0) {
-          wf.steps.owner_verification = { status: 'skipped', agents: [], checklist: [], skipReason: 'no owner-gated ACs in the AC verification matrix' };
-          const ovIdx = execSteps.indexOf('owner_verification');
-          nextStep = (ovIdx >= 0 && ovIdx < execSteps.length - 1) ? execSteps[ovIdx + 1] : 'demo_review';
-        } else {
-          wf.steps.owner_verification = { status: 'pending', agents: [], checklist };
-          wf.currentStep = 'owner_verification';
-          state.saveWorkflow(wf);
-          return res.json({ workflow: wf });
-        }
+        const entry = computeOwnerVerificationEntry(wf, execSteps);
+        if (entry.stop) { wf.currentStep = 'owner_verification'; state.saveWorkflow(wf); return res.json({ workflow: wf }); }
+        nextStep = entry.nextStep;
       }
       wf.steps[nextStep] = { ...(wf.steps[nextStep] || {}), status: 'pending', agents: [] };
       wf.currentStep = nextStep;
