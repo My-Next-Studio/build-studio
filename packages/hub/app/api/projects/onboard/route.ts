@@ -13,7 +13,7 @@ const ERROR_HTTP_STATUS: Record<string, number> = {
 }
 
 export async function POST(req: Request) {
-  const { name, dirPath, port } = await req.json()
+  const { name, dirPath, port, migrateAgentsMd } = await req.json()
   if (!name || !dirPath) {
     return NextResponse.json({ error: 'name and dirPath required' }, { status: 400 })
   }
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
   const assignedPort = port || registry.nextAvailablePort()
 
   try {
-    const result = await onboardProject(targetPath, { name, port: assignedPort })
+    const result = await onboardProject(targetPath, { name, port: assignedPort, migrateAgentsMd: !!migrateAgentsMd })
     registry.add(name, targetPath, assignedPort)
     return NextResponse.json({
       ok: true,

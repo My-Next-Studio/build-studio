@@ -11,6 +11,10 @@ import { AgentTerminal } from './agent-terminal'
 import { PathologyPanel, type PathologySignals } from './pathology-panel'
 import { FindingsChecklist, type Finding } from './findings-checklist'
 import { FindingsFiler } from './findings-filer'
+import { CompactUsageMeter } from './usage-panel'
+import { providersFromCliConfig, type UsageProvider } from '@/lib/cli-providers'
+
+type AgentCli = 'claude' | 'codex' | 'opencode'
 
 interface WorkflowAgent {
   role: string
@@ -21,6 +25,11 @@ interface WorkflowAgent {
   window?: string
   taskIndex?: number
   model?: string
+  /** Which CLI this agent launched on (server-set; absent in pre-multi-CLI runs — derive from model then). */
+  cli?: AgentCli
+  /** OpenCode only (FU-1): the ACTUAL serving model resolved from the session export
+   *  (e.g. the routed model behind openrouter/auto); absent → badge shows the configured string. */
+  actualModel?: string
   tokenUsage?: { inputTokens: number; outputTokens: number; cacheCreate: number; cacheRead: number; costUSD: number }
 }
 
@@ -86,10 +95,12 @@ interface Workflow {
   reviewBranch?: string
   branch?: string
   defaultBranch?: string
-  developerCli?: 'claude' | 'codex'
-  reviewerCli?: 'claude' | 'codex'
+  developerCli?: AgentCli
+  reviewerCli?: AgentCli
   autoAdvance?: boolean
   autoAdvanceStrict?: boolean
+  /** When true with autoAdvance on execution, auto-skip past demo_review. */
+  autoAdvanceSkipDemoReview?: boolean
   prdPath?: string
   steps: Record<string, WorkflowStep>
   taskPlan?: TaskPlan
@@ -201,12 +212,31 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // Sync to server so the background auto-advance tick honors it too
     api.post('/workflow/auto-advance', { strict: v }).catch(() => {})
   }, [api])
+  // Skip Demo Review — only meaningful with Auto-advance on execution workflows.
+  // Persisted client-side + on wf so the server tick skips the human demo gate.
+  const [skipDemoReviewLocal, setSkipDemoReviewLocal] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('workflow.autoAdvanceSkipDemoReview') === '1'
+  })
+  const setSkipDemoReview = useCallback((v: boolean) => {
+    const next = !!v
+    setSkipDemoReviewLocal(next)
+    if (typeof window !== 'undefined') window.localStorage.setItem('workflow.autoAdvanceSkipDemoReview', next ? '1' : '0')
+    api.post('/workflow/auto-advance', { skipDemoReview: next }).catch(() => {})
+  }, [api])
   const setAutoAdvance = useCallback((v: boolean) => {
     setAutoAdvanceLocal(v)
     onAutoAdvanceChange?.(v)
-    // Sync to server so auto-advance works even when project is in background
-    api.post('/workflow/auto-advance', { enabled: v, strict: autoAdvanceStrict }).catch(() => {})
-  }, [onAutoAdvanceChange, api, autoAdvanceStrict])
+    // Sync to server so auto-advance works even when project is in background.
+    // Turning Auto-advance off also clears Skip Demo Review (checkbox disables).
+    if (!v) {
+      setSkipDemoReviewLocal(false)
+      if (typeof window !== 'undefined') window.localStorage.setItem('workflow.autoAdvanceSkipDemoReview', '0')
+      api.post('/workflow/auto-advance', { enabled: false, strict: autoAdvanceStrict, skipDemoReview: false }).catch(() => {})
+    } else {
+      api.post('/workflow/auto-advance', { enabled: true, strict: autoAdvanceStrict, skipDemoReview: skipDemoReviewLocal }).catch(() => {})
+    }
+  }, [onAutoAdvanceChange, api, autoAdvanceStrict, skipDemoReviewLocal])
   const [autoAdvanceRound, setAutoAdvanceRound] = useState(0)
   const [maxReviewRounds, setMaxReviewRounds] = useState(4)
   const [advanceError, setAdvanceError] = useState<string | null>(null)
@@ -216,33 +246,14 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // so the self-heal below posts at most once per run.
   const autoAdvanceSyncRef = useRef<string | null>(null)
   const [tokenStats, setTokenStats] = useState<{ projectTokens: number; projectCostUSD: number; prds: { prdId: string; tokens: number; costUSD: number }[] } | null>(null)
-  const [developerCli, setDeveloperCli] = useState<'claude' | 'codex'>(() => {
-    if (typeof window === 'undefined') return 'claude'
-    const stored = window.localStorage.getItem('workflow.developerCli')
-    return stored === 'codex' ? 'codex' : 'claude'
-  })
+  // Providers hit by the project's effective CLI slots — drives the compact
+  // usage meter above Start Workflow.
+  const [usageProviders, setUsageProviders] = useState<UsageProvider[] | undefined>(undefined)
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('workflow.developerCli', developerCli)
-    }
-  }, [developerCli])
-  // Reviewer CLI tri-state: 'auto' = opposite of developerCli, otherwise explicit override.
-  const [reviewerCliMode, setReviewerCliMode] = useState<'auto' | 'claude' | 'codex'>(() => {
-    // Default to Claude (no flip). Cross-model review (`auto` = opposite of developer,
-    // or explicit `codex`) is opt-in, and only takes effect in execution runs server-side.
-    if (typeof window === 'undefined') return 'claude'
-    const stored = window.localStorage.getItem('workflow.reviewerCli')
-    return stored === 'claude' || stored === 'codex' || stored === 'auto' ? stored : 'claude'
-  })
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('workflow.reviewerCli', reviewerCliMode)
-    }
-  }, [reviewerCliMode])
-  const effectiveReviewerCli: 'claude' | 'codex' =
-    reviewerCliMode === 'auto'
-      ? (developerCli === 'claude' ? 'codex' : 'claude')
-      : reviewerCliMode
+    api.get('/config/cli').then((d: { cli?: { default?: string; developer_cli?: string | null; reviewer_cli?: string | null } }) => {
+      if (d.cli) setUsageProviders(providersFromCliConfig(d.cli))
+    }).catch(() => {})
+  }, [api])
 
   const load = useCallback(async () => {
     const data = await api.get('/workflow')
@@ -263,6 +274,9 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
       }
       if (data.workflow.autoAdvanceStrict !== undefined) {
         setAutoAdvanceStrictLocal(!!data.workflow.autoAdvanceStrict)
+      }
+      if (data.workflow.autoAdvanceSkipDemoReview !== undefined) {
+        setSkipDemoReviewLocal(!!data.workflow.autoAdvanceSkipDemoReview)
       }
     }
     if (typeof data.maxReviewRounds === 'number') setMaxReviewRounds(data.maxReviewRounds)
@@ -304,7 +318,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // else to advance them. Push the preference down once per run.
     if (!wf.autoAdvance && autoAdvanceSyncRef.current !== wf.id) {
       autoAdvanceSyncRef.current = wf.id
-      api.post('/workflow/auto-advance', { enabled: true, strict: autoAdvanceStrict }).catch(() => {})
+      api.post('/workflow/auto-advance', { enabled: true, strict: autoAdvanceStrict, skipDemoReview: skipDemoReviewLocal }).catch(() => {})
     }
 
     if (autoAdvanceRound >= AUTO_ADVANCE_MAX_ROUNDS) {
@@ -327,7 +341,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // owner_signoff fires the single onboarding commit; team_review for onboarding
     // also requires owner judgment (artifacts are backfills, not fresh decisions).
     // owner_consultations: kickoff manual gate between pm_scoping and team_review.
-    const alwaysManual = ['demo_review', 'device_testing', 'owner_verification', 'owner_signoff', 'owner_consultations']
+    // demo_review is manual UNLESS Skip Demo Review is checked with Auto-advance.
+    const skipDemo = !!(wf.autoAdvanceSkipDemoReview ?? skipDemoReviewLocal)
+    const alwaysManual = ['device_testing', 'owner_verification', 'owner_signoff', 'owner_consultations']
+    if (!skipDemo) alwaysManual.push('demo_review')
     if (alwaysManual.includes(wf.currentStep)) return
     if (wf.type === 'onboarding' && wf.currentStep === 'team_review') return
     if (round <= 1 && reviewSteps.includes(wf.currentStep)) return
@@ -337,7 +354,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
 
     let action: string | null = null
 
-    if (isPending) {
+    // Skip Demo Review: same action the human Skip button fires
+    if (wf.currentStep === 'demo_review' && skipDemo) {
+      action = 'skip'
+    } else if (isPending) {
       // Auto-launch pending steps (including merge steps).
       // owner_signoff is a manual gate — never auto-approve (it fires a git commit).
       // owner_consultations is a manual gate — owner must explicitly approve.
@@ -421,7 +441,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
         autoAdvancingRef.current = false
       })
     }
-  }, [wf, autoAdvance, autoAdvanceStrict, maxReviewRounds, autoAdvanceRound, api, load])
+  }, [wf, autoAdvance, autoAdvanceStrict, skipDemoReviewLocal, maxReviewRounds, autoAdvanceRound, api, load])
 
   // Poll workflow log if viewing one
   useEffect(() => {
@@ -442,10 +462,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     setStartError(null)
     const body: Record<string, string> = { type: wfType }
     if (wfType !== 'onboarding') body.input = input.trim()
-    if (wfType === 'execution' || wfType === 'bugfix') {
-      body.developerCli = developerCli
-      body.reviewerCli = effectiveReviewerCli
-    }
+    // Per-run CLI pickers were removed (2026-07-21): agent CLI/model/effort is
+    // set per role on the project's Agents tab (or the global Model tab).
     // api.post returns the parsed body (incl. {error}) and does NOT throw on non-2xx,
     // so a guardrail 409 must be surfaced explicitly — otherwise Start looks like a no-op.
     const res = await api.post('/workflow/start', body)
@@ -456,7 +474,11 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // gap before its first render.
     if (autoAdvance) {
       if (res?.workflow?.id) autoAdvanceSyncRef.current = res.workflow.id
-      api.post('/workflow/auto-advance', { enabled: true, strict: autoAdvanceStrict }).catch(() => {})
+      api.post('/workflow/auto-advance', {
+        enabled: true,
+        strict: autoAdvanceStrict,
+        skipDemoReview: skipDemoReviewLocal,
+      }).catch(() => {})
     }
     load()
   }
@@ -684,67 +706,13 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
           </div>
         )}
 
-        {/* CLI selectors — only meaningful for execution/bugfix workflows, only before start */}
-        {!wf && (wfType === 'execution' || wfType === 'bugfix') && (
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
-              Developer CLI
-            </div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {(['claude', 'codex'] as const).map(cli => (
-                <button
-                  key={cli}
-                  onClick={() => setDeveloperCli(cli)}
-                  style={{
-                    flex: 1, padding: '4px 10px', borderRadius: 4, border: '1px solid var(--border)',
-                    background: developerCli === cli ? 'var(--accent)' : 'transparent',
-                    color: developerCli === cli ? '#0d0f14' : 'var(--text-dim)',
-                    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
-                    cursor: 'pointer', textTransform: 'capitalize',
-                  }}
-                >
-                  {cli}
-                </button>
-              ))}
-            </div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6 }}>
-              Used for Frontend/Backend/iOS/Android Dev roles.
-            </div>
-
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginTop: 12, marginBottom: 6 }}>
-              Reviewer CLI
-            </div>
-            <div style={{ display: 'flex', gap: 4 }}>
-              {(['auto', 'claude', 'codex'] as const).map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => setReviewerCliMode(mode)}
-                  style={{
-                    flex: 1, padding: '4px 10px', borderRadius: 4, border: '1px solid var(--border)',
-                    background: reviewerCliMode === mode ? 'var(--accent)' : 'transparent',
-                    color: reviewerCliMode === mode ? '#0d0f14' : 'var(--text-dim)',
-                    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
-                    cursor: 'pointer', textTransform: 'capitalize',
-                  }}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6 }}>
-              {reviewerCliMode === 'auto'
-                ? `Auto = opposite of developer (currently ${effectiveReviewerCli}). Used for Code Reviewer + Security roles.`
-                : `Override: ${effectiveReviewerCli}. Used for Code Reviewer + Security roles.`}
-            </div>
-          </div>
-        )}
-
         {/* Start / Cancel */}
         {!wf ? (
           (() => {
             const canStart = wfType === 'onboarding' || !!input.trim()
             return (
               <>
+                <CompactUsageMeter providers={usageProviders} />
                 <button onClick={startWorkflow} disabled={!canStart} style={{
                   width: '100%', padding: '8px 0', borderRadius: 4, border: 'none',
                   background: canStart ? 'var(--green)' : 'var(--surface3)',
@@ -777,57 +745,83 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
           </button>
         )}
 
-        {/* Auto-advance toggle */}
+        {/* Auto-advance toggle group */}
         {wf && wf.currentStep !== 'completed' && (
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
+            display: 'flex', flexDirection: 'column', gap: 8,
             marginBottom: 16, padding: '8px 10px',
             background: autoAdvance ? 'rgba(245,158,11,0.08)' : 'transparent',
             border: `1px solid ${autoAdvance ? 'rgba(245,158,11,0.2)' : 'var(--border-subtle)'}`,
             borderRadius: 'var(--radius)',
           }}>
-            <label style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10,
-              color: autoAdvance ? 'var(--accent)' : 'var(--muted)',
-              fontWeight: 600, userSelect: 'none',
-            }}>
-              <input
-                type="checkbox"
-                checked={autoAdvance}
-                onChange={e => {
-                  setAutoAdvance(e.target.checked)
-                  if (e.target.checked) setAutoAdvanceRound(0)
-                }}
-                style={{ accentColor: 'var(--accent)' }}
-              />
-              Auto-advance
-            </label>
-            {wf.type === 'review' && (
-              <label
-                title="Send review rounds back to PM on ANY finding (medium/low included), until reviews are clean or max rounds is reached"
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10,
-                  color: autoAdvanceStrict ? 'var(--accent)' : 'var(--muted)',
-                  fontWeight: 600, userSelect: 'none',
-                }}
-              >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10,
+                color: autoAdvance ? 'var(--accent)' : 'var(--muted)',
+                fontWeight: 600, userSelect: 'none',
+              }}>
                 <input
                   type="checkbox"
-                  checked={autoAdvanceStrict}
-                  onChange={e => setAutoAdvanceStrict(e.target.checked)}
+                  checked={autoAdvance}
+                  onChange={e => {
+                    setAutoAdvance(e.target.checked)
+                    if (e.target.checked) setAutoAdvanceRound(0)
+                  }}
                   style={{ accentColor: 'var(--accent)' }}
                 />
-                Strict
+                Auto-advance
               </label>
-            )}
-            <span style={{ flex: 1 }} />
-            {autoAdvance && (
-              <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--muted)' }}>
-                {autoAdvanceRound}/{AUTO_ADVANCE_MAX_ROUNDS}
-              </span>
-            )}
+              {(wf.type === 'execution' || wf.type === 'bugfix') && (
+                <label
+                  title={autoAdvance
+                    ? 'When checked, auto-advance also skips Demo Review (no human smoke demo) — useful for thin demos or post-merge testing'
+                    : 'Enable Auto-advance first'}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    cursor: autoAdvance ? 'pointer' : 'not-allowed',
+                    fontFamily: 'var(--mono)', fontSize: 10,
+                    color: autoAdvance && skipDemoReviewLocal ? 'var(--accent)' : 'var(--muted)',
+                    fontWeight: 600, userSelect: 'none',
+                    opacity: autoAdvance ? 1 : 0.55,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoAdvance && skipDemoReviewLocal}
+                    disabled={!autoAdvance}
+                    onChange={e => setSkipDemoReview(e.target.checked)}
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  Skip Demo Review
+                </label>
+              )}
+              {wf.type === 'review' && (
+                <label
+                  title="Send review rounds back to PM on ANY finding (medium/low included), until reviews are clean or max rounds is reached"
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 10,
+                    color: autoAdvanceStrict ? 'var(--accent)' : 'var(--muted)',
+                    fontWeight: 600, userSelect: 'none',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoAdvanceStrict}
+                    onChange={e => setAutoAdvanceStrict(e.target.checked)}
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  Strict
+                </label>
+              )}
+              <span style={{ flex: 1 }} />
+              {autoAdvance && (
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--muted)' }}>
+                  {autoAdvanceRound}/{AUTO_ADVANCE_MAX_ROUNDS}
+                </span>
+              )}
+            </div>
           </div>
         )}
 
@@ -2713,24 +2707,37 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
           {agent.role}
         </span>
 
-        {/* Model badge — show the ACTUAL model/CLI. A codex reviewer must read
-            "Codex", not "Sonnet" (the old `opus ? 'Opus' : 'Sonnet'` collapsed every
-            non-opus model — including codex — to "Sonnet", hiding the reviewer flip). */}
+        {/* Model badge — show the ACTUAL CLI + model. A codex reviewer must read
+            "Codex", not "Sonnet"; an opencode agent shows its provider/model. */}
         {agent.model && (() => {
           const m = String(agent.model).toLowerCase()
-          const isCodex = m.startsWith('codex')
+          const isCodex = (agent.cli === 'codex') || (!agent.cli && m.startsWith('codex'))
+          const isOpencode = (agent.cli === 'opencode') || (!agent.cli && m.startsWith('opencode'))
           const isOpus = m.startsWith('opus')
           const isHaiku = m.startsWith('haiku')
-          const label = isCodex ? 'Codex' : isOpus ? 'Opus' : isHaiku ? 'Haiku' : 'Sonnet'
-          const color = isCodex ? 'var(--green, #10a37f)' : isOpus ? 'var(--purple, #a78bfa)' : 'var(--text-dim)'
-          const background = isCodex ? 'rgba(16,163,127,0.12)' : isOpus ? 'rgba(167,139,250,0.1)' : 'var(--surface3)'
+          // OpenCode: model is stored as 'opencode:<provider/model>' — show the
+          // model part (sans provider) so e.g. kimi-k3 is identifiable. FU-1:
+          // prefer the ACTUAL serving model (resolved from the session export)
+          // when present — openrouter/auto otherwise reads as the opaque "auto".
+          const ocModel = isOpencode
+            ? (agent.actualModel
+                ? (String(agent.actualModel).split('/').pop() || '')
+                : m.includes(':')
+                  ? (String(agent.model).split(':')[1].split('/').pop() || '')
+                  : '')
+            : ''
+          const label = isCodex ? 'Codex' : isOpencode ? `OC ${ocModel || 'default'}` : isOpus ? 'Opus' : isHaiku ? 'Haiku' : 'Sonnet'
+          const color = isCodex ? 'var(--green, #10a37f)' : isOpencode ? 'var(--orange, #f59e0b)' : isOpus ? 'var(--purple, #a78bfa)' : 'var(--text-dim)'
+          const background = isCodex ? 'rgba(16,163,127,0.12)' : isOpencode ? 'rgba(245,158,11,0.12)' : isOpus ? 'rgba(167,139,250,0.1)' : 'var(--surface3)'
           return (
-            <span style={{
-              fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 600,
-              color, background,
-              padding: '2px 6px', borderRadius: 4, flexShrink: 0, letterSpacing: '0.04em',
-              textTransform: 'uppercase',
-            }}>
+            <span
+              title={isOpencode && agent.actualModel ? `actual: ${agent.actualModel} · configured: ${agent.model}` : undefined}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 600,
+                color, background,
+                padding: '2px 6px', borderRadius: 4, flexShrink: 0, letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+              }}>
               {label}
             </span>
           )

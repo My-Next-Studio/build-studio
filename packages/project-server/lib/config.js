@@ -2,10 +2,26 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 const { resolvePreset, PRESETS } = require('./presets');
+const { VALID_CLIS, loadHubConfig, resolveEffectiveCliConfig } = require('@build-studio/shared/cli');
+
+// Per-project agent-CLI defaults. `default` applies to every role NOT covered
+// by the per-run developerCli/reviewerCli knobs (kickoff, onboarding, review
+// workflow, QA, PM, CEO, planners, …). The three model fields are OpenCode
+// `provider/model` strings used when the matching role resolves to opencode
+// (null = let opencode use its own configured default model). Settable in
+// config.yaml (`cli:`) and overridable from the hub — hub writes go to
+// .build-studio/local.json (machine-managed, gitignored), never to config.yaml,
+// so hand-maintained comments in config.yaml survive hub edits.
+const CLI_DEFAULTS = {
+  default: 'claude', developer_cli: null, reviewer_cli: null,
+  default_model: null, developer_model: null, reviewer_model: null,
+  default_effort: null, developer_effort: null, reviewer_effort: null,
+};
 
 const DEFAULTS = {
   docs_path: './docs',
   agent_defaults: { unset_api_key: true, model: 'opus' },
+  cli: CLI_DEFAULTS,
   max_review_rounds: 4,
   review_mode: 'parallel',
   // builder_strategy: how the monolithic task_execution builder is driven.
@@ -14,7 +30,7 @@ const DEFAULTS = {
   //            builder session: the CLI re-checks the done-condition (full
   //            suite green + per-AC evidence table + feedback POSTed) after
   //            every response and keeps working until it is met. Claude-only,
-  //            monolithic-only; ignored for Codex builders and fine-grained.
+  //            monolithic-only; ignored for Codex/OpenCode builders and fine-grained.
   builder_strategy: 'role',
   worktree_env_files: [],
   // Execution-phase recall gates (project-agnostic; see docs). All hot-reloaded.
@@ -68,6 +84,40 @@ const DEFAULTS = {
   },
 };
 
+// Machine-written per-project overrides (.build-studio/local.json). The hub's
+// CLI settings card writes here; loadConfig merges this OVER config.yaml.
+// Never hand-edited config.yaml — comments and formatting there are sacred.
+// Returns {} when absent or unreadable (a corrupt local.json must not kill
+// the project server — the yaml config remains authoritative).
+function loadLocalOverrides(projectRoot) {
+  const localPath = path.join(projectRoot, '.build-studio', 'local.json');
+  try {
+    const raw = JSON.parse(fs.readFileSync(localPath, 'utf8'));
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+// Atomic read-modify-write of local.json. `patch` is shallow-merged per
+// top-level key (e.g. { cli: { default: 'opencode' } } merges into the
+// existing cli block, preserving its other fields).
+function saveLocalOverrides(projectRoot, patch) {
+  const localPath = path.join(projectRoot, '.build-studio', 'local.json');
+  const current = loadLocalOverrides(projectRoot);
+  for (const [k, v] of Object.entries(patch)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && current[k] && typeof current[k] === 'object') {
+      current[k] = { ...current[k], ...v };
+    } else {
+      current[k] = v;
+    }
+  }
+  const tmp = `${localPath}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(current, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, localPath);
+  return current;
+}
+
 function loadConfig(projectRoot) {
   const configPath = path.join(projectRoot, '.build-studio', 'config.yaml');
   if (!fs.existsSync(configPath)) {
@@ -84,6 +134,9 @@ function loadConfig(projectRoot) {
   if (!raw || typeof raw !== 'object') {
     throw new Error('Config file is empty or not a YAML object');
   }
+
+  // local.json overlays config.yaml (hub-written settings win).
+  const local = loadLocalOverrides(projectRoot);
 
   // Resolve preset if specified, otherwise use legacy format
   let roles, workflow, step_models, step_efforts, features, presetName;
@@ -139,7 +192,11 @@ function loadConfig(projectRoot) {
     step_efforts,
     features,
     preset: presetName,
-    agent_defaults: { ...DEFAULTS.agent_defaults, ...(raw.agent_defaults || {}) },
+    agent_defaults: { ...DEFAULTS.agent_defaults, ...(raw.agent_defaults || {}), ...(local.agent_defaults || {}) },
+    // Effective CLI block = yaml + local, or the installation-wide global
+    // defaults when local.cli.use_global is true (shared/cli
+    // resolveEffectiveCliConfig is the single source of truth — also unit-tested).
+    cli: resolveEffectiveCliConfig({ localCli: local.cli, yamlCli: raw.cli, globalCli: loadHubConfig().cli }),
     deployment: { ...DEFAULTS.deployment, ...(raw.deployment || {}) },
     functions: { ...DEFAULTS.functions, ...(raw.functions || {}) },
     bugfix: { ...DEFAULTS.bugfix, ...(raw.bugfix || {}) },
@@ -147,6 +204,7 @@ function loadConfig(projectRoot) {
     final_review: { ...DEFAULTS.final_review, ...(raw.final_review || {}) },
   };
 
+  // (use_global merge handled inside resolveEffectiveCliConfig above)
   // Inferred default for `deployment.deployedOnPush` (PRD lifecycle status):
   // — true  when no manual ci_workflow is configured (push to main = deploy, example-site shape)
   // — false when ci_workflow is configured (push triggers CI but production deploy is a separate Deploy click, example-web shape)
@@ -162,6 +220,10 @@ function loadConfig(projectRoot) {
   }
   if (!config.port || typeof config.port !== 'number' || config.port < 1024 || config.port > 65535) {
     errors.push('Missing or invalid field: port (number 1024-65535)');
+  }
+  if (!VALID_CLIS.includes(config.cli.default)) {
+    console.warn(`[config] Warning: cli.default "${config.cli.default}" is not one of ${VALID_CLIS.join('/')} — falling back to 'claude'.`);
+    config.cli.default = 'claude';
   }
 
   const allRoles = getAllRoles(config);
@@ -225,6 +287,25 @@ function findRole(config, roleName, preferredCategory) {
 }
 
 /**
+ * Re-apply a fresh loadConfig() onto the live config object in place — shared
+ * by watchConfig (fs.watch on config.yaml + local.json) and the CLI-settings
+ * API (which writes local.json then needs the change live immediately).
+ */
+function reloadConfig(config) {
+  const fresh = loadConfig(config.projectRoot);
+  const FROZEN_KEYS = new Set(['projectRoot', 'port', 'docsPath', 'tmpPath', 'worktreesPath', 'logsPath', 'statePath']);
+  for (const k of Object.keys(config)) {
+    if (FROZEN_KEYS.has(k)) continue;
+    if (!(k in fresh)) delete config[k];
+  }
+  for (const k of Object.keys(fresh)) {
+    if (FROZEN_KEYS.has(k)) continue;
+    config[k] = fresh[k];
+  }
+  return config;
+}
+
+/**
  * Watch `.build-studio/config.yaml` and mutate the existing config object
  * in place when it changes — so downstream consumers (workflow router,
  * overseer, etc.) that captured the config reference at startup pick up
@@ -240,25 +321,16 @@ function findRole(config, roleName, preferredCategory) {
  */
 function watchConfig(config, onReload) {
   const configPath = path.join(config.projectRoot, '.build-studio', 'config.yaml');
+  const localPath = path.join(config.projectRoot, '.build-studio', 'local.json');
   if (!fs.existsSync(configPath)) return () => {};
 
   let debounceTimer = null;
-  const FROZEN_KEYS = new Set(['projectRoot', 'port', 'docsPath', 'tmpPath', 'worktreesPath', 'logsPath', 'statePath']);
 
   const onChange = () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       try {
-        const fresh = loadConfig(config.projectRoot);
-        // Apply: replace mutable keys, preserve frozen ones, delete keys no longer present.
-        for (const k of Object.keys(config)) {
-          if (FROZEN_KEYS.has(k)) continue;
-          if (!(k in fresh)) delete config[k];
-        }
-        for (const k of Object.keys(fresh)) {
-          if (FROZEN_KEYS.has(k)) continue;
-          config[k] = fresh[k];
-        }
+        reloadConfig(config);
         console.log(`[config] hot-reloaded ${configPath} — step_strategies=${JSON.stringify(config.step_strategies || {})}, step_models keys=[${Object.keys(config.step_models || {}).join(',')}]`);
         if (typeof onReload === 'function') {
           try { onReload(config); } catch (e) { console.error('[config] onReload hook error:', e.message); }
@@ -269,11 +341,14 @@ function watchConfig(config, onReload) {
     }, 200);
   };
 
-  const watcher = fs.watch(configPath, { persistent: false }, onChange);
+  const watchers = [fs.watch(configPath, { persistent: false }, onChange)];
+  // local.json may not exist yet — watch the directory entry for it instead.
+  // fs.watch on a missing file throws, so guard it.
+  try { watchers.push(fs.watch(localPath, { persistent: false }, onChange)); } catch (_) {}
   return () => {
     if (debounceTimer) clearTimeout(debounceTimer);
-    try { watcher.close(); } catch (_) {}
+    for (const w of watchers) { try { w.close(); } catch (_) {} }
   };
 }
 
-module.exports = { loadConfig, getAllRoles, findRole, DEFAULTS, watchConfig };
+module.exports = { loadConfig, loadLocalOverrides, saveLocalOverrides, reloadConfig, getAllRoles, findRole, DEFAULTS, CLI_DEFAULTS, watchConfig };

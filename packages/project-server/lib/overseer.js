@@ -34,13 +34,15 @@ const USAGE_LIMIT_PATTERNS = [
 
 // Structured-output markers that an agent produces when its feedback body is
 // ready. Matched against the agent's recent tmux pane.
+// Quote-tolerant variants (\\?"): opencode runs with --format json (FU-1), so
+// its pane shows NDJSON where quotes are escaped (\"tasks\").
 const FEEDBACK_COMPLETION_PATTERNS = [
   /\*\*Approved:\*\*\s*(yes|no)/i,
   /\*\*All issues addressed:\*\*\s*(yes|no)/i,
   /\*\*Tests passed:\*\*/i,
   /\*\*Verdict:\*\*/i,
-  /```json[\s\S]*?"tasks"[\s\S]*?```/,  // closed json plan block
-  /```json[\s\S]*?"tasks"\s*:\s*\[/,    // unclosed json plan block
+  /```json[\s\S]*?\\?"tasks\\?"[\s\S]*?```/,  // closed json plan block
+  /```json[\s\S]*?\\?"tasks\\?"\s*:\s*\[/,    // unclosed json plan block
 ];
 
 // Claude Code emits a "✻ <Word> for <time>" line when an agent's turn ends

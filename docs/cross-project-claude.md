@@ -1,16 +1,29 @@
 # Cross-Project Conventions
 
 > This file is the shared source of truth for all projects managed by Build Studio.
-> Project-specific CLAUDE.md files reference this file. Edit HERE, not in each project.
+> Project-specific AGENTS.md / CLAUDE.md files reference this file. Edit HERE, not in each project.
+>
+> **File-name note:** kept as `cross-project-claude.md` for compatibility — many
+> live project docs and role files reference this exact path. Treat "CLAUDE.md"
+> below as "the project's agent-instructions file" (see the next section).
+
+## Agent-instructions layout (AGENTS.md era)
+
+Each project's canonical agent-instructions file is **`AGENTS.md`** at the repo
+root — read natively by OpenCode and Codex. **`CLAUDE.md`** is a thin stub that
+@-imports it for Claude Code. Project-specific conventions go in AGENTS.md,
+never in the CLAUDE.md stub. (Older projects may still have a populated
+CLAUDE.md until they run `build-studio migrate-agents-md` — same content, same
+authority.)
 
 ## Framework & Conventions
 
-Each project defines its own stack — see the project's `CLAUDE.md` and
+Each project defines its own stack — see the project's `AGENTS.md` and
 `ARCHITECTURE.md` (repo root, the maintained component map: read it before
 exploring the codebase; whoever changes the component map updates it in the
 same commit). Nothing in this file assumes a particular language or framework.
 Stack-specific rules (e.g. "always `throw redirect()` in SvelteKit server
-functions") belong in the project's own `CLAUDE.md`, never here. Where a
+functions") belong in the project's own `AGENTS.md`, never here. Where a
 convention below is stack-conditional (e.g. playwright-cli for browser
 frontends), the project's preset/config gates it.
 
@@ -20,7 +33,10 @@ Each project uses a two-layer system:
 1. **Commands** (`.claude/commands/`) — Role identity and project-specific perspective
 2. **Installed Skills** (via plugins) — Methodology, frameworks, and best practices
 
-Commands define the *lens*; skills provide the *tools*.
+Commands define the *lens*; skills provide the *tools*. The `.claude/` paths are
+historical — the role command files are plain markdown that any agent CLI reads
+when a prompt points at them (Claude Code also mounts them as slash commands);
+OpenCode additionally picks up `.claude/skills` natively.
 
 ## Directory Conventions (ENFORCED)
 
@@ -452,7 +468,7 @@ Frontmatter: title, date, severity, tags, component, and **`evidence`
   sustained non-application; agents self-report which entries materially
   changed their approach via a `Learnings applied:` line in their feedback.
 - **Promotion path:** an entry agents repeatedly report applying gets proposed
-  for graduation into the project's `CLAUDE.md`, an `ARCHITECTURE.md`
+  for graduation into the project's `AGENTS.md`, an `ARCHITECTURE.md`
   component section, or a role notes file — the owner decides; a promoted
   entry's learnings file is then deleted.
 

@@ -68,6 +68,25 @@ function decideRecovery(agent, { maxAutoResumes = 2 } = {}) {
 }
 
 /**
+ * Does this agent carry the resume artifacts (pinned session id + pre-written
+ * resume script) that give the fast dead-process halt its value?
+ *
+ * The shell-pane dead heuristic is tuned to the Claude CLI's behaviour:
+ * claude repaints its UI constantly (so a live agent's log never goes silent)
+ * and its pane_current_command stays `claude` even at interactive dialogs.
+ * `opencode run` and codex agents do neither — print-mode output can pause
+ * for minutes during long generations, and macOS pane_current_command is
+ * flaky — which produced a false "process died" halt on a healthy opencode
+ * agent mid-run (launch-studio qa_tests, 2026-07-20). Since only agents with
+ * resume artifacts can be auto-resumed anyway, callers should let agents
+ * without them fall through to the slow idle-stall timeout, whose verdict is
+ * accurate for a genuinely dead process too.
+ */
+function hasResumeArtifacts(agent) {
+  return !!(agent && agent.cliSessionId && agent.resumeScript);
+}
+
+/**
  * Post-resume grace: after sending a resume, give the CLI time to boot and
  * start repainting before any further dead/stall judgement — prevents the
  * 30s monitor tick from double-firing resumes.
@@ -79,4 +98,4 @@ function inResumeGrace(agent, nowMs, graceMs = 3 * 60 * 1000) {
   return nowMs - t < graceMs;
 }
 
-module.exports = { isShellCommand, classifyAgentProcess, decideRecovery, inResumeGrace };
+module.exports = { isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts, inResumeGrace };

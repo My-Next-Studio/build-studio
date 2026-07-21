@@ -22,6 +22,7 @@ const { createOpsUITestsRouter } = require('./api/ops-uitests');
 const { createDemoSetupRouter } = require('./api/demo-setup');
 const { createBacklogRouter } = require('./api/backlog');
 const { createSupportRouter } = require('./api/support');
+const { createCliConfigRouter } = require('./api/cli-config');
 const { createOverseer } = require('./overseer');
 
 function startServer(projectRoot, opts = {}) {
@@ -176,6 +177,7 @@ function startServer(projectRoot, opts = {}) {
   const demoSetupRouter = createDemoSetupRouter(config);
   const backlogRouter = createBacklogRouter(config);
   const supportRouter = createSupportRouter(config);
+  const cliConfigRouter = createCliConfigRouter(config);
 
   app.use('/api', filesRouter);
   app.use('/api', queueRouter);
@@ -189,6 +191,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', demoSetupRouter);
   app.use('/api', backlogRouter);
   app.use('/api', supportRouter);
+  app.use('/api', cliConfigRouter);
 
   // Config endpoint for frontend
   const { listPresets } = require('./presets');
@@ -428,11 +431,18 @@ function startServer(projectRoot, opts = {}) {
           // (e.g. waiting at an interactive dialog) falls through to the slow
           // stall timeout below — resuming that one would destroy context.
           const target = `${activeWf.sessionName}:${agent.window}`;
-          const cls = agentRecovery.classifyAgentProcess({
+          let cls = agentRecovery.classifyAgentProcess({
             paneCommand: tmuxOps.paneCommand(target),
             idleMs,
             deadConfirmMs: AGENT_DEAD_CONFIRM_MS,
           });
+          // The shell-pane dead heuristic is only trustworthy for claude agents
+          // (constant repaints; stable pane command) and only pays off when a
+          // resume script exists — it false-fired on a healthy opencode agent
+          // (launch-studio qa_tests, 2026-07-20). Agents without resume
+          // artifacts fall through to the idle stall timeout below, whose
+          // verdict is accurate for a genuinely dead process too.
+          if (cls === 'dead' && !agentRecovery.hasResumeArtifacts(agent)) cls = 'alive';
           if (cls !== 'alive') {
             const decision = cls === 'dead'
               ? agentRecovery.decideRecovery(agent, { maxAutoResumes: AGENT_MAX_AUTO_RESUMES })

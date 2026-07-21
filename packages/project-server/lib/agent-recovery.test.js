@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { isShellCommand, classifyAgentProcess, decideRecovery, inResumeGrace } = require('./agent-recovery');
+const { isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts, inResumeGrace } = require('./agent-recovery');
 
 const MIN2 = 2 * 60 * 1000;
 
@@ -51,4 +51,12 @@ test('inResumeGrace: true within window, false outside or without timestamp', ()
   assert.equal(inResumeGrace({ lastAutoResumeAt: new Date(now - 10 * 60_000).toISOString() }, now), false);
   assert.equal(inResumeGrace({}, now), false);
   assert.equal(inResumeGrace({ lastAutoResumeAt: 'garbage' }, now), false);
+});
+
+test('hasResumeArtifacts: only claude agents (session id + script) qualify', () => {
+  assert.equal(hasResumeArtifacts({ cliSessionId: 'u-u-i-d', resumeScript: 'start-x-resume.sh' }), true);
+  assert.equal(hasResumeArtifacts({ resumeScript: 'x.sh' }), false);   // opencode/codex — no session id
+  assert.equal(hasResumeArtifacts({ cliSessionId: 'u' }), false);      // no script
+  assert.equal(hasResumeArtifacts({}), false);
+  assert.equal(hasResumeArtifacts(null), false);
 });

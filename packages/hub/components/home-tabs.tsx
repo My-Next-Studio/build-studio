@@ -3,16 +3,18 @@
 import { useState } from 'react'
 import { HomeContent } from '@/components/home-content'
 import { DemosTab } from '@/components/demos-tab'
+import { ModelTab } from '@/components/model-tab'
 import { ProjectWithStatus } from '@/lib/types'
 
 // The home / cross-project view. Project management (today's content) lives in
-// the Projects tab; the Demos tab is the cross-project demo-video workshop.
+// the Projects tab; the Demos tab is the cross-project demo-video workshop;
+// the Model tab holds the global agent defaults + the account-usage widget.
 export function HomeTabs({ projects, showOnboarding }: { projects: ProjectWithStatus[]; showOnboarding?: boolean }) {
-  const [tab, setTab] = useState<'projects' | 'demos'>('projects')
+  const [tab, setTab] = useState<'projects' | 'demos' | 'model'>('projects')
   return (
     <div>
       <div style={{ display: 'flex', gap: 2, padding: '10px 32px 0', borderBottom: '1px solid var(--border-subtle)' }}>
-        {(['projects', 'demos'] as const).map((t) => (
+        {(['projects', 'demos', 'model'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -30,7 +32,9 @@ export function HomeTabs({ projects, showOnboarding }: { projects: ProjectWithSt
       </div>
       {tab === 'projects'
         ? <HomeContent projects={projects} showOnboarding={showOnboarding} />
-        : <DemosTab />}
+        : tab === 'demos'
+          ? <DemosTab />
+          : <ModelTab />}
     </div>
   )
 }

@@ -22,6 +22,7 @@ interface PreviewResult {
   claudeMdPresent: boolean
   agentsMdPresent: boolean
   specsDirPresent: boolean
+  agentsMdMigration?: { action: 'scaffold' | 'migrate' | 'stub-only' | 'none'; summary: string }
 }
 
 type Step = 'input' | 'preview' | 'submitting'
@@ -32,6 +33,7 @@ export function OnboardProjectDialog({ onClose }: { onClose: () => void }) {
   const [dirPath, setDirPath] = useState('')
   const [step, setStep] = useState<Step>('input')
   const [preview, setPreview] = useState<PreviewResult | null>(null)
+  const [migrateAgentsMd, setMigrateAgentsMd] = useState(false)
   const [error, setError] = useState('')
 
   async function handlePreview(e: React.FormEvent) {
@@ -55,7 +57,7 @@ export function OnboardProjectDialog({ onClose }: { onClose: () => void }) {
     const res = await fetch('/api/projects/onboard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), dirPath: dirPath.trim() }),
+      body: JSON.stringify({ name: name.trim(), dirPath: dirPath.trim(), migrateAgentsMd }),
     })
     const data = await res.json()
     if (!res.ok) { setError(data.error || 'Onboard failed'); setStep('preview'); return }
@@ -151,6 +153,33 @@ export function OnboardProjectDialog({ onClose }: { onClose: () => void }) {
                 {summariseDocs(preview)}
               </div>
             </div>
+            {preview.agentsMdMigration && preview.agentsMdMigration.action !== 'none' && (
+              <label style={{
+                display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer',
+                background: 'var(--bg)', border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius)', padding: '8px 10px',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={migrateAgentsMd}
+                  onChange={e => setMigrateAgentsMd(e.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)', display: 'block' }}>
+                    Migrate to AGENTS.md layout
+                  </span>
+                  <span style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--muted)', display: 'block', marginTop: 2, lineHeight: 1.5 }}>
+                    {preview.agentsMdMigration.summary} OpenCode and Codex read AGENTS.md natively; Claude Code keeps working via the stub's @-import.
+                  </span>
+                </span>
+              </label>
+            )}
+            {preview.agentsMdMigration && preview.agentsMdMigration.action === 'none' && preview.agentsMdMigration.summary.startsWith('BOTH') && (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--orange)', lineHeight: 1.5 }}>
+                ⚠ {preview.agentsMdMigration.summary}
+              </div>
+            )}
             {error && <ErrorLine>{error}</ErrorLine>}
             <ButtonRow>
               <SecondaryButton onClick={() => setStep('input')}>Back</SecondaryButton>

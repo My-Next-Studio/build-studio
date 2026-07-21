@@ -79,6 +79,40 @@ agent_defaults:
   permission_mode: auto
   unset_api_key: true
 
+# Agent CLI selection (optional) — which CLI runs the agents.
+#   default: claude | codex | opencode — applies to every role NOT covered by
+#     the per-run Developer/Reviewer CLI pickers (kickoff, onboarding, review
+#     workflow, QA, PM, CEO, planners, …). Default: claude.
+#   default_model / developer_model / reviewer_model: OpenCode models
+#     (provider/model, e.g. openrouter/anthropic/claude-sonnet-4-5) used when
+#     the matching role runs on opencode. null = opencode's own default model.
+# NOTE (permissions): OpenCode agents always run with --auto (auto-approve),
+# regardless of permission_mode above — an "ask" would stall an unattended
+# tmux agent. Codex is similar (bypass flag for auto/bypassPermissions). Only
+# claude fully honors restrictive permission_mode values (dontAsk, plan, …).
+# These can also be set per project from the hub (Project → Agents tab); hub
+# writes go to .build-studio/local.json, which overrides this file.
+# Which CLIs are offered at all is installation-wide: by default every CLI
+# whose binary is detected is enabled; pin explicitly via
+# ~/.build-studio/config.json → { "enabled_clis": ["claude", "opencode"] }.
+# cli:
+#   default: claude
+#   # Per-role CLI slots (Developer = implementation agents, Reviewer = Code
+#   # Reviewer + Security in execution runs). Unset → they follow `default`.
+#   developer_cli: null
+#   reviewer_cli: null
+#   # Model per slot — CLI-namespaced: claude short names (opus, sonnet5, …),
+#   # codex slugs (gpt-5.2-codex, …), opencode provider/model ids.
+#   default_model: null
+#   developer_model: null
+#   reviewer_model: null
+#   # Effort per slot (claude --effort, opencode --variant, codex reasoning
+#   # effort). Valid values depend on the slot's model — the Agents tab effort
+#   # dropdowns list them (e.g. low | high | max).
+#   default_effort: null
+#   developer_effort: null
+#   reviewer_effort: null
+
 # Deployment and versioning strategy (optional):
 # Defaults: trunk-based, semver tags, auto-tag + auto-push on merge-to-main.
 # deployment:

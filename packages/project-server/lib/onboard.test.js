@@ -182,6 +182,46 @@ test('onboardProject: does NOT create CLAUDE.md when absent (workflow synthesize
   } finally { clean(root); }
 });
 
+// ─── AGENTS.md migration (opt-in via migrateAgentsMd) ──────────────────────
+
+test('onboardProject: migrateAgentsMd moves CLAUDE.md content to AGENTS.md + stub', async () => {
+  const root = makeRepo({ ...EXAMPLE_APP_SHAPE, 'CLAUDE.md': 'EXISTING CONTENT — preserve me' });
+  try {
+    await onboardProject(root, { name: 'desk', port: 3099, migrateAgentsMd: true });
+    assert.equal(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8'), 'EXISTING CONTENT — preserve me');
+    const stub = fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8');
+    assert.ok(stub.includes('@AGENTS.md'), 'CLAUDE.md is now the import stub');
+  } finally { clean(root); }
+});
+
+test('onboardProject: migrateAgentsMd=false (default) leaves CLAUDE.md untouched', async () => {
+  const root = makeRepo({ ...EXAMPLE_APP_SHAPE, 'CLAUDE.md': 'EXISTING CONTENT — do not touch' });
+  try {
+    await onboardProject(root, { name: 'desk', port: 3099, migrateAgentsMd: false });
+    assert.equal(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8'), 'EXISTING CONTENT — do not touch');
+    assert.ok(!fs.existsSync(path.join(root, 'AGENTS.md')));
+  } finally { clean(root); }
+});
+
+test('onboardProject: migrateAgentsMd with BOTH files present reconciles nothing', async () => {
+  const root = makeRepo({ ...EXAMPLE_APP_SHAPE, 'CLAUDE.md': 'REAL CLAUDE', 'AGENTS.md': 'REAL AGENTS' });
+  try {
+    await onboardProject(root, { name: 'desk', port: 3099, migrateAgentsMd: true });
+    assert.equal(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8'), 'REAL CLAUDE');
+    assert.equal(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8'), 'REAL AGENTS');
+  } finally { clean(root); }
+});
+
+test('previewOnboard: reports the AGENTS.md migration plan without writing', async () => {
+  const root = makeRepo({ ...EXAMPLE_APP_SHAPE, 'CLAUDE.md': 'EXISTING CONTENT' });
+  try {
+    const preview = await previewOnboard(root);
+    assert.equal(preview.agentsMdMigration.action, 'migrate');
+    assert.ok(!fs.existsSync(path.join(root, 'AGENTS.md')), 'preview must not write');
+    assert.equal(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8'), 'EXISTING CONTENT');
+  } finally { clean(root); }
+});
+
 // ─── Per-file no-overwrite for .claude/commands/ ───────────────────────────
 
 test('onboardProject: skips an existing .claude/commands/<role>.md file', async () => {
@@ -245,7 +285,7 @@ test('onboardProject: appends build-studio runtime patterns to existing .gitigno
 test('onboardProject: idempotent — re-adding patterns already present does not duplicate', async () => {
   const root = makeRepo({
     ...EXAMPLE_APP_SHAPE,
-    '.gitignore': 'node_modules\n.build-studio/workflow-state.json\n.build-studio/snapshots/\ndocs/agent-status.json\nprompt-*.txt\nstart-*.sh\nstart.sh\nTASK.md\ntmp/\n.build-studio/run-state.json\n.build-studio/*.bak*\n.claude/scheduled_tasks.lock\n.claude/settings.local.json\n',
+    '.gitignore': 'node_modules\n.build-studio/workflow-state.json\n.build-studio/snapshots/\ndocs/agent-status.json\nprompt-*.txt\nstart-*.sh\nstart.sh\nTASK.md\ntmp/\n.build-studio/run-state.json\n.build-studio/*.bak*\n.build-studio/local.json\n.build-studio/opencode-models-cache.json\n.claude/scheduled_tasks.lock\n.claude/settings.local.json\n',
   });
   try {
     const result = await onboardProject(root, { name: 'desk', port: 3099 });

@@ -7,6 +7,11 @@ node_modules/
 .build-studio/run-state.json
 .build-studio/snapshots/
 .build-studio/*.bak*
+# Hub-written local overrides (Agents-tab CLI settings) — machine-local, like the
+# enabled_clis list they depend on. Team-shared CLI defaults belong in config.yaml.
+.build-studio/local.json
+# OpenCode model catalog cache (GET /api/opencode/models)
+.build-studio/opencode-models-cache.json
 # Support reports (owner call: low archival value — the durable artifact is the filed backlog item)
 .build-studio/support/
 docs/agent-status.json

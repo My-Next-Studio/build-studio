@@ -75,6 +75,7 @@ function detectAll(targetPath) {
  */
 async function previewOnboard(targetPath) {
   const { presetResult, deployment, dev, existingDocs } = detectAll(targetPath);
+  const { planAgentsMdMigration } = require('./agents-md');
   return {
     preset: presetResult.preset,
     presetReason: presetResult.reason,
@@ -85,6 +86,9 @@ async function previewOnboard(targetPath) {
     claudeMdPresent: existingDocs.claudeMdPresent,
     agentsMdPresent: existingDocs.agentsMdPresent,
     specsDirPresent: existingDocs.specsDirPresent,
+    // What an opt-in AGENTS.md migration would do (action/summary) — the
+    // dialog shows this next to its checkbox. Never applied without consent.
+    agentsMdMigration: planAgentsMdMigration(targetPath),
   };
 }
 
@@ -180,6 +184,23 @@ async function onboardProject(targetPath, options = {}) {
     );
   }
   fs.mkdirSync(path.join(targetPath, 'tmp'), { recursive: true });
+
+  // ─── 5b. AGENTS.md migration (OPT-IN — options.migrateAgentsMd) ───────────
+  // Onboarding is the natural moment to move an existing repo onto the
+  // canonical AGENTS.md + CLAUDE.md-stub layout, but it rewrites a tracked
+  // file (CLAUDE.md → stub), so it only happens when the operator checked the
+  // box in the dialog. The plan is recomputed here (never trust the client).
+  if (options.migrateAgentsMd) {
+    const { planAgentsMdMigration, applyAgentsMdMigration } = require('./agents-md');
+    const plan = planAgentsMdMigration(targetPath);
+    if (plan.action !== 'none') {
+      const result = applyAgentsMdMigration(targetPath, plan);
+      for (const w of result.written) written.push(w);
+      for (const s of result.skipped) skipped.push(s);
+    } else {
+      skipped.push(`AGENTS.md migration: ${plan.summary}`);
+    }
+  }
 
   // ─── 6. docs/onboarding/inventory.json (consumed by the discovery agent) ──
   const inventory = {
@@ -297,6 +318,9 @@ const BUILD_STUDIO_GITIGNORE_PATTERNS = [
   '.build-studio/run-state.json',
   '.build-studio/snapshots/',
   '.build-studio/*.bak*',
+  '# Hub-written local overrides (Agents-tab CLI settings) + OpenCode model cache — machine-local',
+  '.build-studio/local.json',
+  '.build-studio/opencode-models-cache.json',
   'docs/agent-status.json',
   'tmp/',
   '',

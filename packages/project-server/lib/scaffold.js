@@ -132,12 +132,19 @@ function scaffoldProject(targetPath, options = {}) {
   }
   log('.gitignore');
 
-  // CLAUDE.md
+  // AGENTS.md (canonical agent instructions — read natively by OpenCode and
+  // Codex) + CLAUDE.md stub (@-imports AGENTS.md for Claude Code). New
+  // projects always get both; see agents-md.js for the existing-repo matrix.
+  const agentsSrc = path.join(templateDir, 'AGENTS.md');
+  if (fs.existsSync(agentsSrc)) {
+    fs.copyFileSync(agentsSrc, path.join(targetPath, 'AGENTS.md'));
+    log('AGENTS.md');
+  }
   const claudeSrc = path.join(templateDir, 'CLAUDE.md');
   if (fs.existsSync(claudeSrc)) {
     fs.copyFileSync(claudeSrc, path.join(targetPath, 'CLAUDE.md'));
+    log('CLAUDE.md (stub → @AGENTS.md)');
   }
-  log('CLAUDE.md');
 
   // ARCHITECTURE.md — the maintained repo map. Ships as a stub with the
   // maintenance rules; builders fill it in as components land (their prompts

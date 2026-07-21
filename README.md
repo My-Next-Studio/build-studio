@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/My-Next-Studio/build-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/My-Next-Studio/build-studio/actions/workflows/ci.yml) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Mission control for multi-agent [Claude Code](https://claude.com/claude-code) workflows. Run a whole product team of AI agents — PM, architect, designers, developers, QA, security, code review — across multiple projects from a single hub. Each agent runs in its own tmux session, drives a real git workflow, and reports back so you can review and approve at the gates that matter.
+Mission control for multi-agent AI coding workflows. Run a whole product team of AI agents — PM, architect, designers, developers, QA, security, code review — across multiple projects from a single hub. Agents run on your choice of CLI — [Claude Code](https://claude.com/claude-code), [Codex](https://github.com/openai/codex), or [OpenCode](https://opencode.ai/), selectable per project and per workflow run. Each agent runs in its own tmux session, drives a real git workflow, and reports back so you can review and approve at the gates that matter.
 
 > **Built by [My Next Studio](https://mynextstudio.com/).** We use Build Studio to build our own products. See [how we build](https://mynextstudio.com/how-we-build/) — including a demo clip of driving a single story from drafting → review → implementation.
 
@@ -10,7 +10,7 @@ Mission control for multi-agent [Claude Code](https://claude.com/claude-code) wo
 
 ## What is Build Studio?
 
-Build Studio turns Claude Code from a single assistant into an orchestrated team. You give a project a vision and some inputs; the dashboard runs structured **workflows** where specialized **agents** take turns — scoping a PRD, reviewing it from multiple angles, implementing it in isolated git worktrees, validating with tests, and merging to main — pausing for your approval at the points where human judgment matters.
+Build Studio turns an agent CLI from a single assistant into an orchestrated team. You give a project a vision and some inputs; the dashboard runs structured **workflows** where specialized **agents** take turns — scoping a PRD, reviewing it from multiple angles, implementing it in isolated git worktrees, validating with tests, and merging to main — pausing for your approval at the points where human judgment matters.
 
 It's designed for running **several projects in parallel**. Each managed project gets its own isolated Express server (its own port, its own process), so a crash or a long-running build in one project never affects another. The hub is the single UI on top.
 
@@ -42,7 +42,7 @@ The result is a product that grows step by step — each increment vision-aligne
 ## Prerequisites
 
 - **Node.js >= 20** and **npm**
-- **[Claude Code](https://claude.com/claude-code)** — the agents are Claude Code sessions
+- **At least one agent CLI** — [Claude Code](https://claude.com/claude-code) (the default and most integrated), [Codex](https://github.com/openai/codex), and/or [OpenCode](https://opencode.ai/) with a configured provider (e.g. OpenRouter). See [Agent CLIs](#agent-clis).
 - **tmux** — agent session orchestration (`brew install tmux`)
 - **git**
 - **Ghostty** (optional) — terminal launch; falls back to macOS Terminal.app
@@ -101,7 +101,8 @@ my-app/
 │   └── vision.md
 ├── tmp/                           # Gitignored transient artifacts
 ├── .gitignore
-├── CLAUDE.md
+├── AGENTS.md                   # Canonical agent instructions (OpenCode/Codex read natively)
+├── CLAUDE.md                   # Stub that @-imports AGENTS.md for Claude Code
 └── (git init + initial commit)
 ```
 
@@ -116,6 +117,8 @@ build-studio register ~/projects/existing-project
 ```
 
 The onboarding workflow (`discovery → ceo_synthesis → architect_backfill → pm_synthesis → devops_detect → team_review → pm_revision → owner_signoff`) backfills `project-state.md`, a baseline PRD, and the docs scaffolding so the project can join the normal loop. Your sign-off gates the first commit.
+
+> **AGENTS.md migration (opt-in):** if the repo has a populated `CLAUDE.md`, the Onboard dialog offers a checkbox to move its content into the canonical `AGENTS.md` and leave a stub `CLAUDE.md` (@-import) behind — so OpenCode and Codex read the same instructions Claude Code does. Never automatic: previewed first, and repos with both files populated are left for manual reconciliation.
 
 ---
 
@@ -149,6 +152,40 @@ You can add, remove, or customize roles per project — see [Customizing roles](
 
 ---
 
+## Agent CLIs
+
+Build Studio agents can run on three CLIs: **Claude Code** (`claude`), **Codex** (`codex`), and **OpenCode** (`opencode`, e.g. with OpenRouter models). Claude Code is the default everywhere and the most integrated (session auto-resume, `--model`/`--effort` flags, `/goal` harness, token-cost stats are claude-only today).
+
+**Which CLIs are offered at all** is an installation-wide setting — not everyone has every CLI installed. By default Build Studio **auto-detects installed CLI binaries** and offers what it finds (claude is always offered) — so existing installations see zero change, and OpenCode appears automatically wherever it's installed. To pin the list explicitly (e.g. hide a CLI that's installed):
+
+```json
+// ~/.build-studio/config.json
+{ "enabled_clis": ["claude", "opencode"] }
+```
+
+The hub filters every picker by this list and warns when an enabled CLI's binary isn't found.
+
+**Per-project defaults** live on the project's **Project → Agents** tab:
+
+- **Default CLI** — applies to every role *not* covered by the per-run pickers: kickoff, onboarding, the review workflow, QA, PM, CEO, planners, learnings, and similar steps.
+- **Default / Developer / Reviewer model** — which OpenCode model (`provider/model`, searchable from your configured providers) each role slot uses when it runs on OpenCode. Leave unset to use OpenCode's own configured default.
+
+These settings are per project and stored server-side in `.build-studio/local.json` (gitignored, machine-local) — they never leak into other projects, and the hub never rewrites your hand-maintained `config.yaml` (a `cli:` block there carries team-shared defaults; `local.json` overrides it).
+
+**Per-run selection** happens on the workflow start view for execution/bugfix runs: the **Developer CLI** (Frontend/Backend/Fullstack/iOS/Android Dev) and **Reviewer CLI** (Code Reviewer + Security, execution runs only). Reviewer `auto` resolves to *a different CLI than the developer* — cross-model review catches blind spots that same-model self-review misses; the UI warns if the reviewer ever resolves to the same CLI as the developer.
+
+Role prompts are CLI-neutral (they point at files, e.g. "read your role definition at `.claude/commands/pm.md`"); Claude-specific conveniences (`/goal`, `--effort`, session resume) simply don't apply on other CLIs. Project instructions live in **`AGENTS.md`** — read natively by OpenCode and Codex — with a stub `CLAUDE.md` that @-imports it for Claude Code. Existing projects move to that layout via the onboarding checkbox or `build-studio migrate-agents-md [path|--all] [--apply]` (dry-run first; never overwrites an existing AGENTS.md; skips projects mid-workflow).
+
+**Known limitations / follow-ups** (multi-CLI):
+
+- Permission asymmetry: OpenCode agents always run `--auto` (auto-approve) and Codex uses its bypass flag for never-prompt modes — an "ask" would stall an unattended tmux agent. Restrictive `permission_mode` values (`dontAsk`, `plan`, …) are only fully honored by claude.
+- Token-cost stats parse Claude Code's session logs only — Codex and OpenCode runs report no token usage yet. (OpenCode's `--format json` emits per-step tokens + cost; wiring that up is a planned follow-up.)
+- Agent auto-resume after a process kill is claude-only; codex/opencode agents halt with a clear error instead.
+- Model selection is split: Claude models via `step_models`/`agent_defaults.model` in config.yaml, OpenCode models via the Agents-tab selectors. Consolidating these is a planned UX follow-up.
+- The one-shot launchers used by CI investigate / support triage (`oneshot.js`) and the legacy run tab currently always use claude.
+
+---
+
 ## CLI commands
 
 ### `build-studio init <path>`
@@ -162,6 +199,9 @@ Start a single project server directly (bypasses the hub).
 
 ### `build-studio register <path>`
 Register an existing project in the hub without re-scaffolding.
+
+### `build-studio migrate-agents-md [path|--all] [--apply]`
+Migrate existing projects to the AGENTS.md layout (canonical `AGENTS.md` + stub `CLAUDE.md` that @-imports it). Dry-run by default; `--apply` writes. Moves a populated `CLAUDE.md`'s content verbatim into `AGENTS.md`, never overwrites an existing `AGENTS.md`, leaves projects with both files populated for manual reconciliation, and skips projects with an active workflow. New onboards get the same choice via a checkbox in the Onboard dialog.
 
 ### `build-studio list`
 List all registered projects.
@@ -226,6 +266,10 @@ Key fields in `.build-studio/config.yaml` (not exhaustive — presets set sensib
 | `agent_defaults.skip_permissions` | No | — | Legacy: `true` = `bypassPermissions`. Use `permission_mode` instead |
 | `agent_defaults.unset_api_key` | No | `true` | Unset `ANTHROPIC_API_KEY` in agent sessions |
 | `agent_defaults.model` | No | `opus` | Default model (`opus` or `sonnet`) |
+| `cli.default` | No | `claude` | Default agent CLI (`claude`, `codex`, `opencode`) for all roles not covered by the per-run Developer/Reviewer pickers. Also settable from the Agents tab (writes `.build-studio/local.json`) |
+| `cli.default_model` | No | `null` | OpenCode model (`provider/model`) for default-CLI roles; `null` = OpenCode's own default |
+| `cli.developer_model` | No | `null` | OpenCode model used when a run's Developer CLI is `opencode` |
+| `cli.reviewer_model` | No | `null` | OpenCode model used when a run's Reviewer CLI is `opencode` (execution runs) |
 | `step_models` | No | `{}` | Per-step model overrides |
 | `max_review_rounds` | No | `4` | Hard cap on review iterations |
 | `review_mode` | No | `parallel` | `parallel`, `orchestrator`, or `sequential` |

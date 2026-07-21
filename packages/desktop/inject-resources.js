@@ -148,6 +148,27 @@ for (const appPath of appPaths) {
   }
   console.log(`  Runtime deps: ${copiedCount} packages copied (${allDeps.size} total resolved)`);
 
+  // Sync the extraResources copies (Resources/project-server, Resources/shared,
+  // Resources/templates). electron-builder refreshes these only on a full
+  // package build, but the RUNTIME depends on them between builds — template
+  // resolution (scaffold.js/onboard.js) reads Resources/templates/default, so
+  // skipping this leaves init/onboard scaffolding stale after a plain inject.
+  const templatesSrc = path.join(__dirname, '..', '..', 'templates');
+  for (const [src, destName, excludeNm] of [
+    [projectServerSrc, 'project-server', true],
+    [sharedSrc, 'shared', true],
+    [templatesSrc, 'templates', false],
+  ]) {
+    const dest = path.join(appPath, destName);
+    fs.mkdirSync(dest, { recursive: true });
+    if (excludeNm) {
+      execFileSync('rsync', ['-a', '--exclude', 'node_modules', src + '/', dest + '/'], { stdio: 'inherit' });
+    } else {
+      execFileSync('cp', ['-Rf', src + '/.', dest], { stdio: 'inherit' });
+    }
+  }
+  console.log('  extraResources: project-server, shared, templates synced');
+
   // Strip Finder junk copied in from the source tree — codesign refuses to
   // sign bundles containing .DS_Store files, which breaks signed packaging.
   try {
@@ -225,7 +246,10 @@ async function detectAndHandleStaleServers() {
       if (health && health.ok && health.name === project.name) {
         let pid = null;
         try {
-          const out = execFileSync('lsof', ['-ti', `:${project.port}`], { encoding: 'utf8' }).trim();
+          // -sTCP:LISTEN restricts to the listening socket — a bare -ti :port
+          // also matches client sockets (hub/Electron connections), whose pids
+          // can sort first and receive the SIGTERM meant for the server.
+          const out = execFileSync('lsof', ['-ti', `:${project.port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).trim();
           if (out) pid = Number(out.split('\n')[0].trim());
         } catch {}
         return { name: project.name, port: project.port, pid };

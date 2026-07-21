@@ -17,6 +17,7 @@ Usage:
   build-studio register <path> [--workspace <ws>]
   build-studio list [--workspace <ws>]
   build-studio list-presets [path]
+  build-studio migrate-agents-md [path|--all] [--apply]
 
 Commands:
   init <path>       Scaffold a new project and register it
@@ -25,11 +26,14 @@ Commands:
   register <path>   Register an existing project in the hub
   list              List all registered projects (grouped by workspace)
   list-presets      List available presets (built-in + custom)
+  migrate-agents-md Migrate projects to the AGENTS.md layout (dry-run unless --apply)
 
 Options:
   --port <port>         Port for the server (default: auto-assigned)
   --name <name>         Project name (default: directory name)
   --workspace <ws>      Workspace/namespace to group projects (optional)
+  --all                 (migrate-agents-md) all registered projects
+  --apply               (migrate-agents-md) actually write; default is dry-run
 `);
   process.exit(1);
 }
@@ -248,6 +252,70 @@ Done! Next steps:
     console.log(`  ${p.name}${tag}`);
     if (p.description) console.log(`    ${p.description}`);
     console.log(`    Roles:    ${[...p.roles.review, ...p.roles.execution, ...p.roles.standalone].join(', ')}`);
+    console.log('');
+  }
+
+} else if (command === 'migrate-agents-md') {
+  // AGENTS.md layout migration for EXISTING projects. Dry-run by default —
+  // prints the per-project plan; --apply writes. Never overwrites an existing
+  // AGENTS.md, and a project with BOTH files populated is left for manual
+  // reconciliation. Only migrate idle repos (no workflow running): the
+  // CLAUDE.md → stub rewrite under a live agent is a confusion hazard.
+  const apply = args.includes('--apply');
+  const all = args.includes('--all');
+  const targetArg = args.find(a => !a.startsWith('--'));
+
+  if (!all && !targetArg) {
+    console.error('Error: path or --all required. Usage: build-studio migrate-agents-md [path|--all] [--apply]');
+    process.exit(1);
+  }
+
+  const { planAgentsMdMigration, applyAgentsMdMigration } = require('@build-studio/project-server/lib/agents-md');
+
+  let targets = [];
+  if (all) {
+    const { registry } = require('@build-studio/shared');
+    targets = registry.list().map(p => ({ name: p.name, path: p.path }));
+  } else {
+    targets = [{ name: path.basename(resolveUserPath(targetArg)), path: resolveUserPath(targetArg) }];
+  }
+
+  console.log(`\nAGENTS.md migration ${apply ? '(APPLYING)' : '(dry-run — pass --apply to write)'}\n`);
+  let actionable = 0;
+  for (const t of targets) {
+    // Skip projects mid-workflow: a live agent reading a swapped CLAUDE.md is
+    // a confusion/merge hazard. workflow-state.json present = active run.
+    const wfState = path.join(t.path, '.build-studio', 'workflow-state.json');
+    if (fs.existsSync(wfState)) {
+      console.log(`  ⊘ ${t.name} — SKIPPED (active workflow state — migrate when idle)`);
+      continue;
+    }
+    const plan = planAgentsMdMigration(t.path);
+    console.log(`  ${plan.action === 'none' ? '✓' : '→'} ${t.name} — ${plan.action}: ${plan.summary}`);
+    if (plan.action !== 'none') {
+      actionable++;
+      if (apply) {
+        const result = applyAgentsMdMigration(t.path, plan);
+        for (const w of result.written) console.log(`      wrote ${w}`);
+        for (const s of result.skipped) console.log(`      skipped ${s}`);
+        // Ensure the machine-local CLI-settings files stay out of git (older
+        // projects' .gitignore predates them).
+        const gitignorePath = path.join(t.path, '.gitignore');
+        const missing = ['.build-studio/local.json', '.build-studio/opencode-models-cache.json']
+          .filter(p => {
+            try { return !fs.readFileSync(gitignorePath, 'utf8').split('\n').map(l => l.trim()).includes(p); }
+            catch (_) { return true; }
+          });
+        if (missing.length) {
+          fs.appendFileSync(gitignorePath, `\n# Hub-written local CLI settings + OpenCode model cache (machine-local)\n${missing.join('\n')}\n`);
+          console.log(`      .gitignore += ${missing.join(', ')}`);
+        }
+      }
+    }
+  }
+  if (!apply && actionable > 0) {
+    console.log(`\n${actionable} project(s) would change. Re-run with --apply to write.\n`);
+  } else {
     console.log('');
   }
 

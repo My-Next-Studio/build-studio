@@ -4,6 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { stripAnsi } = require('../tmux');
+const opencodeTelemetry = require('../opencode-telemetry');
 const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
 
 // Common instruction fragments injected into all agent prompts.
@@ -49,8 +50,9 @@ You have {{CONTEXT_BUDGET}}. Fix tasks involve investigation — that's why this
 9. **Leave no debug cruft.** If you add temporary logging/probes (NSLog, print, etc.) to diagnose, REMOVE them before reporting. Never commit debug code.`;
 
 /** Resolve the context budget label for a model. */
-function contextBudgetFor(modelId, useCodex) {
-  if (useCodex) return { budget: '~258K tokens (Codex GPT-5.5)', softThreshold: '~130K tokens' };
+function contextBudgetFor(modelId, cli) {
+  if (cli === 'codex') return { budget: '~258K tokens (Codex GPT-5.5)', softThreshold: '~130K tokens' };
+  if (cli === 'opencode') return { budget: '~200K tokens (varies by model — check your provider)', softThreshold: '~100K tokens' };
   if (modelId && modelId.includes('[1m]')) return { budget: '~1M tokens (1M-context tier)', softThreshold: '~500K tokens' };
   return { budget: '~200K tokens', softThreshold: '~100K tokens' };
 }
@@ -59,7 +61,7 @@ const STRUCTURED_FEEDBACK_INSTRUCTIONS = `
 
 ## FEEDBACK FORMAT — MANDATORY
 
-Use the structured format defined in CLAUDE.md. Your feedback is machine-parsed.
+Use the structured format defined in AGENTS.md. Your feedback is machine-parsed.
 
 For reviews: **Approved:** yes|no, **Blocking:** N, **Medium:** N, **Low:** N, ### Summary, ### Findings, ### Action Items
 For QA: **Approved:** yes|no, **Tests passed:** N/N, **Failures:** N, ### Summary, ### Failures, ### Action Items
@@ -72,14 +74,29 @@ For fix reports: **All issues addressed:** yes|no, **Committed:** hash, ### Chan
 // prd-031-r1-revisions and left main without the approved PRD revision).
 const COMMIT_ON_CURRENT_BRANCH = 'Commit on the currently checked-out branch — do NOT create a new branch or switch branches.';
 
-// Execution-category developer roles whose CLI can be swapped via wf.developerCli.
-// Mirrors the role names in presets.js → roles.execution. If a new developer
-// role is added to a preset, add it here so the codex/claude switch covers it.
-const DEVELOPER_ROLE_NAMES = new Set(['Frontend Dev', 'Backend Dev', 'Fullstack Dev', 'iOS Dev', 'Android Dev']);
+// Agent-CLI plumbing (claude / codex / opencode) lives in @build-studio/shared/cli:
+// the role sets (developer → wf.developerCli, reviewer → wf.reviewerCli), the
+// per-role resolver (everything else → project default CLI), the OpenCode model
+// resolver, and the deterministic auto-reviewer rule.
+const {
+  VALID_CLIS,
+  resolveEnabledClis,
+  isDeveloperRole,
+  isReviewerRole,
+  resolveCliForRole,
+  resolveModelForRole,
+  resolveEffortForRole,
+  resolveAgentLaunchSettings,
+  resolveAutoReviewerCli,
+  MODEL_IDS,
+} = require('@build-studio/shared/cli');
 
-function isDeveloperRole(roleName) {
-  return DEVELOPER_ROLE_NAMES.has(roleName);
-}
+// The reviewer-CLI flip (cross-model review) applies ONLY to execution workflows.
+// In a PRD review it adds no value (reviewing a doc, not code) and just risks a
+// second-CLI auth/availability failure (the codex-token stall, 2026-06-05). So the
+// per-run reviewerCli knob only takes effect when wf.type === 'execution'; in all
+// other workflow types reviewers run on the project's default CLI (config.cli.default)
+// like every other non-developer role. See resolveCliForRole in shared/cli.
 
 // Normalize role names for lookup so the API accepts every reasonable form an
 // agent might reconstruct from its skill filename or memory after compaction
@@ -88,28 +105,15 @@ function normalizeRole(s) {
   return String(s || '').toLowerCase().replace(/[\s_-]+/g, '');
 }
 
-// Reviewer roles whose CLI can be swapped via wf.reviewerCli. Step 2 of the
-// CLI knob: covers code_review (Code Reviewer role) and security_audit
-// (Security role). Cross-model review is the value here — pairing the
-// implementer's CLI with the *other* model for review surfaces blind spots.
-const REVIEWER_ROLE_NAMES = new Set(['Code Reviewer', 'Security']);
-
-function isReviewerRole(roleName) {
-  return REVIEWER_ROLE_NAMES.has(roleName);
-}
-
-// The reviewer-CLI flip (cross-model review) applies ONLY to execution workflows.
-// In a PRD review it adds no value (reviewing a doc, not code) and just risks a
-// second-CLI auth/availability failure (the codex-token stall, 2026-06-05). So a
-// reviewer runs on codex ONLY when this is an execution run AND reviewerCli is codex;
-// reviewers in a review workflow always stay on the base (claude) CLI, regardless of
-// reviewerCli. Cross-model review is opt-in per execution run via the UI.
-function reviewerOnCodex(wf, roleName) {
-  return isReviewerRole(roleName) && wf.reviewerCli === 'codex' && wf.type === 'execution';
-}
-
-function oppositeCli(cli) {
-  return cli === 'codex' ? 'claude' : 'codex';
+// Reviewer CLI at workflow start (server-side, so ALL callers get the same
+// semantics): explicit value wins; 'auto' → a DIFFERENT CLI than the
+// developer's (deterministic first-enabled-≠-developer — cross-model review
+// diversity is enforced here, not just in the hub); omitted → the developer
+// CLI (conservative same-CLI default — cross-model review remains opt-in).
+// The flip only takes effect in execution workflows (see resolveCliForRole).
+function resolveReviewerCliAtStart(startReviewerCli, developerCli, enabledClis) {
+  if (startReviewerCli === 'auto') return resolveAutoReviewerCli(developerCli, enabledClis);
+  return startReviewerCli || developerCli;
 }
 
 // ─── bugfix workflow (pure helpers — unit-testable, no I/O) ───────────────────
@@ -531,34 +535,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   // Configure via `step_models: { task_execution: 'opus[1m]' }` etc. — see
   // docs/experiments/prd-009-orchestration-model-matrix.md for the use case.
   // Higher per-token price; right choice for monolithic tasks that exceed 200K.
-  const MODEL_IDS = {
-    // `opus` and `opus[1m]` now resolve to 4.8 (promoted 2026-05-29 after the
-    // PRD-009 orchestration-matrix re-run on 4.8 showed cleaner first-pass
-    // implementations than 4.7 at the same wallclock). Configs that say
-    // `opus` / `opus[1m]` auto-upgrade. Explicit-version aliases below let
-    // a config pin a specific generation if needed.
-    opus: 'claude-opus-4-8',
-    // `sonnet` / `sonnet[1m]` now resolve to Sonnet 5 (promoted 2026-07-01 when
-    // Sonnet 5 shipped as the current Sonnet, superseding 4.6 — same $3/$15 tier,
-    // 1M context, effort defaults to high). Configs that say `sonnet` auto-upgrade.
-    // Pin `sonnet4.6` below to stay on the prior generation.
-    sonnet: 'claude-sonnet-5',
-    fable: 'claude-fable-5',
-    'opus[1m]': 'claude-opus-4-8[1m]',
-    'sonnet[1m]': 'claude-sonnet-5[1m]',
-    // Fable 5's 1M window is its default tier; the [1m] alias is kept so
-    // configs read uniformly across model families.
-    'fable[1m]': 'claude-fable-5[1m]',
-    // Explicit-version aliases (kept stable across the floating `opus`/`sonnet` moves).
-    'opus4.7': 'claude-opus-4-7',
-    'opus4.7[1m]': 'claude-opus-4-7[1m]',
-    'opus4.8': 'claude-opus-4-8',
-    'opus4.8[1m]': 'claude-opus-4-8[1m]',
-    'sonnet4.6': 'claude-sonnet-4-6',
-    'sonnet4.6[1m]': 'claude-sonnet-4-6[1m]',
-    'sonnet5': 'claude-sonnet-5',
-    'sonnet5[1m]': 'claude-sonnet-5[1m]',
-  };
+  // MODEL_IDS comes from @build-studio/shared/cli (top-level import).
 
   function resolveModel(stepKey, wf) {
     // Priority: workflow state override > step_models config > agent_defaults.model
@@ -620,6 +597,9 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
 
   function writeWorklog(wf) {
     try {
+      // FU-1 final sweep: harvest opencode telemetry for agents that ended
+      // without posting feedback (error/stalled) before the workflow closes.
+      sweepOpencodeTelemetry(wf);
       const projectName = config.name || path.basename(projectRoot);
       const { path: dailyPath, yyyy, mm, dd, hhmm } = obsidianDailyPath();
 
@@ -1220,6 +1200,57 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
     }
   }
 
+  // ── OpenCode telemetry (FU-1) ─────────────────────────────────────────────
+  // opencode agents launch with `--format json | tee <events.jsonl>`; on
+  // completion we harvest real tokens + cost into agent.tokenUsage (synchronously,
+  // so the values land in the same state save) and resolve the actual serving
+  // model asynchronously (opencode export reads local session storage).
+  function makeActualModelPatcher(wfId, findAgent) {
+    return (model) => {
+      try {
+        const fresh = state.loadWorkflow();
+        if (!fresh || fresh.id !== wfId) return;
+        const target = findAgent(fresh);
+        if (!target || target.actualModel) return;
+        target.actualModel = model;
+        state.saveWorkflow(fresh);
+        broadcast('workflow-updated', {});
+      } catch (_) {}
+    };
+  }
+
+  function captureOpencodeTelemetry(wf, agent, findAgent) {
+    try {
+      if (!agent || agent.cli !== 'opencode' || !agent.window) return;
+      const eventsFile = path.join(logsPath, `${agent.window}-${wf.id}.events.jsonl`);
+      const sessionId = opencodeTelemetry.captureFromEvents(agent, eventsFile);
+      if (!sessionId || agent.actualModel) return;
+      opencodeTelemetry.resolveActualModel(sessionId)
+        .then((model) => { if (model) makeActualModelPatcher(wf.id, findAgent)(model); })
+        .catch(() => {});
+    } catch (_) {}
+  }
+
+  // Final sweep at workflow completion (called from writeWorklog — the
+  // completion choke point): catches opencode agents that ended WITHOUT a
+  // feedback POST (error/stalled) — their events files hold real usage too.
+  function sweepOpencodeTelemetry(wf) {
+    try {
+      for (const [stepName, step] of Object.entries(wf.steps || {})) {
+        for (const a of (step.agents || [])) {
+          if (!a || a.cli !== 'opencode' || !a.window) continue;
+          captureOpencodeTelemetry(wf, a, (f) => (f.steps?.[stepName]?.agents || []).find(x => x.window === a.window));
+        }
+      }
+      for (const [k, ts] of Object.entries(wf.taskExecution?.taskStates || {})) {
+        for (const a of (ts.agents || [])) {
+          if (!a || a.cli !== 'opencode' || !a.window) continue;
+          captureOpencodeTelemetry(wf, a, (f) => (f.taskExecution?.taskStates?.[k]?.agents || []).find(x => x.window === a.window));
+        }
+      }
+    } catch (_) {}
+  }
+
   function trackLearningsEffectiveness(injectedLearnings, feedbackText) {
     if (!injectedLearnings || injectedLearnings.length === 0 || !feedbackText) return;
     const stats = loadLearningsStats();
@@ -1645,24 +1676,21 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       return `${bin} binary not found. zsh check: ${zshErrDetail || 'failed (zsh may not be on PATH for this process)'}. Looked at: ${candidates.filter(Boolean).join(', ')}. ${installHint}`;
     }
 
-    // Determine whether claude / codex are actually needed by this batch.
-    const batchNeedsClaude = agents.some(a => {
-      if (isDeveloperRole(a.role)) return wf.developerCli !== 'codex';
-      if (isReviewerRole(a.role)) return !reviewerOnCodex(wf, a.role);
-      return true; // every other role is always claude
-    });
-    const batchNeedsCodex = agents.some(a => {
-      if (isDeveloperRole(a.role)) return wf.developerCli === 'codex';
-      if (isReviewerRole(a.role)) return reviewerOnCodex(wf, a.role);
-      return false;
-    });
+    // Determine which CLI binaries this batch actually needs. Each agent's CLI
+    // resolves from its role via resolveCliForRole: developers → legacy
+    // wf.developerCli then cli.developer_cli, reviewers (execution only) →
+    // legacy wf.reviewerCli then cli.reviewer_cli, everything else → cli.default.
+    const INSTALL_HINTS = {
+      claude: 'Install with `npm i -g @anthropic-ai/claude-code` or verify `which claude` from a normal shell.',
+      codex: 'Install with `npm i -g @openai/codex` or verify `which codex` from a normal shell.',
+      opencode: 'Install with `brew install anomalyco/tap/opencode` (or see opencode.ai) and verify `which opencode` from a normal shell.',
+    };
+    const neededClis = new Set(agents.map(a => resolveCliForRole(a.role, wf, config.cli)));
 
     let cliError = null;
-    if (batchNeedsClaude) {
-      cliError = probeBinary('claude', 'Install with `npm i -g @anthropic-ai/claude-code` or verify `which claude` from a normal shell.');
-    }
-    if (!cliError && batchNeedsCodex) {
-      cliError = probeBinary('codex', 'Install with `npm i -g @openai/codex` or verify `which codex` from a normal shell.');
+    for (const cli of neededClis) {
+      cliError = probeBinary(cli, INSTALL_HINTS[cli] || `Install ${cli} and verify \`which ${cli}\` from a normal shell.`);
+      if (cliError) break;
     }
     if (cliError) {
       console.error(`[workflow] Pre-launch check failed: ${cliError}`);
@@ -1677,20 +1705,20 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     const permissionMode = resolvePermissionMode(config.agent_defaults);
     const unsetKey = config.agent_defaults.unset_api_key;
     const resolvedStep = stepKey || wf.currentStep;
-    const modelShortName = (wf.stepModelOverrides && wf.stepModelOverrides[resolvedStep])
+    // Per-STEP overrides (config.yaml step_models / wf.stepModelOverrides) sit
+    // at the top of the model chain; the per-agent resolution below inserts
+    // the cli block's per-role model slot between these and agent_defaults.
+    const stepModel = (wf.stepModelOverrides && wf.stepModelOverrides[resolvedStep])
       || (config.step_models && config.step_models[resolvedStep])
-      || config.agent_defaults.model || 'opus';
-    const modelId = MODEL_IDS[modelShortName] || modelShortName;
-
+      || null;
     // Effort level for Claude's adaptive thinking. Valid CLI values: low,
     // medium, high (default), xhigh (Opus-only deep-reasoning mode), max.
     // Configure via `step_efforts: { task_execution: xhigh }` for per-step
     // control, or `agent_defaults.effort` for a global default. Omit to use
     // Claude Code's own default (high). See docs/experiments/prd-009-
     // orchestration-model-matrix.md for the use case driving this.
-    const effortLevel = (wf.stepEffortOverrides && wf.stepEffortOverrides[resolvedStep])
+    const stepEffort = (wf.stepEffortOverrides && wf.stepEffortOverrides[resolvedStep])
       || (config.step_efforts && config.step_efforts[resolvedStep])
-      || (config.agent_defaults && config.agent_defaults.effort)
       || null;
 
     for (const agent of agents) {
@@ -1729,16 +1757,30 @@ ${EFFICIENCY_INSTRUCTIONS}`,
         ? { text: '', injected: [] }
         : buildLearningsContext(agent.role, taskDesc);
 
-      const useCodex =
-        (isDeveloperRole(agent.role) && wf.developerCli === 'codex') ||
-        reviewerOnCodex(wf, agent.role);
-      // Claude gets --permission-mode (default resolves to 'auto': no routine
-      // prompts, classifier-reviewed). Codex has no classifier equivalent, so
-      // for the never-prompt intents (auto/bypassPermissions) it keeps its
-      // bypass flag; restrictive modes leave Codex prompting (attended only).
-      const dangerFlag = useCodex
+      // Which CLI / model / effort this agent launches with — shared pure
+      // resolver (also unit-tested). Claude still layers step_models /
+      // step_efforts / agent_defaults on top below.
+      const launch = resolveAgentLaunchSettings(agent.role, wf, config.cli);
+      const agentCli = launch.cli;
+      // Claude model chain: step override > cli role slot > agent_defaults.
+      const modelShortName = agentCli === 'claude'
+        ? (stepModel || launch.model || config.agent_defaults.model || 'opus')
+        : null;
+      const modelId = modelShortName ? (MODEL_IDS[modelShortName] || modelShortName) : null;
+      const effortLevel = agentCli === 'claude'
+        ? (stepEffort || launch.effort || (config.agent_defaults && config.agent_defaults.effort) || null)
+        : null;
+      // Permission mapping per CLI. Claude gets --permission-mode (default
+      // resolves to 'auto': no routine prompts, classifier-reviewed). Codex has
+      // no classifier equivalent — never-prompt intents keep its bypass flag.
+      // OpenCode allows all operations by default; --auto additionally
+      // auto-approves anything the user's opencode config marked as "ask",
+      // which unattended agents require (an ask would stall the tmux session).
+      const dangerFlag = agentCli === 'codex'
         ? (['auto', 'bypassPermissions'].includes(permissionMode) ? ' --dangerously-bypass-approvals-and-sandbox' : '')
-        : claudePermissionFlag(permissionMode);
+        : agentCli === 'opencode'
+          ? ' --auto'
+          : claudePermissionFlag(permissionMode);
       // Append efficiency + structured feedback instructions to ALL agents
       // (skip if already present in the instruction to avoid duplication)
       const hasEfficiency = agent.instruction.includes('CONTEXT BUDGET');
@@ -1749,7 +1791,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       // values resolved from the actual model assigned to this agent — keeps
       // the prompts accurate when a project bumps to opus[1m] / sonnet[1m] or
       // when Codex (which has its own ~258K window) is the implementer.
-      const ctx = contextBudgetFor(modelId, useCodex);
+      const ctx = contextBudgetFor(modelId, agentCli);
       const interpolate = (s) => s.replace(/\{\{CONTEXT_BUDGET\}\}/g, ctx.budget).replace(/\{\{SOFT_THRESHOLD\}\}/g, ctx.softThreshold);
       const prompt = interpolate(`${agent.instruction}${extraInstructions}${learningsResult.text}${history}${feedbackCurl}`);
 
@@ -1758,18 +1800,42 @@ ${EFFICIENCY_INSTRUCTIONS}`,
 
       const scriptName = `start-${windowName}.sh`;
       const promptFileName = `prompt-${windowName}.txt`;
-      // Codex chooses its own model — only Claude takes --model from step_models.
-      const modelFlag = (!useCodex && modelId) ? ` --model ${modelId}` : '';
-      // Codex has no effort-equivalent CLI flag; only Claude takes --effort.
-      const effortFlag = (!useCodex && effortLevel) ? ` --effort ${effortLevel}` : '';
-      const cliBin = useCodex ? 'codex' : 'claude';
+      // Model/effort flags. Claude uses the step-aware chain above; opencode +
+      // codex use the pure launch resolver flags directly (same source the
+      // unit tests assert against).
+      const modelFlag = agentCli === 'claude' && modelId
+        ? ` --model ${modelId}`
+        : (agentCli === 'opencode' || agentCli === 'codex') ? launch.modelFlag : '';
+      const effortFlag = agentCli === 'claude' && effortLevel
+        ? ` --effort ${effortLevel}`
+        : '';
+      const variantFlag = agentCli === 'opencode' ? launch.effortFlag : '';
+      const codexEffortFlag = agentCli === 'codex' ? launch.effortFlag : '';
+      const cliBin = agentCli;
       // Pin the Claude session id at launch so a killed agent process can be
       // auto-resumed WITH its context (`claude --resume <id>` — see the
-      // agent-recovery monitor in server.js). Codex has no resume equivalent.
-      const cliSessionId = useCodex ? null : require('crypto').randomUUID();
-      const cliInvocation = useCodex
-        ? `codex exec${dangerFlag} "$(cat '${promptFileName}')"`
-        : `claude --session-id ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${promptFileName}')"`;
+      // agent-recovery monitor in server.js). Codex and OpenCode get no resume
+      // artifacts (OpenCode can --continue/--session, but can't pin a session
+      // id at launch — recovery halts with a clear message, same as codex).
+      const cliSessionId = agentCli === 'claude' ? require('crypto').randomUUID() : null;
+      // Prompt delivery per CLI. Claude/codex take it as a single argument via
+      // command substitution (their historical path). OpenCode reads it from
+      // stdin instead — verified 2026-07-20: `opencode run … < prompt.txt`
+      // delivers multi-KB prompts literally (backticks/$()/quotes safe), with
+      // no ARG_MAX or shell-escaping exposure.
+      // OpenCode additionally runs with --format json (FU-1): the raw NDJSON
+      // event stream (step_finish carries per-step tokens + real OpenRouter
+      // cost) is tee'd to <window>-<wfid>.events.jsonl for post-hoc telemetry
+      // parsing. The pane shows NDJSON instead of the pretty renderer —
+      // accepted tradeoff, the pane is for debugging.
+      const eventsFileName = agentCli === 'opencode'
+        ? path.join(logsPath, `${windowName}-${wf.id}.events.jsonl`)
+        : null;
+      const cliInvocation = agentCli === 'codex'
+        ? `codex exec${dangerFlag}${modelFlag}${codexEffortFlag} "$(cat '${promptFileName}')"`
+        : agentCli === 'opencode'
+          ? `opencode run --format json${dangerFlag}${modelFlag}${variantFlag} < '${promptFileName}' | tee '${eventsFileName}'`
+          : `claude --session-id ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${promptFileName}')"`;
       // Write prompt to a separate file to avoid shell escaping issues with backticks, quotes, etc.
       fs.writeFileSync(path.join(agentCwd, promptFileName), prompt, 'utf-8');
       ensureLauncherArtifactsIgnored(agentCwd);
@@ -1782,7 +1848,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       // mode is benign: if the paste ever lands as plain text instead of a
       // command, the agent just reads the done condition as one more instruction.
       let goalArmLine = '';
-      if (agent.goalCondition && !useCodex) {
+      if (agent.goalCondition && agentCli === 'claude') {
         const goalFileName = `goal-${windowName}.txt`;
         fs.writeFileSync(path.join(agentCwd, goalFileName), `/goal ${agent.goalCondition}`, 'utf-8');
         goalArmLine = `( sleep 25; tmux load-buffer -b goal-${windowName} '${goalFileName}'; tmux paste-buffer -d -b goal-${windowName} -t "$TMUX_PANE"; sleep 1; tmux send-keys -t "$TMUX_PANE" Enter ) &\n`;
@@ -1840,8 +1906,9 @@ ${simEnvLine}${goalArmLine}${cliInvocation}
       // Everything recovery needs is captured here at launch; the pane's shell
       // keeps sitting in agentCwd after the process dies, so `bash <script>`
       // resolves relative paths, and --resume restores the pinned session's
-      // full conversation context.
-      if (!useCodex) {
+      // full conversation context. Codex and OpenCode agents get no resume
+      // artifacts — recovery decides 'halt' for them (same as codex today).
+      if (agentCli === 'claude') {
         const resumePromptFile = `prompt-resume-${windowName}.txt`;
         const resumeScriptName = `start-${windowName}-resume.sh`;
         fs.writeFileSync(path.join(agentCwd, resumePromptFile),
@@ -1885,7 +1952,16 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
 
       agent.window = windowName;
       agent.status = 'running';
-      agent.model = useCodex ? 'codex' : modelShortName;
+      // Which CLI + model this agent actually runs on — the hub badges both.
+      // claude → the step_models short name; codex → 'codex' (self-selected
+      // model); opencode → 'opencode:<provider/model>' or 'opencode' when
+      // using opencode's own default model.
+      agent.cli = agentCli;
+      agent.model = agentCli === 'claude'
+        ? modelShortName
+        : agentCli === 'opencode'
+          ? (opencodeModel ? `opencode:${opencodeModel}` : 'opencode')
+          : 'codex';
       agent.startedAt = new Date().toISOString();
       agent.agentCwd = agentCwd;
       agent.injectedLearnings = learningsResult.injected;
@@ -2541,7 +2617,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
               // Re-review: targeted single-pass, no parallel sub-agents
               return `## YOU ARE A CODE REVIEWER — NOT A FIX AGENT — READ THIS FIRST\n\n**Your job is to review code changes and report findings. You do NOT write code. You do NOT fix bugs. You do NOT modify files. You read the diff, identify issues, and submit a structured review.**\n\n**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (FIX-REPORT format used by Dev agents — wrong for reviewers):\n- \`**All issues addressed:** yes|no\` / \`**Committed:** <hash>\` / \`### Changes\` listing files you modified\n- Any phrasing that implies you made code changes\n\n**REQUIRED FEEDBACK FORMAT** — your feedback MUST contain:\n- \`**Approved:** yes | no\`\n- \`**Blocking:** N  |  **Medium:** N  |  **Low:** N\`\n- \`### Summary\`, \`### Findings\`, \`### Action Items\` sections\n\n**IF YOU SEE A BUG:** REPORT it as a finding with severity (BLOCKING / MEDIUM / LOW) and an Action Item naming the role responsible. DO NOT fix it yourself.\n\n---\n\nYou are a Code Reviewer doing a targeted re-review.\n\nDo NOT use the /code-review skill and do NOT launch parallel sub-agents. Do a single-pass focused review.\n\nPRD path: ${wf.prdPath}\n${reviewContext}\n\n## YOUR TASK\nVerify that each fix listed above actually resolves the issue it claims to fix. Read the relevant changed files directly. Check for regressions introduced by the fixes. Do not re-audit code that was already approved in round 1.\n\n## OUTPUT FORMAT (machine-parsed — use exactly)\n\n## Review: Code Reviewer\n\n**Approved:** yes | no\n**Blocking:** N  |  **Medium:** N  |  **Low:** N\n\n### Summary\n[1-3 sentences]\n\n### Findings\n[Only issues with the fixes. If fixes are clean, say "All blocking issues from round 1 are resolved."]\n\n### Action Items\n- [ ] [role] — description`;
             }
-            return `## YOU ARE A CODE REVIEWER — NOT A FIX AGENT — READ THIS FIRST\n\n**Your job is to review code changes and report findings. You do NOT write code. You do NOT fix bugs. You do NOT modify files. You read the diff, identify issues, and submit a structured review.**\n\n**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (FIX-REPORT format used by Dev agents — wrong for reviewers):\n- \`**All issues addressed:** yes|no\` / \`**Committed:** <hash>\` / \`### Changes\` listing files you modified\n- Any phrasing that implies you made code changes\n\n**REQUIRED FEEDBACK FORMAT** — your feedback MUST contain:\n- \`**Approved:** yes | no\`\n- \`**Blocking:** N  |  **Medium:** N  |  **Low:** N\`\n- \`### Summary\`, \`### Findings\`, \`### Action Items\` sections\n\n**IF YOU SEE A BUG:** REPORT it as a finding with severity (BLOCKING / MEDIUM / LOW) and an Action Item naming the role responsible. DO NOT fix it yourself. The fix happens in a separate fix_execution step by Dev agents.\n\n---\n\nYou are a Code Reviewer. Review the code changes in this branch.\n\nPRD path: ${wf.prdPath}\nUse the /code-review skill at ${(config.code_review && config.code_review.effort) || 'high'} effort — a multi-angle, recall-biased pass: surface every plausible issue then verify, don't stop at the first few. Review all changes, check for quality, correctness, and adherence to project standards.\n\n## REVIEW SCOPE RULES\n1. **Only review code changes in this branch** — do not review pre-existing code or suggest refactors outside the PRD scope.\n2. **Check the PRD's "Out of scope" section** — do not raise issues about excluded items.\n3. **Classify findings** as BLOCKING or NON-BLOCKING. Be conservative with BLOCKING.\n4. **If code is correct, say "APPROVE."** Do not invent concerns.\n5. **Use the structured review format** from CLAUDE.md.${designCheck}\n7. **ACCEPTANCE CRITERIA COVERAGE** — Read the PRD and verify that EVERY acceptance criterion has corresponding code changes. If an AC has no implementation at all, mark it BLOCKING. Include an "AC Coverage" section in your review listing each AC and whether it's covered by the code changes.\n8. **MOCK-ONLY COVERAGE** — Check if any acceptance criteria that depend on external services (LLM calls, third-party APIs, hardware) are only tested with mocked responses. Flag these as "MOCK-ONLY — real integration unverified" in your review so they are flagged for manual testing during demo review. Not all projects use mocks — only flag this when the project's tests actually mock external dependencies.\n9. **MULTI-ANGLE RECALL** — cover these angles explicitly (each has shipped real merged defects): (a) correctness across ALL entity/type variants the spec covers and BOTH directions of every toggle — not just the path the implementation took; (b) silent fail-safe drops (returns 200 while quietly discarding an invalid field); (c) removed or weakened prior behavior; (d) cross-file / contract drift; (e) altitude — a third copy of logic that will drift; (f) dead / unused error contracts; (g) test scaffolding leaked into production (env hooks, ungated test seams).\n\nThis is round ${wf.round}.${reviewContext}`;
+            return `## YOU ARE A CODE REVIEWER — NOT A FIX AGENT — READ THIS FIRST\n\n**Your job is to review code changes and report findings. You do NOT write code. You do NOT fix bugs. You do NOT modify files. You read the diff, identify issues, and submit a structured review.**\n\n**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (FIX-REPORT format used by Dev agents — wrong for reviewers):\n- \`**All issues addressed:** yes|no\` / \`**Committed:** <hash>\` / \`### Changes\` listing files you modified\n- Any phrasing that implies you made code changes\n\n**REQUIRED FEEDBACK FORMAT** — your feedback MUST contain:\n- \`**Approved:** yes | no\`\n- \`**Blocking:** N  |  **Medium:** N  |  **Low:** N\`\n- \`### Summary\`, \`### Findings\`, \`### Action Items\` sections\n\n**IF YOU SEE A BUG:** REPORT it as a finding with severity (BLOCKING / MEDIUM / LOW) and an Action Item naming the role responsible. DO NOT fix it yourself. The fix happens in a separate fix_execution step by Dev agents.\n\n---\n\nYou are a Code Reviewer. Review the code changes in this branch.\n\nPRD path: ${wf.prdPath}\nUse the /code-review skill at ${(config.code_review && config.code_review.effort) || 'high'} effort — a multi-angle, recall-biased pass: surface every plausible issue then verify, don't stop at the first few. Review all changes, check for quality, correctness, and adherence to project standards.\n\n## REVIEW SCOPE RULES\n1. **Only review code changes in this branch** — do not review pre-existing code or suggest refactors outside the PRD scope.\n2. **Check the PRD's "Out of scope" section** — do not raise issues about excluded items.\n3. **Classify findings** as BLOCKING or NON-BLOCKING. Be conservative with BLOCKING.\n4. **If code is correct, say "APPROVE."** Do not invent concerns.\n5. **Use the structured review format** from AGENTS.md.${designCheck}\n7. **ACCEPTANCE CRITERIA COVERAGE** — Read the PRD and verify that EVERY acceptance criterion has corresponding code changes. If an AC has no implementation at all, mark it BLOCKING. Include an "AC Coverage" section in your review listing each AC and whether it's covered by the code changes.\n8. **MOCK-ONLY COVERAGE** — Check if any acceptance criteria that depend on external services (LLM calls, third-party APIs, hardware) are only tested with mocked responses. Flag these as "MOCK-ONLY — real integration unverified" in your review so they are flagged for manual testing during demo review. Not all projects use mocks — only flag this when the project's tests actually mock external dependencies.\n9. **MULTI-ANGLE RECALL** — cover these angles explicitly (each has shipped real merged defects): (a) correctness across ALL entity/type variants the spec covers and BOTH directions of every toggle — not just the path the implementation took; (b) silent fail-safe drops (returns 200 while quietly discarding an invalid field); (c) removed or weakened prior behavior; (d) cross-file / contract drift; (e) altitude — a third copy of logic that will drift; (f) dead / unused error contracts; (g) test scaffolding leaked into production (env hooks, ungated test seams).\n\nThis is round ${wf.round}.${reviewContext}`;
           })(),
         }];
         wf.steps.code_review = { status: 'running', agents: launchWorkflowAgents(wf, crAgent, { useWorktrees: false, cwd: projectRoot }) };
@@ -2816,11 +2892,24 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli } = req.body;
     if (!type) return res.status(400).json({ error: 'type required' });
     if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return res.status(400).json({ error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
-    if (startDeveloperCli && !['claude', 'codex'].includes(startDeveloperCli)) {
-      return res.status(400).json({ error: "developerCli must be 'claude' or 'codex'" });
+    if (startDeveloperCli && !VALID_CLIS.includes(startDeveloperCli)) {
+      return res.status(400).json({ error: `developerCli must be one of ${VALID_CLIS.join(', ')}` });
     }
-    if (startReviewerCli && !['claude', 'codex'].includes(startReviewerCli)) {
-      return res.status(400).json({ error: "reviewerCli must be 'claude' or 'codex'" });
+    // reviewerCli additionally accepts 'auto' — resolved server-side (below)
+    // to a CLI different from the developer's, so the cross-model diversity
+    // property holds for ALL callers, not just hub-originated starts.
+    if (startReviewerCli && startReviewerCli !== 'auto' && !VALID_CLIS.includes(startReviewerCli)) {
+      return res.status(400).json({ error: `reviewerCli must be 'auto' or one of ${VALID_CLIS.join(', ')}` });
+    }
+    // A CLI disabled installation-wide can't be requested — enabled_clis comes
+    // from ~/.build-studio/config.json when present, else binary auto-detection.
+    // The hub pickers filter by the same list, so this only trips on
+    // hand-crafted requests or a stale UI.
+    const enabledClis = resolveEnabledClis();
+    for (const requested of [startDeveloperCli, startReviewerCli]) {
+      if (requested && requested !== 'auto' && !enabledClis.includes(requested)) {
+        return res.status(400).json({ error: `CLI '${requested}' is not enabled on this installation (enabled: ${enabledClis.join(', ')}). Adjust enabled_clis in ~/.build-studio/config.json.` });
+      }
     }
     // PRD-001: onboarding needs no input (the project itself is the input).
     // kickoff/review/execution still require input as today.
@@ -3088,11 +3177,13 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       returnTo: null,
       reviewMode: startReviewMode || config.review_mode || 'parallel',
       autoIterateRemaining: startAutoIterate || 0,
-      developerCli: startDeveloperCli || 'claude',
-      // No auto-flip: reviewers default to the developer CLI (claude). Cross-model
-      // review is opt-in per execution run via the UI reviewer-CLI control, and the
-      // flip only takes effect in execution workflows (see reviewerOnCodex).
-      reviewerCli: startReviewerCli || startDeveloperCli || 'claude',
+      // Legacy per-run CLI knobs: stored ONLY when an explicit value arrives
+      // (old hub/API callers). New runs leave them unset so resolveCliForRole
+      // uses the project's per-role selectors (cli.developer_cli/reviewer_cli).
+      ...(startDeveloperCli ? { developerCli: startDeveloperCli } : {}),
+      ...(startReviewerCli
+        ? { reviewerCli: resolveReviewerCliAtStart(startReviewerCli, startDeveloperCli || (config.cli && config.cli.default) || 'claude', enabledClis) }
+        : {}),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -3148,9 +3239,14 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     agent.feedback = feedback;
     agent.status = 'done';
     agent.completedAt = new Date().toISOString();
+    // Clear any stale watchdog error (e.g. a false dead-process halt fired while
+    // the agent was still finishing) — delivered feedback proves the agent lived.
+    agent.error = undefined;
     if (agent.startedAt && agent.agentCwd) {
       agent.tokenUsage = computeTokenUsage(agent.startedAt, agent.completedAt, agent.agentCwd, agent.model);
     }
+    // FU-1: harvest the opencode events stream into tokenUsage + kick actual-model resolution.
+    captureOpencodeTelemetry(wf, agent, (f) => (f.steps?.[wf.currentStep]?.agents || []).find(a => normalizeRole(a.role) === normalizeRole(role)));
     const feedbackEntry = { role, feedback, round: wf.round, step: wf.currentStep, at: new Date().toISOString() };
     wf.feedback.push(feedbackEntry);
 
@@ -3396,8 +3492,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
 
     // Steps that always require manual intervention — owner_consultations is
     // the manual gate where the owner reviews PM output and provides notes;
-    // demo_review and device_testing need a human in front of the device.
-    const alwaysManual = ['demo_review', 'device_testing', 'owner_verification', 'owner_consultations'];
+    // demo_review and device_testing need a human in front of the device
+    // UNLESS the owner opted into Skip Demo Review (auto-advance then skips
+    // demo_review with action=skip).
+    const alwaysManual = ['device_testing', 'owner_verification', 'owner_consultations'];
+    if (!wf.autoAdvanceSkipDemoReview) alwaysManual.push('demo_review');
     if (alwaysManual.includes(wf.currentStep)) return;
 
     // Review steps used below for verdict-based routing (send_to_devs on blocking).
@@ -3428,7 +3527,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
 
     let action = null;
 
-    if (isPending) {
+    // Skip Demo Review: owner opted out of the human gate — fire skip regardless
+    // of agent/pending state (demo_review is a manual gate, rarely has agents).
+    if (wf.currentStep === 'demo_review' && wf.autoAdvanceSkipDemoReview) {
+      action = 'skip';
+    } else if (isPending) {
       const manualSteps = ['merge_to_main', 'capture_learnings'];
       action = manualSteps.includes(wf.currentStep) ? 'approve' : 'launch';
     } else if (allDone) {
@@ -3585,6 +3688,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     // Strict mode (review workflows): ANY reported finding — medium/low included —
     // sends the round back to PM instead of approving; capped by max_review_rounds.
     if (req.body.strict !== undefined) wf.autoAdvanceStrict = !!req.body.strict;
+    // Skip Demo Review (execution): when auto-advance and this flag are both on,
+    // the tick advances past demo_review with action=skip (no human smoke demo).
+    if (req.body.skipDemoReview !== undefined) wf.autoAdvanceSkipDemoReview = !!req.body.skipDemoReview;
+    // Auto-advance off → clear the skip flag (checkbox is disabled/unchecked in UI).
+    if (req.body.enabled === false) wf.autoAdvanceSkipDemoReview = false;
     const enabled = !!wf.autoAdvance;
     if (enabled) {
       // Re-enabling is the owner's "try again" — clear any prior rejection pause + stashed
@@ -3596,8 +3704,12 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     state.saveWorkflow(wf);
     if (enabled) startAutoAdvanceTimer();
     else stopAutoAdvanceTimer();
-    console.log(`[auto-advance] ${enabled ? 'enabled' : 'disabled'}${wf.autoAdvanceStrict ? ' (strict)' : ''}`);
-    return res.json({ autoAdvance: enabled, autoAdvanceStrict: !!wf.autoAdvanceStrict });
+    console.log(`[auto-advance] ${enabled ? 'enabled' : 'disabled'}${wf.autoAdvanceStrict ? ' (strict)' : ''}${wf.autoAdvanceSkipDemoReview ? ' (skip-demo)' : ''}`);
+    return res.json({
+      autoAdvance: enabled,
+      autoAdvanceStrict: !!wf.autoAdvanceStrict,
+      autoAdvanceSkipDemoReview: !!wf.autoAdvanceSkipDemoReview,
+    });
   });
 
   // Resume auto-advance timer on server start if workflow has it enabled
@@ -3854,9 +3966,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       ? `\nBefore exploring the codebase, read ARCHITECTURE.md at the repo root — the maintained component map, guardrails, and test-infrastructure notes. Don't re-derive what it already tells you. If your changes alter the component map (new module, moved responsibility, new seam), update ARCHITECTURE.md in the same commit.\n`
       : '';
 
+    // The /goal harness is a Claude Code native feature — arm it only when the
+    // builder actually runs on claude (codex and opencode have no equivalent).
     const useGoalHarness = (config.builder_strategy || 'role') === 'goal'
       && wf.taskPlan && wf.taskPlan.monolithic
-      && wf.developerCli !== 'codex';
+      && resolveCliForRole(role.role, wf, config.cli) === 'claude';
     const goalCondition = useGoalHarness
       ? `Every acceptance criterion of the PRD at ${prdPath} is implemented; the COMPLETE test suite (including the pre-implementation tests committed before this session started) has been run and passes; all work is committed on the current branch; and the feedback POST from the prompt file has been sent successfully, including a per-AC evidence table.`
       : null;
@@ -4078,9 +4192,13 @@ Fix only the issues raised. Commit your changes.`,
       agent.feedback = feedback;
       agent.status = 'done';
       agent.completedAt = new Date().toISOString();
+      // Clear any stale watchdog error — delivered feedback proves the agent lived.
+      agent.error = undefined;
       if (agent.startedAt && agent.agentCwd) {
         agent.tokenUsage = computeTokenUsage(agent.startedAt, agent.completedAt, agent.agentCwd, agent.model);
       }
+      // FU-1: harvest the opencode events stream into tokenUsage + kick actual-model resolution.
+      captureOpencodeTelemetry(wf, agent, (f) => (f.taskExecution?.taskStates?.[String(taskIdx)]?.agents || []).find(a => normalizeRole(a.role) === normalizeRole(role)));
     }
 
     // Evidence sanity-check: agents sometimes claim to have committed files or
@@ -4147,7 +4265,9 @@ Fix only the issues raised. Commit your changes.`,
         // Legacy ts.tokenUsage — keep for backward compat but cumulativeTokens is authoritative
         const agent = (ts2.agents || []).find(a => a.status === 'done');
         if (agent?.startedAt && agent?.agentCwd) {
-          ts2.tokenUsage = computeTokenUsage(agent.startedAt, agent.completedAt, agent.agentCwd, agent.model);
+          // claude: parse session jsonl; opencode: captureOpencodeTelemetry already
+          // filled agent.tokenUsage from the events stream — reuse it for the task badge.
+          ts2.tokenUsage = computeTokenUsage(agent.startedAt, agent.completedAt, agent.agentCwd, agent.model) || agent.tokenUsage || null;
         }
         // Agent summary: first non-empty line of feedback
         const rawFeedback = (ts2.agents || []).find(a => a.feedback)?.feedback || '';
@@ -5697,7 +5817,7 @@ Report **Approved: yes** once every relevant cell has a test (or a justified MAN
 
 **Your job is to produce a task plan for the PRD. You do NOT write code. You do NOT fix bugs. You do NOT run tests. You decompose the PRD into discrete tasks for downstream execution agents.**
 
-**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (these are FIX-REPORT or REVIEW formats from CLAUDE.md, used by Dev / Reviewer agents in OTHER steps — wrong for your role):
+**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (these are FIX-REPORT or REVIEW formats from AGENTS.md, used by Dev / Reviewer agents in OTHER steps — wrong for your role):
 - \`**All issues addressed:** yes|no\` / \`**Committed:** <hash>\` / \`### Changes\` (fix-report format — you are not a fix agent)
 - \`**Approved:** yes|no\` / \`**Blocking:** N\` / \`### Findings\` (review format — you are not a reviewer)
 - Any phrasing that implies you made code changes, ran tests, or reviewed someone else's work
@@ -6359,7 +6479,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
           if (wf.type === 'bugfix' && !(config.code_review && config.code_review.bugfix_full_review === true)) {
             return `## YOU ARE A CODE REVIEWER — NOT A FIX AGENT — READ THIS FIRST\n\n**Your job is to review the bug fix in this branch and report findings. You do NOT write code. You do NOT fix bugs. You do NOT modify files. You read the diff, identify issues, and submit a structured review.**\n\n**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (FIX-REPORT format used by Dev agents — wrong for reviewers):\n- \`**All issues addressed:** yes|no\` / \`**Committed:** <hash>\` / \`### Changes\` listing files you modified\n- Any phrasing that implies you made code changes\n\n**REQUIRED FEEDBACK FORMAT** — your feedback MUST contain:\n- \`**Approved:** yes | no\`\n- \`**Blocking:** N  |  **Medium:** N  |  **Low:** N\`\n- \`### Summary\`, \`### Findings\`, \`### Action Items\` sections\n\n**IF YOU SEE A BUG:** REPORT it as a finding with severity (BLOCKING / MEDIUM / LOW) and an Action Item naming the role responsible. DO NOT fix it yourself.\n\n---\n\nYou are a Code Reviewer reviewing a BUG FIX — a small, targeted change. Do a SINGLE-PASS focused review. Do NOT use the /code-review skill and do NOT launch parallel sub-agents; that fan-out is reserved for feature PRDs.\n\nBug item: ${wf.prdPath}\n\n## SCOPE — the fix diff only\nReview ONLY the changes this fix introduced: \`git diff ${wf.defaultBranch || 'main'}...HEAD\`. Do not audit pre-existing code or suggest out-of-scope refactors.\n\n## WHAT TO CHECK (focused — not an exhaustive audit)\n1. **The fix is correct** — it resolves the bug described in the item, across the inputs the bug covers (not just the one path demoed).\n2. **A regression test was added** — the bug-fix discipline requires a test that FAILS without the fix and PASSES with it. Verify such a test exists in the diff and genuinely exercises the bug's trigger; if it is missing or doesn't cover the reported failure, mark it BLOCKING.\n3. **No collateral breakage** — the change doesn't weaken/remove adjacent behavior, drift a shared contract, or leak test scaffolding into production.\n4. **Acceptance** — the fix meets the item's Acceptance criteria (read ${wf.prdPath}).\nBe conservative with BLOCKING. If the fix is correct and tested, say APPROVE.\n\n## OUTPUT FORMAT (machine-parsed — use exactly)\n\n## Review: Code Reviewer\n\n**Approved:** yes | no\n**Blocking:** N  |  **Medium:** N  |  **Low:** N\n\n### Summary\n[1-3 sentences]\n\n### Findings\n[Issues with the fix or its regression test. If clean, say so.]\n\n### Action Items\n- [ ] [role] — description\n\nThis is round ${wf.round}.${reviewContext}`;
           }
-          return `## YOU ARE A CODE REVIEWER — NOT A FIX AGENT — READ THIS FIRST\n\n**Your job is to review code changes and report findings. You do NOT write code. You do NOT fix bugs. You do NOT modify files. You read the diff, identify issues, and submit a structured review.**\n\n**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (FIX-REPORT format used by Dev agents — wrong for reviewers):\n- \`**All issues addressed:** yes|no\` / \`**Committed:** <hash>\` / \`### Changes\` listing files you modified\n- Any phrasing that implies you made code changes\n\n**REQUIRED FEEDBACK FORMAT** — your feedback MUST contain:\n- \`**Approved:** yes | no\`\n- \`**Blocking:** N  |  **Medium:** N  |  **Low:** N\`\n- \`### Summary\`, \`### Findings\`, \`### Action Items\` sections\n\n**IF YOU SEE A BUG:** REPORT it as a finding with severity (BLOCKING / MEDIUM / LOW) and an Action Item naming the role responsible. DO NOT fix it yourself. The fix happens in a separate fix_execution step by Dev agents.\n\n---\n\nYou are a Code Reviewer. Review the code changes in this branch.\n\nPRD path: ${wf.prdPath}\nUse the /code-review skill at ${(config.code_review && config.code_review.effort) || 'high'} effort — a multi-angle, recall-biased pass: surface every plausible issue then verify, don't stop at the first few. Review all changes, check for quality, correctness, and adherence to project standards.\n\n## REVIEW SCOPE RULES\n1. **Only review code changes in this branch** — do not review pre-existing code or suggest refactors outside the PRD scope.\n2. **Check the PRD's "Out of scope" section** — do not raise issues about excluded items.\n3. **Classify findings** as BLOCKING or NON-BLOCKING. Be conservative with BLOCKING.\n4. **If code is correct, say "APPROVE."** Do not invent concerns.\n5. **Use the structured review format** from CLAUDE.md.${designCheck}\n7. **ACCEPTANCE CRITERIA COVERAGE** — Read the PRD and verify that EVERY acceptance criterion has corresponding code changes. If an AC has no implementation at all, mark it BLOCKING. Include an "AC Coverage" section in your review listing each AC and whether it's covered by the code changes.\n8. **MOCK-ONLY COVERAGE** — Check if any acceptance criteria that depend on external services (LLM calls, third-party APIs, hardware) are only tested with mocked responses. Flag these as "MOCK-ONLY — real integration unverified" in your review so they are flagged for manual testing during demo review. Not all projects use mocks — only flag this when the project's tests actually mock external dependencies.\n9. **MULTI-ANGLE RECALL** — cover these angles explicitly (each has shipped real merged defects): (a) correctness across ALL entity/type variants the spec covers and BOTH directions of every toggle — not just the path the implementation took; (b) silent fail-safe drops (returns 200 while quietly discarding an invalid field); (c) removed or weakened prior behavior; (d) cross-file / contract drift; (e) altitude — a third copy of logic that will drift; (f) dead / unused error contracts; (g) test scaffolding leaked into production (env hooks, ungated test seams).\n\nThis is round ${wf.round}.${reviewContext}`;
+          return `## YOU ARE A CODE REVIEWER — NOT A FIX AGENT — READ THIS FIRST\n\n**Your job is to review code changes and report findings. You do NOT write code. You do NOT fix bugs. You do NOT modify files. You read the diff, identify issues, and submit a structured review.**\n\n**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (FIX-REPORT format used by Dev agents — wrong for reviewers):\n- \`**All issues addressed:** yes|no\` / \`**Committed:** <hash>\` / \`### Changes\` listing files you modified\n- Any phrasing that implies you made code changes\n\n**REQUIRED FEEDBACK FORMAT** — your feedback MUST contain:\n- \`**Approved:** yes | no\`\n- \`**Blocking:** N  |  **Medium:** N  |  **Low:** N\`\n- \`### Summary\`, \`### Findings\`, \`### Action Items\` sections\n\n**IF YOU SEE A BUG:** REPORT it as a finding with severity (BLOCKING / MEDIUM / LOW) and an Action Item naming the role responsible. DO NOT fix it yourself. The fix happens in a separate fix_execution step by Dev agents.\n\n---\n\nYou are a Code Reviewer. Review the code changes in this branch.\n\nPRD path: ${wf.prdPath}\nUse the /code-review skill at ${(config.code_review && config.code_review.effort) || 'high'} effort — a multi-angle, recall-biased pass: surface every plausible issue then verify, don't stop at the first few. Review all changes, check for quality, correctness, and adherence to project standards.\n\n## REVIEW SCOPE RULES\n1. **Only review code changes in this branch** — do not review pre-existing code or suggest refactors outside the PRD scope.\n2. **Check the PRD's "Out of scope" section** — do not raise issues about excluded items.\n3. **Classify findings** as BLOCKING or NON-BLOCKING. Be conservative with BLOCKING.\n4. **If code is correct, say "APPROVE."** Do not invent concerns.\n5. **Use the structured review format** from AGENTS.md.${designCheck}\n7. **ACCEPTANCE CRITERIA COVERAGE** — Read the PRD and verify that EVERY acceptance criterion has corresponding code changes. If an AC has no implementation at all, mark it BLOCKING. Include an "AC Coverage" section in your review listing each AC and whether it's covered by the code changes.\n8. **MOCK-ONLY COVERAGE** — Check if any acceptance criteria that depend on external services (LLM calls, third-party APIs, hardware) are only tested with mocked responses. Flag these as "MOCK-ONLY — real integration unverified" in your review so they are flagged for manual testing during demo review. Not all projects use mocks — only flag this when the project's tests actually mock external dependencies.\n9. **MULTI-ANGLE RECALL** — cover these angles explicitly (each has shipped real merged defects): (a) correctness across ALL entity/type variants the spec covers and BOTH directions of every toggle — not just the path the implementation took; (b) silent fail-safe drops (returns 200 while quietly discarding an invalid field); (c) removed or weakened prior behavior; (d) cross-file / contract drift; (e) altitude — a third copy of logic that will drift; (f) dead / unused error contracts; (g) test scaffolding leaked into production (env hooks, ungated test seams).\n\nThis is round ${wf.round}.${reviewContext}`;
         })(),
       }];
       wf.steps.code_review = { status: 'running', agents: launchWorkflowAgents(wf, crAgent, { useWorktrees: false, cwd: projectRoot }) };
@@ -6635,7 +6755,7 @@ xcodebuild test \\\\
 
 **You are QA. Your ONLY job is to run the test suite and report what happened. You do NOT write code. You do NOT fix bugs.**
 
-**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (these are FIX-REPORT formats from CLAUDE.md, used by iOS Dev agents in a different step — they are wrong for your role):
+**FORBIDDEN FEEDBACK FORMAT** — your feedback will be REJECTED if you use any of these patterns (these are FIX-REPORT formats from AGENTS.md, used by iOS Dev agents in a different step — they are wrong for your role):
 - \`**All issues addressed:** yes|no\`
 - \`**Committed:** <hash>\`
 - \`### Changes\` listing files you modified
@@ -6809,7 +6929,7 @@ PRD path: ${wf.prdPath}
       - UNTESTABLE: Cannot verify in this environment, OR MANUAL gate has no evidence artifact — explain why
 4. **Cross-check against qa_validation findings.** Read the qa_validation feedback for this round. If QA flagged any \`[Invalid Configuration]\` / asset-not-found / render-wrong runtime warning, treat the affected ACs (anything visual or color-dependent) as PARTIAL or UNMET — the test suite passing does not mean the AC is met when the app renders with fallback colors at runtime.
 5. **Check the visual evidence directory** \`docs/pr-evidence/<PRD-basename>/visual/\` for any AC that depends on visible rendering (greetings, metric values, icons, empty states, brand colors). If the directory does not exist or is empty, visual-dependent ACs cannot be marked MET — mark them UNTESTABLE and require the implementing role to capture screenshots.
-6. Report using the structured review format from CLAUDE.md
+6. Report using the structured review format from AGENTS.md
 
 ## CRITICAL RULES
 
@@ -7407,7 +7527,7 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
         return res.json({ workflow: wf, completed: true });
       }
       // Promotion candidates: entries agents keep self-reporting as applied are
-      // candidates to graduate into a durable home (CLAUDE.md / ARCHITECTURE.md /
+      // candidates to graduate into a durable home (AGENTS.md / ARCHITECTURE.md /
       // role notes) and leave the injection pool.
       let promotionHint = '';
       try {
@@ -7417,7 +7537,7 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
           .sort((a, b) => b.timesApplied - a.timesApplied)
           .slice(0, 5);
         if (candidates.length > 0) {
-          promotionHint = `\n\n## Promotion candidates (agents self-reported applying these ≥3 times)\n${candidates.map(c => `- "${c.title}" (applied ${c.timesApplied}×)`).join('\n')}\nFor each: propose in your feedback (under \`### Promotion proposals\`) where it should graduate to — the project's CLAUDE.md, ARCHITECTURE.md component section, or a role notes file — with the exact text to add. Do NOT apply the promotion yourself; the owner decides. A promoted learning's file should then be deleted from docs/learnings/ (note that in the proposal).`;
+          promotionHint = `\n\n## Promotion candidates (agents self-reported applying these ≥3 times)\n${candidates.map(c => `- "${c.title}" (applied ${c.timesApplied}×)`).join('\n')}\nFor each: propose in your feedback (under \`### Promotion proposals\`) where it should graduate to — the project's AGENTS.md, ARCHITECTURE.md component section, or a role notes file — with the exact text to add. Do NOT apply the promotion yourself; the owner decides. A promoted learning's file should then be deleted from docs/learnings/ (note that in the proposal).`;
         }
       } catch {}
       const agentDashboardPath = path.join(__dirname, '../..');
@@ -8244,7 +8364,8 @@ function markPrdDoneContent(original, prdId, today) {
 
 module.exports = {
   createWorkflowRouter,
-  // Exported for unit tests (pure bugfix helpers — no I/O).
+  // Exported for unit tests (pure helpers — no I/O).
+  resolveReviewerCliAtStart,
   DEFAULT_BUGFIX_STEPS,
   bugfixDisciplineBlock,
   bugfixSequence,

@@ -8,6 +8,7 @@ import { StatusTab } from './status-tab'
 import { SpecNav } from './spec-nav'
 import { SpecTab } from './spec-tab'
 import { AgentsTab } from './agents-tab'
+import { ProjectModelTab } from './project-model-tab'
 import { useAgents } from './agent-roster'
 import { WorkflowView } from './workflow-view'
 import { TerminalPanel } from './terminal-panel'
@@ -231,6 +232,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
     { key: 'status', label: 'Status' },
     { key: 'backlog', label: 'Backlog' },
     { key: 'agents', label: 'Agents' },
+    { key: 'model', label: 'Model' },
     { key: 'services', label: 'Services' },
     { key: 'cicd', label: 'CI/CD' },
     { key: 'runbooks', label: 'Runbooks' },
@@ -374,6 +376,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
                 />
               )}
               {tab === 'agents' && <AgentsTab agents={agents} />}
+              {tab === 'model' && <ProjectModelTab />}
               {tab === 'services' && <ServicesTab />}
               {tab === 'cicd' && <CicdTab />}
               {tab === 'runbooks' && <RunbooksTab />}
