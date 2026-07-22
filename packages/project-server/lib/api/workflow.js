@@ -197,21 +197,25 @@ function buildBugfixTask(id, item, role) {
   };
 }
 
-// ─── owner_verification step helpers (pure, exported for unit tests) ─────────
+// ─── owner-gated AC checklist (pure, exported for unit tests) ────────────────
 //
-// The owner_verification step (inserted per-project via workflow.execution.add,
-// after final_review) is where owner-gated ACs actually close: checks that need
-// a human at the machine — Dock launch, native Keychain dialogs, DevTools
-// probes on the running packaged app. The AC verifier defers these rows
-// (UNTESTABLE, Approved: yes) and lists them under `### Owner action items`;
-// before this step existed nothing consumed that list, so the AC verifier
-// deferred evidence downstream while final review blocked on its absence —
-// both self-consistent, structurally unresolvable (finance-studio PRD-004,
-// 2026-07-19, capped at round 5 over exactly this).
+// Owner-gated ACs — checks that need a human at the machine (Dock launch,
+// native Keychain dialogs, DevTools probes on the running packaged app) — are
+// deferred by the AC verifier (UNTESTABLE, Approved: yes) and listed under
+// `### Owner action items`. A dedicated `owner_verification` step used to gate
+// on this list with committed evidence (a .md file or screenshots under
+// pr-evidence/<prd>/manual-verification/); removed 2026-07-22 as more friction
+// than value in practice (launch-studio LS-074 dogfood) — the owner already
+// knows what they checked, and writing it down for a gate to grep for added no
+// real assurance. The checklist is now surfaced informationally in
+// `demo_review` instead (see the demo_review handler below): the owner sees
+// what couldn't be automatically verified, with the hint text each bullet
+// already carries, and approving demo_review logs which ACs were owner-
+// confirmed straight to workflow state — no evidence artifact required.
 
 // Extract the owner checklist from the AC verifier's feedback: bullets under
 // `### Owner action items` that name an AC/US id. Returns [{ ac, text }],
-// deduped by id. Empty array ⇒ nothing owner-gated ⇒ the step auto-skips.
+// deduped by id. Empty array ⇒ nothing owner-gated ⇒ nothing to surface.
 function extractOwnerChecklist(acFeedback) {
   const text = String(acFeedback || '');
   const header = text.match(/^###\s+Owner action items[ \t]*$/mi);
@@ -233,40 +237,6 @@ function extractOwnerChecklist(acFeedback) {
     items.push({ ac: idMatch[1], text: b[1].trim() });
   }
   return items;
-}
-
-// Which checklist ACs have no committed evidence? `evidenceText` is the
-// concatenated content of every markdown file in the PRD's
-// pr-evidence/<prd>/manual-verification/ dir; an AC counts as evidenced when
-// its id appears there. Deliberately id-presence only — the evidence format is
-// human-authored prose/tables (see finance-studio PRD-004's owner-manual-run),
-// and anything stricter re-creates the brittle-parse failure mode the AC
-// evidence gate's comma bug just demonstrated.
-function ownerVerificationMissing(checklist, evidenceText) {
-  const text = String(evidenceText || '');
-  return (checklist || []).filter(item => !new RegExp(`\\b${item.ac.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(text));
-}
-
-// Called when a step's computed next is `owner_verification`. Materializes the
-// checklist from the AC verifier's `### Owner action items` and decides whether
-// the step runs (owner-gated ACs exist → stop here) or auto-skips (none → fall
-// through to the step after it). Placement-agnostic: works wherever
-// owner_verification sits in the sequence (it belongs right after
-// ac_verification, mirroring device_testing — the owner does the manual checks
-// as soon as the AC gate identifies them, before security_audit/final_review
-// depend on the evidence). Mutates wf.steps.owner_verification; returns
-// { stop, nextStep }.
-function computeOwnerVerificationEntry(wf, execSteps) {
-  const acFb = ((wf.steps.ac_verification || {}).agents || []).map(a => a.feedback || '').join('\n');
-  const checklist = extractOwnerChecklist(acFb);
-  if (checklist.length === 0) {
-    wf.steps.owner_verification = { status: 'skipped', agents: [], checklist: [], skipReason: 'no owner-gated ACs in the AC verification matrix' };
-    const ovIdx = execSteps.indexOf('owner_verification');
-    const after = (ovIdx >= 0 && ovIdx < execSteps.length - 1) ? execSteps[ovIdx + 1] : 'demo_review';
-    return { stop: false, nextStep: after };
-  }
-  wf.steps.owner_verification = { status: 'pending', agents: [], checklist };
-  return { stop: true, nextStep: 'owner_verification' };
 }
 
 // Pure verdict for the qa_validation strict gate — exported for unit tests;
@@ -2713,6 +2683,16 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       // so the hub can render the bugfix timeline the same way it does the others.
       bugfix: bugfixSequence(config),
     } : null;
+    // Owner-gated AC checklist — surfaced informationally in demo_review (not
+    // persisted; recomputed on every fetch from ac_verification's feedback, so
+    // it doesn't matter which of the many paths into demo_review was taken).
+    // Approving demo_review logs which of these were owner-confirmed to
+    // wf.ownerConfirmations — no evidence artifact required (owner_verification
+    // removed 2026-07-22; see the extractOwnerChecklist comment above it).
+    if (wf?.currentStep === 'demo_review' && wf.steps.demo_review) {
+      const acFb = ((wf.steps.ac_verification || {}).agents || []).map(a => a.feedback || '').join('\n');
+      wf.steps.demo_review.ownerChecklist = extractOwnerChecklist(acFb);
+    }
     // PRD-001 pathology signals — surfaces "is this monolithic run healthy?" signals.
     const pathologySignals = computePathologySignals(wf);
     // PRD-001 findings — parsed from code_review / qa_validation feedback. Read-only.
@@ -3495,7 +3475,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     // demo_review and device_testing need a human in front of the device
     // UNLESS the owner opted into Skip Demo Review (auto-advance then skips
     // demo_review with action=skip).
-    const alwaysManual = ['device_testing', 'owner_verification', 'owner_consultations'];
+    const alwaysManual = ['device_testing', 'owner_consultations'];
     if (!wf.autoAdvanceSkipDemoReview) alwaysManual.push('demo_review');
     if (alwaysManual.includes(wf.currentStep)) return;
 
@@ -6652,6 +6632,24 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       }
       const browserSkillRef2 = hasBrowserTesting2 ? ' Use the `qa-browser-testing` skill for any browser-based verification.' : '';
 
+      // Visual smoke / launch-console check — gated on an actual launchable target
+      // (browser via playwright_cli, or an iOS simulator). Without this gate the
+      // instruction below is unconditional, so on a project with NEITHER (e.g. an
+      // Electron desktop app with playwright_cli:false and no simulator config —
+      // launch-studio, 2026-07-21) the QA agent tries to launch a browser anyway,
+      // gets "No browser is available", and reports it as a BLOCKING finding per
+      // the "Runtime warnings are BLOCKING" language. That finding is never
+      // code-fixable (it's an environment characteristic, not a defect), so
+      // fix_plan correctly returns 0 tasks every round and the workflow loops
+      // qa_validation → fix_plan → override → qa_validation forever. Desktop apps
+      // that need launch/console verification should wire it through their E2E
+      // suite (e.g. Playwright `_electron`, run in step 3) instead of this step
+      // trying to launch something ad hoc.
+      const hasVisualSmokeTarget2 = !!(hasBrowserTesting2 || (config.simulator && config.simulator.destination));
+      const visualSmokeSection2 = hasVisualSmokeTarget2
+        ? `\n4. **Visual smoke — REQUIRED for visual PRDs** (see your /${skill} role's "Visual smoke" section for the full protocol).\n   - If this PRD ships any visible UI surface, capture simulator/device screenshots of every AC surface and inspect for: fallback colors (e.g. system-blue tab tint, system-gray text), missing UI elements (gear icons rendering as blurred backgrounds, empty MetricRow cards, missing empty-state copy), letterbox / safe-area breaks, layout regressions vs the design bundle reference at \`design-system/project/<screen>.html\` if the project has one.\n   - Visual regressions are **BLOCKING** even if the XCUITest / Playwright suite is green. Accessibility queries return matches for invisible text — the visual smoke is the only check that catches "tests pass but the user sees a blank screen".\n   - Commit screenshots to \`docs/pr-evidence/<PRD-basename>/visual/\`. The AC verification gate will look for them; a missing directory blocks the AC verifier from marking visual ACs as MET.\n   - **Scope evidence to THIS PRD only.** Capture or regenerate evidence ONLY under \`docs/pr-evidence/<PRD-basename>/\`. Do NOT run other PRDs' screenshot/evidence-capture tests. If a test run leaves OTHER PRDs' committed evidence modified (PDFs/PNGs drift byte-wise even when visually identical), \`git checkout --\` those files before finishing — never commit cross-PRD evidence churn into this run.\n   - **Brand-token check (mechanical)**: for each visible color in your screenshots, confirm it appears in \`docs/brand/brand-guidelines.md\` or the project's locked palette. Any color NOT in the locked palette is a fallback render — BLOCKING (even if the asset catalog has the right hex values committed; namespace mismatches mean the production code reaches nil at runtime and tests don't catch it).\n5. **Runtime warnings are BLOCKING.** Scan the launch console output for warnings like \`[Invalid Configuration]\`, \`No color named\`, \`Could not load nib\`, asset-not-found patterns. Any such warning that fires on every app launch means the implementation has a structural bug that the test suite doesn't catch. Report as **Approved: no**, **Blocking: <n>**, NOT as a Medium finding.`
+        : `\n4. **Visual smoke / launch-console check — NOT APPLICABLE to this project.** No browser (\`features.playwright_cli\` is false/unset) or iOS simulator target is configured, so there is no way to launch a browser or device here — do NOT attempt to (e.g. via a generic browser tool); it will fail with something like "No browser is available". That failure is an environment characteristic of this project, NOT a defect — do NOT report it as a blocking (or any) finding. If this project has its own launch/console verification (e.g. an Electron E2E suite using Playwright \`_electron\`), that already ran as part of step 3 — rely on its output instead. Any console/runtime warnings surfaced by the test suite itself in steps 1-3 are still BLOCKING; only the ad hoc "launch it and look" check is skipped.`;
+
       // iOS-specific QA guidance — injected only when the project has a pinned
       // simulator destination (i.e. config.simulator.destination is set).
       // Captures the lessons from the example-ios PRD-009 QA stall (2026-05-23):
@@ -6776,7 +6774,7 @@ xcodebuild test \\\\
 
 ---
 
-You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.\n\n## DEV SERVER PORTS\n\nWorktree dev servers are already running on offset ports:\n${portInfo}\n\nFrontend: ${frontendUrl}\nBackend:  ${backendUrl}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: \`npx vitest run\` or \`npm test\`, plus Playwright (\`npx playwright test\`) for E2E\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n4. **Visual smoke — REQUIRED for visual PRDs** (see your /${skill} role's "Visual smoke" section for the full protocol).\n   - If this PRD ships any visible UI surface, capture simulator/device screenshots of every AC surface and inspect for: fallback colors (e.g. system-blue tab tint, system-gray text), missing UI elements (gear icons rendering as blurred backgrounds, empty MetricRow cards, missing empty-state copy), letterbox / safe-area breaks, layout regressions vs the design bundle reference at \`design-system/project/<screen>.html\` if the project has one.\n   - Visual regressions are **BLOCKING** even if the XCUITest / Playwright suite is green. Accessibility queries return matches for invisible text — the visual smoke is the only check that catches "tests pass but the user sees a blank screen".\n   - Commit screenshots to \`docs/pr-evidence/<PRD-basename>/visual/\`. The AC verification gate will look for them; a missing directory blocks the AC verifier from marking visual ACs as MET.\n   - **Scope evidence to THIS PRD only.** Capture or regenerate evidence ONLY under \`docs/pr-evidence/<PRD-basename>/\`. Do NOT run other PRDs' screenshot/evidence-capture tests. If a test run leaves OTHER PRDs' committed evidence modified (PDFs/PNGs drift byte-wise even when visually identical), \`git checkout --\` those files before finishing — never commit cross-PRD evidence churn into this run.\n   - **Brand-token check (mechanical)**: for each visible color in your screenshots, confirm it appears in \`docs/brand/brand-guidelines.md\` or the project's locked palette. Any color NOT in the locked palette is a fallback render — BLOCKING (even if the asset catalog has the right hex values committed; namespace mismatches mean the production code reaches nil at runtime and tests don't catch it).\n5. **Runtime warnings are BLOCKING.** Scan the launch console output for warnings like \`[Invalid Configuration]\`, \`No color named\`, \`Could not load nib\`, asset-not-found patterns. Any such warning that fires on every app launch means the implementation has a structural bug that the test suite doesn't catch. Report as **Approved: no**, **Blocking: <n>**, NOT as a Medium finding.\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
+You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.\n\n## DEV SERVER PORTS\n\nWorktree dev servers are already running on offset ports:\n${portInfo}\n\nFrontend: ${frontendUrl}\nBackend:  ${backendUrl}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: \`npx vitest run\` or \`npm test\`, plus Playwright (\`npx playwright test\`) for E2E\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
       }];
       wf.steps.qa_validation = { status: 'running', agents: launchWorkflowAgents(wf, qaAgent, { useWorktrees: false, cwd: projectRoot }) };
       state.saveWorkflow(wf);
@@ -6894,7 +6892,7 @@ Reserve \`**Approved:** no\` for cases where the **implementing role** (iOS Dev,
 
 **BE CONSERVATIVE ABOUT CREATING OWNER ACTION ITEMS — this is the default, not an edge case.** Every AC you push into \`### Owner action items\` costs the owner real time at a real machine, clicking through real steps, later — this workflow is supposed to be as automatic as possible, and an owner-gated AC is the expensive exception, not a convenient way to defer something you could just check yourself. Before adding ANY AC there, ask: **could I, or another agent, just run/reproduce this right now and get a trustworthy result?** If yes, it is NOT owner-gated — verify it directly (read the code, run the test, reproduce the mutation, replay the flow) instead of pushing it downstream. A litmus test, not exhaustive: pure logic, a deterministic script, a mutation-and-rerun of a test, anything re-derivable from code or committed test output — all agent-verifiable, never owner-gated, regardless of whether the original implementer already claimed to have checked it (their self-report is not evidence; your own reproduction is). Reserve owner-gating for what an agent genuinely cannot do: something requiring a human's senses or judgment (a fast, timing-sensitive UI transition that needs to be watched and screenshotted; visual/perceptual conformance), physical hardware or an installed device, a native OS-level dialog or permission prompt, or an action against a real paid third-party account/service. And even within that set, only add the item when it's well-motivated for genuinely critical functionality — not merely because a test happens to mock a boundary. When in doubt, verify it yourself first; only fall back to an owner item if you concretely cannot.
 
-**ACs that are UNTESTABLE solely because they depend on owner-only actions** (per the conservative bar above — opening the project in Xcode IDE, archiving + uploading to TestFlight / App Store Connect, installing on a physical device, capturing a home-screen photo after install, manual smoke on a preview deploy, watching and screenshotting a fast real-time UI transition, etc.) — are **NOT a reason to set Approved: no**. The dev cannot close those gates; only the owner can, and they close at \`owner_verification\` / \`device_testing\` / \`demo_review\` / post-deploy, not via a fix loop. Your \`### Owner action items\` section is not advisory — when the project has an \`owner_verification\` step, the engine parses it into that step's checklist, and each listed AC blocks the merge until the owner records committed evidence. One bullet per AC, each starting with its id (e.g. \`- AC-2: launch from the Dock, …\`). For these:
+**ACs that are UNTESTABLE solely because they depend on owner-only actions** (per the conservative bar above — opening the project in Xcode IDE, archiving + uploading to TestFlight / App Store Connect, installing on a physical device, capturing a home-screen photo after install, manual smoke on a preview deploy, watching and screenshotting a fast real-time UI transition, etc.) — are **NOT a reason to set Approved: no**. The dev cannot close those gates; only the owner can, and they close at \`device_testing\` / \`demo_review\` / post-deploy, not via a fix loop. Your \`### Owner action items\` section is not advisory — the engine surfaces it to the owner at \`demo_review\`, informationally (no evidence file required). One bullet per AC, each starting with its id (e.g. \`- AC-2: launch from the Dock, …\`). For these:
 - Set \`**Approved:** yes\`
 - Keep the AC row marked \`UNTESTABLE\` in the matrix
 - Add an \`### Owner action items\` section listing each pending owner gate (one bullet per AC) so demo_review has a checklist
@@ -6921,7 +6919,7 @@ PRD path: ${wf.prdPath}
       - MANUAL: Requires human verification (e.g., real LLM output quality, visual conformance, app icon appearance)
    d. **For MANUAL ACs, verify an EVIDENCE ARTIFACT exists**: every AC marked MANUAL in your matrix MUST cite a concrete file path in its Evidence column (e.g. \`docs/pr-evidence/PRD-001-ios-scaffolding/visual/today-screen.png\`, \`docs/pr-evidence/PRD-001-ios-scaffolding.md#fonts\`). **Every evidence path MUST be FULLY QUALIFIED — no \`...\` ellipsis, no \`<PRD>\` placeholder, no relative shorthand.** Write the same full path on every row even when it gets repetitive — the approval gate file-exists-checks each cited path literally, and a row with \`docs/pr-evidence/.../visual/foo.png\` will be rejected as a missing artifact even when the real file is present. You MUST verify each cited file exists in the worktree via \`ls\` or \`fs\`. **Marking MANUAL as MET without a committed evidence artifact is a hard error.** If no artifact exists, classify which kind of MANUAL it is:
       - **Dev-captureable MANUAL** (simulator screenshot, font-output paste, byte-check log, runbook excerpt, a controlled mutation-and-rerun of a test — anything YOU or another agent could produce/reproduce right now by running the code): this is the default. Either reproduce it yourself and mark it MET with your own fresh evidence, or if it genuinely needs the implementing role (not just re-running something you could run), mark UNTESTABLE and **Approved: no** with an Action Item for them. This routes back through fix loop — it does NOT go to the owner. Do not label something owner-gated just because an existing test mocks a boundary or because the original implementer only self-reported doing it.
-      - **Owner-gated MANUAL** (Xcode IDE open, TestFlight upload, on-device install, home-screen photo after install, manual preview-deploy smoke, watching/screenshotting a real-time UI transition too fast to script) — reserve this for cases no agent can do at all, and only when well-motivated for genuinely critical functionality: mark UNTESTABLE but keep **Approved: yes**, list it under \`### Owner action items\` (one bullet per AC, starting with its id). Owner closes the gate at owner_verification / device_testing / demo_review — fix loop cannot help. This is the expensive, sparingly-used path — see the conservatism note above before reaching for it.
+      - **Owner-gated MANUAL** (Xcode IDE open, TestFlight upload, on-device install, home-screen photo after install, manual preview-deploy smoke, watching/screenshotting a real-time UI transition too fast to script) — reserve this for cases no agent can do at all, and only when well-motivated for genuinely critical functionality: mark UNTESTABLE but keep **Approved: yes**, list it under \`### Owner action items\` (one bullet per AC, starting with its id). Owner closes the gate at device_testing / demo_review — fix loop cannot help. This is the expensive, sparingly-used path — see the conservatism note above before reaching for it.
    e. If possible, run the feature flow end-to-end to verify it works
    f. Rate each AC:
       - MET: Code exists AND verified by automated test with no mocked external dependencies (or project doesn't use mocks) — OR for MANUAL gates, the cited evidence artifact exists and substantively supports the claim
@@ -7027,12 +7025,14 @@ This is round ${wf.round}.`,
       let nextStep = (acIdx >= 0 && acIdx < execSteps.length - 1)
         ? execSteps[acIdx + 1]
         : 'security_audit'; // legacy fallback
-      // owner_verification (desktop preset) sits right after ac_verification:
-      // materialize its checklist now and stop here if the owner has manual ACs.
+      // owner_verification was removed 2026-07-22 (too much friction in
+      // practice — see the checklist comment above); its checklist now
+      // surfaces informationally in demo_review instead. A project config
+      // that hasn't been updated yet may still list the step — skip over it
+      // rather than routing into a step nothing handles anymore.
       if (nextStep === 'owner_verification') {
-        const entry = computeOwnerVerificationEntry(wf, execSteps);
-        if (entry.stop) { wf.currentStep = 'owner_verification'; state.saveWorkflow(wf); return res.json({ workflow: wf }); }
-        nextStep = entry.nextStep;
+        const ovIdx = execSteps.indexOf('owner_verification');
+        nextStep = (ovIdx >= 0 && ovIdx < execSteps.length - 1) ? execSteps[ovIdx + 1] : 'security_audit';
       }
       wf.steps[nextStep] = { status: 'pending', agents: [] };
       wf.currentStep = nextStep;
@@ -7103,66 +7103,24 @@ This is round ${wf.round}.`,
       return res.json({ workflow: wf });
     }
 
-    // Owner verification — the human-at-the-machine gate for owner-gated ACs
-    // (desktop projects insert it after final_review via workflow.execution.add).
-    // Checklist was materialized at entry (final_review approve). Approve is
-    // evidence-gated: every checklist AC must appear in a committed markdown
-    // file under docs/pr-evidence/<prd>/manual-verification/ — evidence is a
-    // gate artifact here, not a review-time opinion, which is what makes the
-    // AC-verifier-defers / final-reviewer-blocks dispute structurally
-    // impossible (finance-studio PRD-004). Skip and override stay available;
-    // both are the owner's explicit, logged call.
-    if (wf.currentStep === 'owner_verification' && (action === 'approve' || action === 'skip')) {
-      if (action === 'approve') {
-        const overrideRequested = body?.override === true || body?.forceApprove === true;
-        const checklist = (wf.steps.owner_verification || {}).checklist || [];
-        if (checklist.length > 0 && !overrideRequested) {
-          const prdBase = wf.prdPath ? path.basename(wf.prdPath, '.md') : null;
-          const evidenceDir = prdBase ? path.join(docsPath, 'pr-evidence', prdBase, 'manual-verification') : null;
-          let evidenceText = '';
-          try {
-            if (evidenceDir && fs.existsSync(evidenceDir)) {
-              for (const f of fs.readdirSync(evidenceDir)) {
-                if (f.endsWith('.md')) evidenceText += fs.readFileSync(path.join(evidenceDir, f), 'utf8') + '\n';
-              }
-            }
-          } catch (_) {}
-          const missing = ownerVerificationMissing(checklist, evidenceText);
-          if (missing.length > 0) {
-            return res.status(400).json({
-              error: `Cannot approve owner verification: ${missing.length} owner-gated AC(s) have no committed evidence under docs/pr-evidence/${prdBase || '<prd>'}/manual-verification/. Run the checks, record each AC's result in a markdown file there (PASS with what you observed, or NOT RUN with why), commit, and retry. To bypass, retry with {"override": true}.\n\nMissing:\n${missing.map(m => `  - ${m.ac}: ${m.text}`).join('\n')}`,
-              missing,
-              canOverride: true,
-            });
-          }
-        }
-        if (overrideRequested) {
-          wf.steps.owner_verification.overrides = (wf.steps.owner_verification.overrides || []).concat({
-            at: new Date().toISOString(), step: 'owner_verification', round: wf.round || 1,
-            reason: body.note || 'operator override of owner-verification evidence gate',
-          });
-          console.log(`[workflow] owner_verification operator override: round=${wf.round}`);
-        }
-      }
-      wf.steps.owner_verification.status = action === 'skip' ? 'skipped' : 'completed';
-      const execSteps = (config.workflow && config.workflow.execution) || [];
-      const ovIdx = execSteps.indexOf('owner_verification');
-      const nextStep = (ovIdx >= 0 && ovIdx < execSteps.length - 1)
-        ? execSteps[ovIdx + 1]
-        : 'demo_review';
-      wf.steps[nextStep] = { ...(wf.steps[nextStep] || {}), status: 'pending', agents: [] };
-      wf.currentStep = nextStep;
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
-    }
-    if (wf.currentStep === 'owner_verification' && action === 'send_to_devs') {
-      const ovNotes = notes || 'Owner verification surfaced issues — see user notes.';
-      launchFixPlan(wf, 'owner_verification', ovNotes, '', prdId);
-      return res.json({ workflow: wf });
-    }
-
     // Demo review step — owner reviews the running app before merge (optional, skippable)
     if (wf.currentStep === 'demo_review' && (action === 'approve' || action === 'skip')) {
+      if (action === 'approve') {
+        // Owner-gated ACs (device-only checks the AC verifier deferred) close
+        // here on approval — logged for visibility, no evidence file required
+        // (see extractOwnerChecklist's comment for why owner_verification, the
+        // evidence-gated step this replaces, was removed 2026-07-22).
+        const acFb = ((wf.steps.ac_verification || {}).agents || []).map(a => a.feedback || '').join('\n');
+        const checklist = extractOwnerChecklist(acFb);
+        if (checklist.length > 0) {
+          wf.ownerConfirmations = (wf.ownerConfirmations || []).concat({
+            at: new Date().toISOString(),
+            round: wf.round || 1,
+            items: checklist.map(c => ({ ac: c.ac, text: c.text })),
+          });
+          console.log(`[workflow] demo_review approved — ${checklist.length} owner-gated AC(s) confirmed (${checklist.map(c => c.ac).join(', ')}), no evidence required`);
+        }
+      }
       wf.steps.demo_review.status = action === 'skip' ? 'skipped' : 'completed';
       wf.currentStep = 'merge_to_main';
       state.saveWorkflow(wf);
@@ -7220,9 +7178,9 @@ Use the /code-review skill at ${frEffort} effort (its multi-angle finder→verif
 8. **Spec conformance** — every AC actually satisfied across all its variants, not just demoed on the happy path.
 
 ## SCOPE
-Review the change for this PRD. Do not raise pre-existing issues outside the PRD's blast radius, and respect the PRD's "Out of scope" section. Be conservative labeling BLOCKING, but do not suppress a real correctness/spec-violation finding to be polite.${((config.workflow && config.workflow.execution) || []).includes('owner_verification') ? `
+Review the change for this PRD. Do not raise pre-existing issues outside the PRD's blast radius, and respect the PRD's "Out of scope" section. Be conservative labeling BLOCKING, but do not suppress a real correctness/spec-violation finding to be polite.${((config.workflow && config.workflow.execution) || []).includes('demo_review') ? `
 
-**Owner-gated ACs close DOWNSTREAM, not here.** This project's execution flow has an \`owner_verification\` step after you: ACs that need a human at the machine (Dock launch, native OS dialogs, DevTools probes on the running packaged app) are verified there, evidence-gated by the engine — the merge is blocked until the owner commits evidence for every AC on the checklist. So absent owner-execution evidence is NOT a blocking finding for you. What you DO verify: the AC verifier's \`### Owner action items\` section exists and covers every owner-gated AC — a missing or incomplete checklist IS blocking, because it is what feeds that gate.` : ''}
+**Owner-gated ACs close DOWNSTREAM, not here.** ACs that need a human at the machine (Dock launch, native OS dialogs, DevTools probes on the running packaged app) are surfaced to the owner at \`demo_review\` from the AC verifier's \`### Owner action items\` section — the owner confirms them there informationally, no committed evidence required. So absent owner-execution evidence is NOT a blocking finding for you. What you DO verify: the AC verifier's \`### Owner action items\` section exists and covers every owner-gated AC — a missing or incomplete checklist IS blocking, because it is what feeds that gate.` : ''}
 
 ## FEEDBACK FORMAT — MANDATORY (machine-parsed)
 
@@ -7255,12 +7213,12 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
       let nextStep = (frIdx >= 0 && frIdx < execSteps.length - 1)
         ? execSteps[frIdx + 1]
         : 'demo_review';
-      // Placement-agnostic: if a project still sequences owner_verification
-      // after final_review, honor it via the shared helper.
+      // owner_verification removed 2026-07-22 — skip over it if a project
+      // config hasn't been updated yet (see the ac_verification approve
+      // handler's identical fallback for the full rationale).
       if (nextStep === 'owner_verification') {
-        const entry = computeOwnerVerificationEntry(wf, execSteps);
-        if (entry.stop) { wf.currentStep = 'owner_verification'; state.saveWorkflow(wf); return res.json({ workflow: wf }); }
-        nextStep = entry.nextStep;
+        const ovIdx = execSteps.indexOf('owner_verification');
+        nextStep = (ovIdx >= 0 && ovIdx < execSteps.length - 1) ? execSteps[ovIdx + 1] : 'demo_review';
       }
       wf.steps[nextStep] = { ...(wf.steps[nextStep] || {}), status: 'pending', agents: [] };
       wf.currentStep = nextStep;
@@ -8380,5 +8338,4 @@ module.exports = {
   collectMissingAcArtifacts,
   qaStrictGateVerdict,
   extractOwnerChecklist,
-  ownerVerificationMissing,
 };

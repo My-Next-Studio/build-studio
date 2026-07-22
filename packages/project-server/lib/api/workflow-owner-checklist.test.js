@@ -1,16 +1,18 @@
 'use strict';
 
-// Tests for the owner_verification step's pure helpers: checklist extraction
-// from the AC verifier's `### Owner action items` section, and the
-// evidence-presence gate. Regression focus: finance-studio PRD-004 capped at
-// round 5 because the AC verifier deferred owner-gated ACs downstream while
-// the final reviewer blocked on their absent evidence — the checklist these
-// helpers implement is what makes that dispute structurally impossible.
+// Tests for extractOwnerChecklist — parses the AC verifier's `### Owner
+// action items` section into a deduped, section-bounded list. Used to
+// surface owner-gated ACs (checks that need a human at the machine — Dock
+// launch, native OS dialogs) informationally in demo_review; approving
+// demo_review confirms them, logged to wf.ownerConfirmations, no evidence
+// file required. (A dedicated owner_verification step used to gate on
+// committed evidence for this checklist — removed 2026-07-22 as more
+// friction than value in practice, launch-studio LS-074 dogfood.)
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { extractOwnerChecklist, ownerVerificationMissing } = require('./workflow');
+const { extractOwnerChecklist } = require('./workflow');
 
 const AC_FEEDBACK = [
   '**Approved:** yes',
@@ -42,7 +44,7 @@ test('checkbox and asterisk bullet forms both parse', () => {
   assert.deepEqual(list.map(i => i.ac), ['AC-1', 'US-2.1']);
 });
 
-test('no section → empty checklist (step auto-skips)', () => {
+test('no section → empty checklist', () => {
   assert.deepEqual(extractOwnerChecklist('**Approved:** yes\nno owner items here'), []);
   assert.deepEqual(extractOwnerChecklist(''), []);
   assert.deepEqual(extractOwnerChecklist(null), []);
@@ -51,30 +53,4 @@ test('no section → empty checklist (step auto-skips)', () => {
 test('section at end of feedback (no following heading) still parses', () => {
   const list = extractOwnerChecklist('stuff\n\n### Owner action items\n- AC-3: quit/relaunch persistence');
   assert.deepEqual(list.map(i => i.ac), ['AC-3']);
-});
-
-const CHECKLIST = [
-  { ac: 'AC-2', text: 'Dock launch' },
-  { ac: 'AC-4', text: 'secret persists' },
-  { ac: 'AC-7', text: 'home relocation' },
-];
-
-test('all ACs mentioned in evidence → nothing missing', () => {
-  const evidence = '| AC-2 | PASS | ... |\nAC-4 verified after relaunch.\n## AC-7\nfresh home created.';
-  assert.deepEqual(ownerVerificationMissing(CHECKLIST, evidence), []);
-});
-
-test('unmentioned ACs are reported missing', () => {
-  const missing = ownerVerificationMissing(CHECKLIST, 'AC-2 PASS, and that is all.');
-  assert.deepEqual(missing.map(m => m.ac), ['AC-4', 'AC-7']);
-});
-
-test('id matching is word-bounded — AC-2 does not satisfy AC-21', () => {
-  const missing = ownerVerificationMissing([{ ac: 'AC-2', text: 'x' }], 'only AC-21 appears here');
-  assert.deepEqual(missing.map(m => m.ac), ['AC-2']);
-});
-
-test('empty evidence → everything missing; empty checklist → nothing missing', () => {
-  assert.equal(ownerVerificationMissing(CHECKLIST, '').length, 3);
-  assert.deepEqual(ownerVerificationMissing([], 'anything'), []);
 });

@@ -130,7 +130,6 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
     { key: 'device_testing', name: 'Device Testing' },
     { key: 'security_audit', name: 'Security Audit' },
     { key: 'final_review', name: 'Final Review' },
-    { key: 'owner_verification', name: 'Owner Verification' },
     { key: 'demo_review', name: 'Demo Review' },
     { key: 'merge_to_main', name: 'Merge to Main' },
     { key: 'capture_learnings', name: 'Capture Learnings' },
@@ -343,7 +342,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // owner_consultations: kickoff manual gate between pm_scoping and team_review.
     // demo_review is manual UNLESS Skip Demo Review is checked with Auto-advance.
     const skipDemo = !!(wf.autoAdvanceSkipDemoReview ?? skipDemoReviewLocal)
-    const alwaysManual = ['device_testing', 'owner_verification', 'owner_signoff', 'owner_consultations']
+    const alwaysManual = ['device_testing', 'owner_signoff', 'owner_consultations']
     if (!skipDemo) alwaysManual.push('demo_review')
     if (alwaysManual.includes(wf.currentStep)) return
     if (wf.type === 'onboarding' && wf.currentStep === 'team_review') return
@@ -1261,9 +1260,32 @@ function StepDetail({
             {step.error}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => onAdvance('approve')} className="wf-btn primary">Approve and continue</button>
-            <button onClick={() => onAdvance('skip')} className="wf-btn secondary">Skip step</button>
-            <button onClick={() => onAdvance('relaunch')} className="wf-btn secondary">Relaunch step</button>
+            {activeKey === 'fix_plan' ? (
+              // fix_plan's 0-task gate requires {override:true, overrideReason}
+              // — plain approve/skip/relaunch all dead-end on this step (skip
+              // and relaunch have no fix_plan handler; approve without the
+              // override flag just re-triggers the same block).
+              <button
+                onClick={() => {
+                  // window.prompt() is not implemented in Electron's renderer (returns
+                  // null immediately, no dialog) — use the always-on notes textarea for
+                  // the reason instead, same convention as the QA/AC override buttons.
+                  if (confirm('Approve the fix plan despite 0 tasks against a flagged blocker?\n\nThe source step\'s finding will be treated as non-actionable (e.g. an environment/tooling issue, not a code defect). Add context in the Notes field first if you want it recorded — the override is logged on the step either way.')) {
+                    onAdvance('approve', { override: true, overrideReason: notes.trim() || 'operator override (0-task fix plan)' })
+                  }
+                }}
+                className="wf-btn primary"
+                title="Confirms the fix planner's 0-task verdict is correct and advances past the gate"
+              >
+                Approve Fix Plan (override)
+              </button>
+            ) : (
+              <>
+                <button onClick={() => onAdvance('approve')} className="wf-btn primary">Approve and continue</button>
+                <button onClick={() => onAdvance('skip')} className="wf-btn secondary">Skip step</button>
+                <button onClick={() => onAdvance('relaunch')} className="wf-btn secondary">Relaunch step</button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1388,12 +1410,11 @@ function StepDetail({
       {/* Actions */}
       {isCurrentStep && step.status === 'pending' && agents.length === 0 && (() => {
         // Manual steps that don't launch agents — show approve/skip instead
-        const manualSteps = ['demo_review', 'device_testing', 'owner_verification', 'merge_to_main', 'merge_for_review', 'owner_signoff', 'owner_consultations']
+        const manualSteps = ['demo_review', 'device_testing', 'merge_to_main', 'merge_for_review', 'owner_signoff', 'owner_consultations']
         if (manualSteps.includes(activeKey)) {
           const isOwnerConsult = activeKey === 'owner_consultations'
           const isDeviceTest = activeKey === 'device_testing'
-          const isOwnerVerify = activeKey === 'owner_verification'
-          const hasTextarea = activeKey === 'demo_review' || activeKey === 'owner_signoff' || isOwnerConsult || isDeviceTest || isOwnerVerify
+          const hasTextarea = activeKey === 'demo_review' || activeKey === 'owner_signoff' || isOwnerConsult || isDeviceTest
           return (
             <div>
               {isDeviceTest && wf.branch && (
@@ -1415,9 +1436,15 @@ function StepDetail({
               {isOwnerConsult && (
                 <OwnerConsultationContext wf={wf} />
               )}
-              {isOwnerVerify && (() => {
-                const checklist = (step as { checklist?: { ac: string; text: string }[] }).checklist || []
-                const prdBase = wf.prdPath ? wf.prdPath.replace(/^.*\//, '').replace(/\.md$/, '') : '<prd>'
+              {activeKey === 'demo_review' && (() => {
+                // Owner-gated ACs (device-only checks the AC verifier deferred, e.g.
+                // Dock launch, native OS dialogs) — informational only. Approving
+                // demo_review confirms these (logged to wf.ownerConfirmations), no
+                // evidence file required (owner_verification, the evidence-gated
+                // step this replaced, was removed 2026-07-22 as more friction than
+                // value in practice).
+                const checklist = (step as { ownerChecklist?: { ac: string; text: string }[] }).ownerChecklist || []
+                if (checklist.length === 0) return null
                 return (
                   <div style={{
                     fontFamily: 'var(--mono)', fontSize: 11, marginBottom: 8,
@@ -1425,7 +1452,7 @@ function StepDetail({
                     border: '1px solid var(--border)', borderRadius: 6, color: 'var(--muted)',
                   }}>
                     <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
-                      Owner-gated ACs — run each against the packaged app
+                      Couldn&apos;t be automatically verified — check these yourself
                     </div>
                     {checklist.map(item => (
                       <div key={item.ac} style={{ marginBottom: 3 }}>
@@ -1434,9 +1461,7 @@ function StepDetail({
                       </div>
                     ))}
                     <div style={{ marginTop: 6, color: 'var(--text-dim)' }}>
-                      Record each result in a committed .md under{' '}
-                      <span style={{ color: 'var(--text)' }}>docs/pr-evidence/{prdBase}/manual-verification/</span>
-                      {' '}— Approve verifies every AC above appears there.
+                      Approving Demo confirms these — no evidence file needed.
                     </div>
                   </div>
                 )
@@ -1444,7 +1469,6 @@ function StepDetail({
               <ActionArea label={
                 activeKey === 'demo_review' ? 'Manual verification:'
                 : isDeviceTest ? 'Physical device verification — run the suite on a real device:'
-                : isOwnerVerify ? 'Owner verification — evidence-gated approve:'
                 : activeKey === 'owner_signoff' ? 'Final review — first onboarding commit:'
                 : isOwnerConsult ? 'Owner consultation — read PM output, add notes, approve:'
                 : 'Manual step:'
@@ -1460,9 +1484,7 @@ function StepDetail({
                           ? 'Owner answers, decisions, additional input for the team review (optional). Saved to docs/inputs/owner-consultation-round-N.md.'
                           : isDeviceTest
                             ? 'If sending back to devs: what failed on the physical device that did not surface in the simulator? (required for send-back)'
-                            : isOwnerVerify
-                              ? 'If sending back to devs: which owner check failed, and what you observed (required for send-back)'
-                              : 'Describe issues found during demo (required for send-back)...'
+                            : 'Describe issues found during demo (required for send-back)...'
                     }
                     style={{
                       width: '100%', minHeight: isOwnerConsult ? 120 : 50, resize: 'vertical', marginBottom: 8,
@@ -1473,7 +1495,7 @@ function StepDetail({
                   />
                 )}
                 <div style={{ display: 'flex', gap: 8 }}>
-                  {(activeKey === 'demo_review' || isDeviceTest || isOwnerVerify) && (
+                  {(activeKey === 'demo_review' || isDeviceTest) && (
                     <button
                       onClick={() => onAdvance('send_to_devs')}
                       disabled={!notes.trim()}
