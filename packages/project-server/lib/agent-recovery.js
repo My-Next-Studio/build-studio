@@ -44,13 +44,23 @@ function isShellCommand(cmd) {
  *                                     the window/pane could not be found
  * @param {number} p.idleMs            ms since the agent's log last changed
  * @param {number} [p.deadConfirmMs]   silence needed to confirm death (default 2 min)
+ * @param {boolean} [p.hasLiveChild]   does the pane's process still have a live
+ *                                     direct child (e.g. a compiling xcodebuild)?
+ *                                     A dead pane that fell back to a login shell
+ *                                     has none — nothing left to run. Overrides
+ *                                     the shell-pane "dead" verdict below: fazon
+ *                                     FAZ-186 QA validation (2026-07-21) had an
+ *                                     idle, shell-attributed pane for 2+ minutes
+ *                                     purely from a long `xcodebuild | tee`
+ *                                     foreground pipe, while the agent was alive.
  * @returns {'alive'|'dead'|'gone'}    gone = window itself missing (confirmed)
  */
-function classifyAgentProcess({ paneCommand, idleMs, deadConfirmMs = 2 * 60 * 1000 }) {
+function classifyAgentProcess({ paneCommand, idleMs, deadConfirmMs = 2 * 60 * 1000, hasLiveChild = false }) {
   // Confirmation threshold applies to both: transient tmux failures and
   // short-lived `zsh -c` tool children must never classify as dead.
   if (idleMs < deadConfirmMs) return 'alive';
   if (paneCommand === null || paneCommand === undefined || paneCommand === '') return 'gone';
+  if (hasLiveChild) return 'alive';
   if (isShellCommand(paneCommand)) return 'dead';
   return 'alive';
 }

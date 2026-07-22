@@ -435,6 +435,7 @@ function startServer(projectRoot, opts = {}) {
             paneCommand: tmuxOps.paneCommand(target),
             idleMs,
             deadConfirmMs: AGENT_DEAD_CONFIRM_MS,
+            hasLiveChild: tmuxOps.hasLiveDescendant(tmuxOps.panePid(target)),
           });
           // The shell-pane dead heuristic is only trustworthy for claude agents
           // (constant repaints; stable pane command) and only pays off when a

@@ -162,6 +162,41 @@ function createTmuxOps(config) {
     } catch (_) { return null; }
   }
 
+  // PID of the process tmux launched in this pane — used by agent-recovery to
+  // check for a live descendant (e.g. a still-compiling xcodebuild/test run)
+  // before declaring an agent dead purely from an idle log + shell-looking
+  // pane command (fazon FAZ-186 QA validation, 2026-07-21: a long foreground
+  // `xcodebuild ... | tee` left the pane idle and shell-attributed for 2+
+  // minutes while the agent was very much alive; the watchdog force-injected
+  // its resume script into a live session).
+  function panePid(target) {
+    try {
+      const out = execFileSync('tmux', ['display-message', '-p', '-t', target, '#{pane_pid}'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).toString().trim();
+      return out ? parseInt(out, 10) : null;
+    } catch (_) { return null; }
+  }
+
+  // True if `pid` has any live direct child process. A pane that fell back to
+  // a bare login shell after a genuine crash has none — nothing left to run.
+  // A pane legitimately mid-build (xcodebuild, npm test, gradlew, ...) still
+  // has a live child even while it looks idle/shell-attributed by the other
+  // two signals.
+  function hasLiveDescendant(pid) {
+    if (!pid) return false;
+    try {
+      const out = execFileSync('ps', ['-eo', 'pid,ppid'], { stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+      for (const line of out.split('\n').slice(1)) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 2) continue;
+        const ppid = parseInt(parts[1], 10);
+        if (ppid === pid) return true;
+      }
+      return false;
+    } catch (_) { return false; }
+  }
+
   function sendMessage(target, message) {
     execFileSync('tmux', ['set-buffer', '-b', 'agent-msg', message]);
     execFileSync('tmux', ['paste-buffer', '-t', target, '-b', 'agent-msg']);
@@ -185,6 +220,8 @@ function createTmuxOps(config) {
     killSessionAndDevPorts,
     capturePane,
     paneCommand,
+    panePid,
+    hasLiveDescendant,
     sendMessage,
     openTerminal,
   };

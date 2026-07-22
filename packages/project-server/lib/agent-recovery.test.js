@@ -35,6 +35,15 @@ test('classify: missing window + confirmed silence = gone', () => {
   assert.equal(classifyAgentProcess({ paneCommand: '', idleMs: MIN2 }), 'gone');
 });
 
+test('classify: shell pane + confirmed silence BUT a live child (still compiling) = alive', () => {
+  // fazon FAZ-186 QA validation (2026-07-21): a long foreground
+  // `xcodebuild ... | tee` left the pane idle and shell-attributed for 2+
+  // minutes while the agent was alive. A live descendant process overrides
+  // the shell-pane "dead" verdict.
+  assert.equal(classifyAgentProcess({ paneCommand: 'zsh', idleMs: MIN2, hasLiveChild: true }), 'alive');
+  assert.equal(classifyAgentProcess({ paneCommand: 'zsh', idleMs: MIN2, hasLiveChild: false }), 'dead');
+});
+
 test('decideRecovery: resume only with session id + script and attempts left', () => {
   const agent = { cliSessionId: 'u-u-i-d', resumeScript: 'start-x-resume.sh' };
   assert.equal(decideRecovery(agent), 'resume');
