@@ -4559,12 +4559,22 @@ Fix only the issues raised. Commit your changes.`,
     if (wf.currentStep === 'pm_revision' && action === 'approve') {
       wf.steps.pm_revision.status = 'completed';
       wf.currentStep = 'companion_specs';
+      wf.steps.companion_specs = { status: 'pending', agents: [] };
       state.saveWorkflow(wf);
       return res.json({ workflow: wf, needsAdvance: true });
     }
 
     // --- Companion specs step ---
-    if (wf.currentStep === 'companion_specs' && wf.steps.companion_specs.status === 'pending') {
+    // Idempotency guard: same double-launch race as 'reviewing'/the review-flow
+    // companion_specs step above — the hub's client-side auto-advance fires
+    // 'launch' for any non-manual step, and a server-side auto-launch tick can
+    // fire in the same ~1.5s window after a needsAdvance:true response. Without
+    // this, the losing request falls through to "no valid transition for
+    // step=companion_specs action=launch".
+    if (wf.currentStep === 'companion_specs' && action === 'launch' && wf.steps.companion_specs && wf.steps.companion_specs.status === 'running') {
+      return res.json({ workflow: wf });
+    }
+    if (wf.currentStep === 'companion_specs' && wf.steps.companion_specs && wf.steps.companion_specs.status === 'pending') {
       const { findRole } = require('../config');
       const specRoles = [
         { roleName: 'Brand', output: 'docs/brand/', desc: 'brand guidelines, identity, tone, and visual language' },
@@ -5139,6 +5149,16 @@ Fix only the issues raised. Commit your changes.`,
     }
 
     // --- Companion specs step (review flow) ---
+    // Idempotency guard: same double-launch race documented above for
+    // 'reviewing' — the hub's client-side auto-advance fires 'launch' for any
+    // non-manual step, and a server-side auto-launch tick can fire in the same
+    // ~1.5s window after a needsAdvance:true response (e.g. reviewing →
+    // companion_specs). Without this, the losing request falls through to
+    // "no valid transition for step=companion_specs action=launch".
+    if (wf.currentStep === 'companion_specs' && action === 'launch' && wf.steps.companion_specs && wf.steps.companion_specs.status === 'running') {
+      return res.json({ workflow: wf });
+    }
+
     // After reviewers approve, launch roles to write pending specs and review existing ones.
     // On re-runs (PRD revised), all §10 specs are re-verified against the updated PRD scope.
     if (wf.currentStep === 'companion_specs' && (!wf.steps.companion_specs || wf.steps.companion_specs.status === 'pending')) {

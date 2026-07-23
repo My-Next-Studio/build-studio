@@ -433,7 +433,13 @@ export function CicdTab() {
               const busy = deployingId === target.id
               const result = deployResults[target.id]
               return (
-                <div key={target.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                // Column, not row: a long target.label (e.g. "Promote last
+                // build → /Applications") plus its post-deploy result message
+                // side-by-side can exceed the card's fixed maxWidth (560,
+                // overflow:hidden above) and clip/overlap the Commit/Push
+                // controls above it. Stack instead, matching how Commit/Push's
+                // own result spans already render below their buttons.
+                <div key={target.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                   {target.canDeploy ? (
                     <button
                       onClick={() => handleDeploy(target)}
