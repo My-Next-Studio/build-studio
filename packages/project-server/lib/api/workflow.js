@@ -1952,6 +1952,14 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
   // spec file exists on disk. Locates the section by heading text (any
   // "## … Companion Spec[s] …" heading), regardless of section number — example-site
   // PRDs put it at §6, example-web at §10, others may differ.
+  //
+  // Column-order-aware: resolves the Path and Status columns from the table's
+  // own header row (same approach as the companion_specs launcher parser), so
+  // both the canonical `| Spec | Required | Owner | Path | Status |` order and
+  // variants like `| Spec | Owner | Path | Required | Status |` (launch-studio)
+  // reconcile. The previous positional regex assumed the cell after Path was
+  // Status and silently no-op'd on the latter order — launch-studio LS-091's
+  // /architect and /ux rows stayed Pending despite authored specs (2026-07-24).
   function updateCompanionSpecsInPrd(prdAbsPath) {
     if (!fs.existsSync(prdAbsPath)) return;
     try {
@@ -1960,20 +1968,47 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       if (!csMatch) csMatch = content.match(/## 10[.\s].*?\n([\s\S]*?)(?=\n## \d|$)/m);
       if (!csMatch) return;
 
+      const section = csMatch[1];
+      const sectionStart = content.indexOf(section);
+      const lines = section.split('\n');
+      const isTableRow = (l) => {
+        const t = l.trim();
+        return t.startsWith('|') && t.endsWith('|');
+      };
+      const isSeparatorRow = (l) => /^\|[-\s|:]+\|$/.test(l.trim());
+
+      // The first non-separator table row is the header. Cells are split
+      // WITHOUT filtering empties so data-row indexes align 1:1 with it.
+      let colPath = -1;
+      let colStatus = -1;
+      for (const line of lines) {
+        if (!isTableRow(line) || isSeparatorRow(line)) continue;
+        const headerParts = line.split('|');
+        colPath = headerParts.findIndex(c => /\b(file|path)\b/i.test(c));
+        colStatus = headerParts.findIndex(c => /\bstatus\b/i.test(c));
+        break;
+      }
+      if (colPath < 0 || colStatus < 0) return;
+
       let changed = false;
-      const updatedContent = content.replace(
-        /(\|[^|\n]+\|[^|\n]+\|)(\s*`?([^`|\n]+)`?\s*)(\|\s*\*{0,2}(?:pending|required)\*{0,2}\s*\|)/gi,
-        (match, specOwner, fileCell, filePath, statusCell) => {
-          const trimmed = filePath.trim();
-          if (!trimmed) return match;
-          const absFile = path.join(projectRoot, trimmed);
-          if (fs.existsSync(absFile)) {
-            changed = true;
-            return `${specOwner}${fileCell}| Done |`;
-          }
-          return match;
-        }
-      );
+      const updatedLines = lines.map(line => {
+        if (!isTableRow(line) || isSeparatorRow(line)) return line;
+        const parts = line.split('|');
+        if (parts.length <= Math.max(colPath, colStatus)) return line;
+        if (!/^\s*\*{0,2}(?:pending|required)\*{0,2}\s*$/i.test(parts[colStatus])) return line;
+        // Path cell: strip backticks; unwrap a [label](path) markdown link.
+        let filePath = parts[colPath].replace(/`/g, '').trim();
+        const link = filePath.match(/^\[[^\]\n]*\]\(([^)\n]+)\)$/);
+        if (link) filePath = link[1].trim();
+        if (!filePath || /^[-—–]+$/.test(filePath)) return line;
+        if (!fs.existsSync(path.join(projectRoot, filePath))) return line;
+        parts[colStatus] = ' Done ';
+        changed = true;
+        return parts.join('|');
+      });
+      const updatedContent = content.slice(0, sectionStart)
+        + updatedLines.join('\n')
+        + content.slice(sectionStart + section.length);
 
       if (changed) {
         fs.writeFileSync(prdAbsPath, updatedContent, 'utf8');
@@ -5332,11 +5367,11 @@ Fix only the issues raised. Commit your changes.`,
         let instruction = `You are ${displayName}. The PRD at ${wf.prdPath} has been reviewed and approved (possibly revised). Your job is to ensure all companion specs assigned to your role in §10 are accurate and aligned with the current PRD scope.\n\n`;
 
         if (toWrite.length > 0) {
-          instruction += `**Write these new specs** (file does not exist yet):\n${toWrite.map((s, i) => `${i + 1}. ${s.desc}${s.fileCell ? ` → save to: ${s.fileCell}` : ''}`).join('\n')}\n\nRead the PRD carefully, then write each spec. Save to the file path shown (or the standard directory for your role if no path is listed). After writing, update §10 in the PRD to change "Pending"/"Required" to "Done" and add the file path.\n\n`;
+          instruction += `**Write these new specs** (file does not exist yet):\n${toWrite.map((s, i) => `${i + 1}. ${s.desc}${s.fileCell ? ` → save to: ${s.fileCell}` : ''}`).join('\n')}\n\nRead the PRD carefully, then write each spec. Save to the file path shown (or the standard directory for your role if no path is listed). After writing, update the PRD's Companion Specs table to change your row's "Pending"/"Required" to "Done" and add the file path — in the SAME commit as the spec file itself. A spec is not delivered until its table row says Done.\n\n`;
         }
 
         if (toReview.length > 0) {
-          instruction += `**Review and update these existing specs** for alignment with the revised PRD:\n${toReview.map((s, i) => `${i + 1}. ${s.desc}${s.fileCell ? ` → file: ${s.fileCell}` : ''}`).join('\n')}\n\nFor each: read the current spec file and the revised PRD. Identify any gaps or misalignments caused by scope changes. Update the spec file to match the current PRD. If no changes are needed, confirm alignment in your feedback.\n\n`;
+          instruction += `**Review and update these existing specs** for alignment with the revised PRD:\n${toReview.map((s, i) => `${i + 1}. ${s.desc}${s.fileCell ? ` → file: ${s.fileCell}` : ''}`).join('\n')}\n\nFor each: read the current spec file and the revised PRD. Identify any gaps or misalignments caused by scope changes. Update the spec file to match the current PRD. If no changes are needed, confirm alignment in your feedback. Either way, if your spec's row in the PRD's Companion Specs table still says "Pending"/"Required", flip it to "Done" in the same commit as your spec changes (or in its own commit if the spec needed none) — amendment rows point at files that existed before you started, so the file's existence proves nothing; the flipped row is the delivery evidence.\n\n`;
         }
 
         instruction += `Use the /${skill} skill. Commit any changes you make. ${COMMIT_ON_CURRENT_BRANCH}`;

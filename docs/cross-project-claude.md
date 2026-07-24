@@ -196,8 +196,15 @@ and Execution reads this table — without it, the gate cannot pass.
   feels wrong because the work is genuinely two specs in disguise, split
   the row into two rows with distinct paths and one owner each.
 - When a spec author delivers, they edit this table to flip **Status** from
-  `Pending` to `Done`. If they decide the spec isn't needed after all, they
-  flip it to `N/A` with a one-line note in the row.
+  `Pending` to `Done` — **in the same commit as the spec file change**. A spec
+  is not delivered until its row says `Done`; a spec file on disk with a
+  `Pending` row is a defect, not a delivery. This applies equally when the
+  spec is an **amendment to an existing file** (an ADR or UX spec that
+  predates the PRD): the file existed before the author started, so file
+  existence proves nothing — the flipped row is the delivery evidence.
+  (Recurred twice in launch-studio, LS-086 + LS-091, both amendment-shaped.)
+  If they decide the spec isn't needed after all, they flip it to `N/A` with
+  a one-line note in the row.
 - **No execution starts while any Required row is `Pending`.** This is the
   PM's gate.
 - A PRD that includes detailed spec requirements in another section (e.g. a
