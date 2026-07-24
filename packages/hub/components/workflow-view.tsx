@@ -455,18 +455,30 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   }, [viewingLog, api])
 
   const [startError, setStartError] = useState<string | null>(null)
-  async function startWorkflow() {
+  const [startCanOverride, setStartCanOverride] = useState(false)
+  async function startWorkflow(override?: boolean) {
     // Onboarding doesn't take a PRD input — the project itself is the input.
     if (wfType !== 'onboarding' && !input.trim()) return
     setStartError(null)
-    const body: Record<string, string> = { type: wfType }
+    setStartCanOverride(false)
+    const body: Record<string, string | boolean> = { type: wfType }
     if (wfType !== 'onboarding') body.input = input.trim()
+    if (override) body.override = true
     // Per-run CLI pickers were removed (2026-07-21): agent CLI/model/effort is
     // set per role on the project's Agents tab (or the global Model tab).
     // api.post returns the parsed body (incl. {error}) and does NOT throw on non-2xx,
     // so a guardrail 409 must be surfaced explicitly — otherwise Start looks like a no-op.
     const res = await api.post('/workflow/start', body)
-    if (res && res.error) { setStartError(res.error); return }
+    if (res && res.error) {
+      setStartError(res.error)
+      // canOverride-gated errors (e.g. an execution start with a Required
+      // companion spec still Pending) need an actual UI path to bypass — a
+      // gate with no override control just strands the user (fix_plan's
+      // 2026-07-21 "no valid transition" incident was exactly this class of
+      // gap: a canOverride response with nothing in the UI to invoke it).
+      setStartCanOverride(!!res.canOverride)
+      return
+    }
     // Carry the persisted auto-advance preference into the fresh workflow now —
     // the server flag defaults off, and without it the server-side tick won't
     // advance round-1 review steps. The effect self-heals too; this closes the
@@ -712,7 +724,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             return (
               <>
                 <CompactUsageMeter providers={usageProviders} />
-                <button onClick={startWorkflow} disabled={!canStart} style={{
+                <button onClick={() => void startWorkflow()} disabled={!canStart} style={{
                   width: '100%', padding: '8px 0', borderRadius: 4, border: 'none',
                   background: canStart ? 'var(--green)' : 'var(--surface3)',
                   color: canStart ? '#0d0f14' : 'var(--muted)',
@@ -727,7 +739,20 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                     background: 'rgba(255,95,95,0.08)', border: '1px solid rgba(255,95,95,0.2)',
                     borderRadius: 4, padding: '8px 10px', marginBottom: 16,
                   }}>
-                    {startError}
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{startError}</div>
+                    {startCanOverride && (
+                      <button
+                        onClick={() => {
+                          if (confirm('Start execution despite the incomplete companion spec(s) above?\n\nThis bypasses the Preparation → Execution gate — use only when you have verified the gap yourself (or the table is stale). The override is not separately logged; the workflow just starts.')) {
+                            void startWorkflow(true)
+                          }
+                        }}
+                        className="wf-btn secondary"
+                        style={{ marginTop: 8 }}
+                      >
+                        Start anyway (override)
+                      </button>
+                    )}
                   </div>
                 )}
               </>

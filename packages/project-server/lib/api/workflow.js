@@ -239,6 +239,54 @@ function extractOwnerChecklist(acFeedback) {
   return items;
 }
 
+// Parses a PRD's Companion Specs table (any "## … Companion Spec[s] …"
+// heading, or legacy §10) and returns every row where Required is truthy
+// and Status isn't Done — the Preparation → Execution gate project
+// conventions assign to PM ("every Required Companion Specs row must have
+// a path and exist on disk before Execution starts"). Column-order-aware,
+// same resolution approach as updateCompanionSpecsInPrd (header row
+// determines which cell is which — don't assume canonical order). Returns
+// [] if no section/table is found (nothing to gate on) or on any parse
+// hiccup — this must never itself block a start it can't confidently judge.
+function findIncompleteRequiredSpecs(prdContent) {
+  try {
+    let csMatch = prdContent.match(/^##\s+[^\n]*\bcompanion\s+specs?\b[^\n]*\n([\s\S]*?)(?=\n## |(?![\s\S]))/im);
+    if (!csMatch) csMatch = prdContent.match(/## 10[.\s].*?\n([\s\S]*?)(?=\n## \d|$)/m);
+    if (!csMatch) return [];
+
+    const lines = csMatch[1].split('\n');
+    const isTableRow = (l) => { const t = l.trim(); return t.startsWith('|') && t.endsWith('|'); };
+    const isSeparatorRow = (l) => /^\|[-\s|:]+\|$/.test(l.trim());
+
+    let colSpec = -1, colRequired = -1, colStatus = -1;
+    for (const line of lines) {
+      if (!isTableRow(line) || isSeparatorRow(line)) continue;
+      const headerParts = line.split('|');
+      colSpec = headerParts.findIndex(c => /\bspec\b/i.test(c));
+      colRequired = headerParts.findIndex(c => /\brequired\b/i.test(c));
+      colStatus = headerParts.findIndex(c => /\bstatus\b/i.test(c));
+      break;
+    }
+    if (colRequired < 0 || colStatus < 0) return [];
+
+    const incomplete = [];
+    for (const line of lines) {
+      if (!isTableRow(line) || isSeparatorRow(line)) continue;
+      const parts = line.split('|');
+      if (parts.length <= Math.max(colRequired, colStatus)) continue;
+      const requiredCell = parts[colRequired].replace(/\*/g, '').trim();
+      if (!/^yes$/i.test(requiredCell)) continue; // only Required:Yes rows gate
+      const statusCell = parts[colStatus].replace(/\*/g, '').trim();
+      if (/^done$/i.test(statusCell)) continue; // already delivered
+      const specCell = colSpec >= 0 && parts.length > colSpec ? parts[colSpec].trim().replace(/\s+/g, ' ').slice(0, 120) : '(unnamed spec)';
+      incomplete.push({ spec: specCell, status: statusCell || '(empty)' });
+    }
+    return incomplete;
+  } catch (_) {
+    return [];
+  }
+}
+
 // Pure verdict for the qa_validation strict gate — exported for unit tests;
 // the approve handler applies its result to the response/state.
 //
@@ -2904,7 +2952,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
   }
 
   router.post('/workflow/start', (req, res) => {
-    const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli } = req.body;
+    const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, override: startOverride } = req.body;
     if (!type) return res.status(400).json({ error: 'type required' });
     if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return res.status(400).json({ error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
     if (startDeveloperCli && !VALID_CLIS.includes(startDeveloperCli)) {
@@ -3089,6 +3137,30 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
               prdUntracked: true,
               prdPath,
             });
+          }
+          // Preparation → Execution gate (project conventions: PM owns it —
+          // every Required Companion Specs row must have a path and exist on
+          // disk before Execution starts). Previously enforced only by QA's
+          // own defense-in-depth self-check at qa_tests (a documented /qa
+          // skill rule, not an engine check) — nothing stopped an execution
+          // workflow from starting at all while a PRD's own table still
+          // showed a Required row Pending (launch-studio LS-094/PRD-039,
+          // 2026-07-24: ADR-013's amendment never landed; execution started
+          // anyway and wasted a full qa_tests round before QA caught it).
+          // Enforce it here too, at the actual start gate, with the same
+          // {override:true} escape hatch pattern used by every other gate in
+          // this file — a deliberate owner call to proceed anyway must stay
+          // possible, just not the silent default.
+          if (!startOverride) {
+            const prdContent = fs.readFileSync(path.join(projectRoot, prdPath), 'utf8');
+            const incomplete = findIncompleteRequiredSpecs(prdContent);
+            if (incomplete.length > 0) {
+              return res.status(400).json({
+                error: `Cannot start execution: ${incomplete.length} Required companion spec(s) in ${prdPath}'s Companion Specs table are not Done yet. Deliver them (or correct the table if they're actually complete), then retry. To bypass, retry with {"override": true}.\n\nIncomplete:\n${incomplete.map(s => `  - ${s.spec}: ${s.status}`).join('\n')}`,
+                incompleteSpecs: incomplete,
+                canOverride: true,
+              });
+            }
           }
         }
         // Build steps from the resolved preset sequence so preset-specific
@@ -8393,4 +8465,5 @@ module.exports = {
   collectMissingAcArtifacts,
   qaStrictGateVerdict,
   extractOwnerChecklist,
+  findIncompleteRequiredSpecs,
 };

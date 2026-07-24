@@ -394,9 +394,9 @@ export function CicdTab() {
             </button>
             {commitResult && !showCommitInput && (
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 9,
+                fontFamily: 'var(--mono)', fontSize: 11,
                 color: commitResult.ok ? 'var(--green)' : 'var(--red)',
-                maxWidth: 180, textAlign: 'right',
+                maxWidth: 260, textAlign: 'right',
               }}>
                 {commitResult.message}
               </span>
@@ -419,9 +419,9 @@ export function CicdTab() {
             </button>
             {pushResult && (
               <span style={{
-                fontFamily: 'var(--mono)', fontSize: 9,
+                fontFamily: 'var(--mono)', fontSize: 11,
                 color: pushResult.ok ? 'var(--green)' : 'var(--red)',
-                maxWidth: 180, textAlign: 'right',
+                maxWidth: 260, textAlign: 'right',
               }}>
                 {pushResult.message}
               </span>
@@ -467,9 +467,9 @@ export function CicdTab() {
                   )}
                   {result && (
                     <span style={{
-                      fontFamily: 'var(--mono)', fontSize: 9,
+                      fontFamily: 'var(--mono)', fontSize: 11,
                       color: result.ok ? 'var(--green)' : 'var(--red)',
-                      maxWidth: 220, textAlign: 'right',
+                      maxWidth: 320, textAlign: 'right',
                     }}>
                       {result.message}
                     </span>
