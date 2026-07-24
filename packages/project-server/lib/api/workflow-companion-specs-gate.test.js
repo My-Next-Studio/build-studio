@@ -44,6 +44,23 @@ test('a Required row marked Done is not reported', () => {
   assert.deepEqual(findIncompleteRequiredSpecs(prd), []);
 });
 
+test('"Done" annotated with a section pointer is not reported (LS-094 regression)', () => {
+  // Exact-match on "Done" wrongly blocked these — a common, reasonable
+  // pattern annotates where the spec landed in the same cell.
+  const prd = prdWithTable([
+    '| ADR-013 amendment | /architect | docs/adrs/ADR-013.md | Yes | Done (§1.16) |',
+    '| UX-014 amendment | /ux | docs/ux/UX-014.md | Yes | Done — see §15 |',
+  ]);
+  assert.deepEqual(findIncompleteRequiredSpecs(prd), []);
+});
+
+test('"Not done" / "Done-adjacent" prose is still correctly reported', () => {
+  const prd = prdWithTable([
+    '| ADR-013 amendment | /architect | docs/adrs/ADR-013.md | Yes | Not done |',
+  ]);
+  assert.equal(findIncompleteRequiredSpecs(prd).length, 1);
+});
+
 test('a non-Required row is never reported, even when Pending', () => {
   const prd = prdWithTable([
     '| Optional perf note | /architect | docs/adrs/ADR-020.md | No | Pending |',

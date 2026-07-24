@@ -277,7 +277,13 @@ function findIncompleteRequiredSpecs(prdContent) {
       const requiredCell = parts[colRequired].replace(/\*/g, '').trim();
       if (!/^yes$/i.test(requiredCell)) continue; // only Required:Yes rows gate
       const statusCell = parts[colStatus].replace(/\*/g, '').trim();
-      if (/^done$/i.test(statusCell)) continue; // already delivered
+      // "Done" as a prefix, not an exact match: a common, reasonable pattern
+      // annotates WHERE it landed — "Done (§1.16)", "Done — see below" — and
+      // an exact-match regex treated those as still-incomplete (launch-studio
+      // LS-094/PRD-039, 2026-07-24: blocked ADR-013/UX-014 rows that were
+      // actually done, just annotated). Word-bounded so "Done" alone or
+      // "Done(...)" match but "Doneish"/"Not done" correctly don't.
+      if (/^done\b/i.test(statusCell)) continue; // already delivered
       const specCell = colSpec >= 0 && parts.length > colSpec ? parts[colSpec].trim().replace(/\s+/g, ' ').slice(0, 120) : '(unnamed spec)';
       incomplete.push({ spec: specCell, status: statusCell || '(empty)' });
     }
