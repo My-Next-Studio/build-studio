@@ -193,15 +193,27 @@ Behaviour that shifts on an unmodified config:
    cd packages/desktop && node inject-resources.js
    ```
 
-   Then restart the app. Project-servers are separate `node` processes spawned by
-   the app, so confirm they actually went down before relaunching — quitting the
-   app can leave them orphaned (`ppid 1`) and still serving on their ports:
+   Then restart the app — **and this time restart the project-servers too.**
+
+   Project-servers are detached `node` processes that deliberately outlive the
+   app, so an update can land without interrupting in-flight workflows or their
+   tmux sessions; the app re-adopts them on launch. That property is usually what
+   you want, but it means a surviving server keeps running the code it started
+   with. This change lives in project-server, so any server left running stays
+   bound to `0.0.0.0` and the fix looks like it silently failed.
+
+   `inject-resources.js` lists servers on stale code after every run. Either stop
+   and start each project from the hub, or:
+
+   ```bash
+   node inject-resources.js --restart-projects
+   ```
+
+   To confirm nothing is left on the old build:
 
    ```bash
    lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(18080|300[0-9])'
    ```
-
-   Anything still listed is running the old code; terminate it before relaunch.
 
 2. **Check each managed project for a committed cache file.** This is the one
    thing that fails silently, because the efforts cache was never gitignored:
