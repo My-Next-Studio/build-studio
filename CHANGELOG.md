@@ -12,6 +12,33 @@ the category most likely to surprise a fork.
 
 ---
 
+## 2026-07-27 — Next.js 16.2.12 (nine advisories)
+
+### Fixed
+
+- **`next` 16.2.10 → 16.2.12**, closing nine advisories published that day — four
+  high, five medium. They cover SSRF in rewrites and in Server Actions on custom
+  servers, a middleware/proxy bypass, unauthenticated disclosure of internal
+  Server Function endpoints, denial of service in Server Actions and in the image
+  optimization API via SVG, and two cache-confusion issues. All are fixed in
+  16.2.11; `packages/hub/package.json` already declared `^16`, so this needed no
+  override. Most require network reach to the hub, which the loopback change
+  above independently limits to the local machine.
+- **`postcss` override tightened to `^8.5.18`** (top-level resolves to 8.5.23).
+  The previous `^8.5.10` still permitted 8.5.10–8.5.17, which are vulnerable to a
+  path traversal in source-map auto-loading.
+
+### Known issues
+
+- **`next` bundles its own `postcss` 8.4.31**, which is vulnerable to the three
+  postcss advisories. `next` pins that version exactly, and unlike 16.2.10 it no
+  longer dedupes to the root override — `npm dedupe`, a tightened range, and a
+  scoped `next: { postcss }` override all failed to collapse it, so no override
+  is left in place pretending to fix it. It is build-time only: `postcss` appears
+  in neither the standalone build output nor the shipped `.app`, it processes
+  only this repo's own stylesheets during `next build`, and all three advisories
+  require attacker-controlled CSS. Expected to resolve when `next` bumps its pin.
+
 ## 2026-07-27 — Security: bind to loopback, patch `fast-uri`
 
 ### Added
