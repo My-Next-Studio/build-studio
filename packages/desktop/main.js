@@ -197,7 +197,10 @@ function startHubServer() {
     if (isDev) {
       // In dev mode, start Next.js dev server
       const hubDir = getResourcePath('hub');
-      hubProcess = spawn('npx', ['next', 'dev', '--port', String(HUB_PORT)], {
+      // `next dev` also binds every interface by default (it prints a Network:
+      // URL to prove it) — same loopback default as the production branch below.
+      const devHost = process.env.BUILD_STUDIO_LISTEN_HOST || '127.0.0.1';
+      hubProcess = spawn('npx', ['next', 'dev', '--port', String(HUB_PORT), '--hostname', devHost], {
         cwd: hubDir,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env, NODE_ENV: 'development' },
@@ -239,7 +242,11 @@ function startHubServer() {
           PATH: `${nodeBinDir}:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:${process.env.PATH || ''}`,
           HOME: process.env.HOME || require('os').homedir(),
           PORT: String(HUB_PORT),
-          HOSTNAME: '0.0.0.0',
+          // Loopback: the only client is this Electron app, which loads the hub
+          // over localhost. Binding 0.0.0.0 published the dashboard — and, via
+          // its API routes, the project registry and settings — to every network
+          // the machine joined. Opt back in with BUILD_STUDIO_LISTEN_HOST.
+          HOSTNAME: process.env.BUILD_STUDIO_LISTEN_HOST || '127.0.0.1',
           NODE_ENV: 'production',
           BUILD_STUDIO_PROJECT_SERVER: projectServerPath,
         },

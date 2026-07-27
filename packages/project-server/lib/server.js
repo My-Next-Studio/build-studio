@@ -500,8 +500,15 @@ function startServer(projectRoot, opts = {}) {
   let attempt = 0;
   let currentPort = config.port;
 
+  // Bind to loopback. Omitting the host makes Node listen on 0.0.0.0, which put
+  // this API — workflow control, config writes, project file reads, tmux session
+  // proxying, all of it unauthenticated — on every network the machine joins.
+  // The only client is the Electron app on the same machine, over localhost.
+  // Set BUILD_STUDIO_LISTEN_HOST=0.0.0.0 to opt back in deliberately.
+  const listenHost = process.env.BUILD_STUDIO_LISTEN_HOST || '127.0.0.1';
+
   const tryListen = () => {
-    server.listen(currentPort, () => {
+    server.listen(currentPort, listenHost, () => {
       config.port = currentPort;
       console.log(`\nBuild Studio — ${config.name}`);
       console.log(`  Server:  http://localhost:${currentPort}`);

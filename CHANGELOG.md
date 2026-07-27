@@ -12,6 +12,44 @@ the category most likely to surprise a fork.
 
 ---
 
+## 2026-07-27 — Security: bind to loopback, patch `fast-uri`
+
+### Fixed
+
+- **The hub and every project-server listened on all network interfaces.** The
+  hub set `HOSTNAME: '0.0.0.0'` explicitly and project-server called
+  `server.listen(port)` with no host, which Node defaults to `0.0.0.0`. On any
+  shared network — café, coworking space, hotel, client office — anyone could
+  reach the dashboard and every project-server API, none of which require
+  authentication: they start and stop workflows, write project config, read
+  project files, and proxy tmux sessions. The only client is the Electron app on
+  the same machine, over `localhost`, so nothing was gained by binding wide.
+  Both now bind `127.0.0.1`. `next dev` was doing the same in dev mode and is now
+  pinned too.
+
+  Set `BUILD_STUDIO_LISTEN_HOST=0.0.0.0` to opt back in deliberately — e.g. to
+  reach the hub from a phone on the same network. Treat that as exposing an
+  unauthenticated API, and prefer an SSH tunnel where you can.
+
+- **`fast-uri` bumped to 3.1.4** (CVE-2026-16221, GHSA-v2hh-gcrm-f6hx, CVSS 7.5)
+  via a root `overrides` entry. It arrives through
+  `electron-builder → app-builder-lib → ajv`, all build-time, so the vulnerable
+  code never shipped in the app — but the patch is within `ajv`'s declared
+  `^3.0.1` range, so there is no reason not to take it.
+
+### Known issues
+
+- **`sharp` 0.34.5 (GHSA-f88m-g3jw-g9cj) is still present**, pulled in by
+  `next@16.2.10`. The libvips CVEs require processing untrusted image input, and
+  no such path exists today: `images.remotePatterns` is unset so every remote URL
+  is rejected, the only same-origin sources are repo-shipped files under
+  `public/` and the `/avatars/[...path]` route (locked to
+  `^\d+\/[\w-]+\.png$` with a traversal guard), and nothing in the app accepts an
+  image upload. There is no clean fix yet — even `next@16.2.12` pins
+  `sharp: ^0.34.5`, so the first patched release (0.35.0) is outside the range
+  Next declares. **Re-evaluate before adding any image upload, any
+  user-supplied avatar, or an `images.remotePatterns` entry.**
+
 ## 2026-07-27 — Demo recorder: output folder, narration, signature re-seal
 
 ### Added
