@@ -1,6 +1,7 @@
 {
   "name": "@build-studio/shared",
   "version": "1.0.0",
+  "license": "Apache-2.0",
   "description": "Shared utilities for build-studio (registry, process manager)",
   "main": "index.js"
 }

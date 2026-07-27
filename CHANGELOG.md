@@ -14,6 +14,21 @@ the category most likely to surprise a fork.
 
 ## 2026-07-27 — Security: bind to loopback, patch `fast-uri`
 
+### Added
+
+- **`SECURITY.md`** — private vulnerability reporting (enabled on the repo), plus
+  an explicit scope: what counts as a vulnerability versus what follows from the
+  design. The unauthenticated local API on its loopback binding and agents
+  executing code are deliberate; escaping those boundaries is not.
+- **A "Security & intended use" section in the README**, above the install
+  instructions. Build Studio is a local single-developer tool, not hardened for
+  shared or production environments, and it runs AI agents that execute code —
+  worth knowing before the first run rather than after.
+- **`license: "Apache-2.0"` in every `package.json`.** The repo has always been
+  Apache-2.0 via `LICENSE` and `NOTICE`, but the package metadata declared no
+  licence at all, which is the kind of inconsistency that matters for anyone
+  consuming or redistributing the packages.
+
 ### Fixed
 
 - **The hub and every project-server listened on all network interfaces.** The

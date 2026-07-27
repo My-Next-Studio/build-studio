@@ -1,6 +1,7 @@
 {
   "name": "build-studio",
   "version": "1.0.0",
+  "license": "Apache-2.0",
   "private": true,
   "description": "Mission control dashboard for multi-agent Claude Code workflows",
   "bin": {

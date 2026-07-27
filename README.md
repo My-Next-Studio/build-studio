@@ -39,6 +39,34 @@ The result is a product that grows step by step — each increment vision-aligne
 
 ---
 
+## Security & intended use
+
+Build Studio is a **local development tool**. It is built for a single developer
+running it on their own machine, and it is not hardened for shared, multi-user,
+or production environments.
+
+Two properties are worth understanding before you run it:
+
+- **The hub and project servers have no authentication.** Their APIs start and
+  stop workflows, write project config, read project files, and proxy tmux
+  sessions. They bind to `127.0.0.1` so only your machine can reach them. If you
+  set `BUILD_STUDIO_LISTEN_HOST` to widen that, you are publishing an
+  unauthenticated API to that network — prefer an SSH tunnel over binding to
+  `0.0.0.0`, and don't do it on a network you don't control.
+- **Agents execute code.** Workflows run AI agents that write and run code, run
+  test suites, install dependencies, and make git commits in your projects.
+  Review the gates you're auto-advancing past, and prefer projects under version
+  control so you can see and undo what changed.
+
+Found a vulnerability? Please report it privately — see
+[SECURITY.md](SECURITY.md). Don't open a public issue.
+
+Build Studio is provided under the Apache License 2.0, **without warranty of any
+kind**. See [LICENSE](LICENSE) sections 7 and 8; you are responsible for deciding
+whether it is appropriate for your use.
+
+---
+
 ## Prerequisites
 
 - **Node.js >= 20** and **npm**
@@ -172,7 +200,7 @@ The hub filters every picker by this list and warns when an enabled CLI's binary
 
 These settings are per project and stored server-side in `.build-studio/local.json` (gitignored, machine-local) — they never leak into other projects, and the hub never rewrites your hand-maintained `config.yaml` (a `cli:` block there carries team-shared defaults; `local.json` overrides it).
 
-**Per-run selection** happens on the workflow start view for execution/bugfix runs: the **Developer CLI** (Frontend/Backend/Fullstack/iOS/Android Dev) and **Reviewer CLI** (Code Reviewer + Security, execution runs only). Reviewer `auto` resolves to *a different CLI than the developer* — cross-model review catches blind spots that same-model self-review misses; the UI warns if the reviewer ever resolves to the same CLI as the developer.
+**Per-run selection** happens on the workflow start view for execution/bugfix runs: the **Developer CLI** (Frontend/Backend/Fullstack/iOS/Android Dev) and **Reviewer CLI** (Code Reviewer, Security + Final Reviewer). The configured Reviewer slot applies in every workflow type; only this per-run `auto` override is execution-only. Reviewer `auto` resolves to *a different CLI than the developer* — cross-model review catches blind spots that same-model self-review misses; the UI warns if the reviewer ever resolves to the same CLI as the developer.
 
 Role prompts are CLI-neutral (they point at files, e.g. "read your role definition at `.claude/commands/pm.md`"); Claude-specific conveniences (`/goal`, `--effort`, session resume) simply don't apply on other CLIs. Project instructions live in **`AGENTS.md`** — read natively by OpenCode and Codex — with a stub `CLAUDE.md` that @-imports it for Claude Code. Existing projects move to that layout via the onboarding checkbox or `build-studio migrate-agents-md [path|--all] [--apply]` (dry-run first; never overwrites an existing AGENTS.md; skips projects mid-workflow).
 
