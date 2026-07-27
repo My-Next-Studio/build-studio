@@ -30,7 +30,8 @@
       ],
       "identity": null,
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Build Studio records narration from your microphone during demo recordings."
+        "NSMicrophoneUsageDescription": "Build Studio records narration from your microphone during demo recordings.",
+        "NSScreenCaptureUsageDescription": "Build Studio records your screen or a chosen window when you capture a demo from the Demos tab."
       },
       "hardenedRuntime": false,
       "gatekeeperAssess": false

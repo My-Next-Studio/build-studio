@@ -49,6 +49,32 @@ function probeDuration(ffmpeg, file) {
   } catch { return 0; }
 }
 
+// Does `file` carry an audio stream? Manual segments have narration only when
+// the mic was on; automation frame-dirs never do.
+function hasAudioStream(ffmpeg, file) {
+  const ffprobe = ffmpeg.replace(/ffmpeg(\.exe)?$/i, 'ffprobe$1');
+  try {
+    const out = run(ffprobe, ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', file]);
+    return out.trim().length > 0;
+  } catch { return false; }
+}
+
+// ffmpeg's atempo filter only accepts 0.5–2.0, so a larger speed change is a
+// chain of steps whose product is the target factor. speed 1 → a clean no-op.
+function atempoChain(speed) {
+  let s = speed || 1;
+  if (s === 1) return 'atempo=1.0';
+  const parts = [];
+  while (s > 2.0 + 1e-9) { parts.push('atempo=2.0'); s /= 2.0; }
+  while (s < 0.5 - 1e-9) { parts.push('atempo=0.5'); s /= 0.5; }
+  parts.push(`atempo=${round(s, 4)}`);
+  return parts.join(',');
+}
+
+// Uniform silent track so silent clips concat cleanly next to narrated ones.
+const SILENT_AUDIO = 'anullsrc=channel_layout=mono:sample_rate=48000';
+const AUDIO_ENC = ['-c:a', 'aac', '-ar', '48000', '-ac', '1'];
+
 function prettyLabel(label) {
   return String(label || '')
     .replace(/^(step_started:|agent_started:|agent_completed:)/, '')
@@ -196,6 +222,7 @@ function renderEdl(dir, edl, outPath, opts = {}) {
   const parts = [];
   edl.clips.forEach((c, i) => {
     const out = path.join(build, `clip-${pad(i)}.mp4`);
+    const vEnc = ['-c:v', 'libx264', '-preset', preset, '-crf', String(crf), '-pix_fmt', 'yuv420p'];
     if (c.kind === 'manual') {
       const src = path.join(dir, c.source);
       if (!fs.existsSync(src)) { console.warn(`  skip ${c.source} (missing)`); return; }
@@ -205,11 +232,21 @@ function renderEdl(dir, edl, outPath, opts = {}) {
       const inSec = c.inSec || 0;
       const len = (c.outSec != null ? c.outSec : (c.sourceDurationSec || 0)) - inSec;
       const lenArg = len > 0 ? ['-t', String(round(len, 3))] : [];
-      run(ffmpeg, [
-        '-y', '-fflags', '+genpts', '-ss', String(round(inSec, 3)), ...lenArg, '-i', src,
-        '-vf', `setpts=(PTS-STARTPTS)/${speed},${VF}`, '-an', '-r', String(fps),
-        '-c:v', 'libx264', '-preset', preset, '-crf', String(crf), '-pix_fmt', 'yuv420p', out,
-      ]);
+      const seek = ['-y', '-fflags', '+genpts', '-ss', String(round(inSec, 3)), ...lenArg, '-i', src];
+      const vf = `setpts=(PTS-STARTPTS)/${speed},${VF}`;
+      if (hasAudioStream(ffmpeg, src)) {
+        // Keep the narration, speed-matched to the video (atempo == setpts factor).
+        run(ffmpeg, [
+          ...seek, '-vf', vf, '-af', atempoChain(speed), '-r', String(fps),
+          ...vEnc, ...AUDIO_ENC, out,
+        ]);
+      } else {
+        // Mic was off → pad with a silent track so concat stays uniform.
+        run(ffmpeg, [
+          ...seek, '-f', 'lavfi', '-i', SILENT_AUDIO, '-vf', vf, '-map', '0:v', '-map', '1:a',
+          '-r', String(fps), ...vEnc, ...AUDIO_ENC, '-shortest', out,
+        ]);
+      }
     } else {
       const segDir = path.join(dir, c.source);
       if (!fs.existsSync(segDir)) { console.warn(`  skip ${c.source} (missing)`); return; }
@@ -217,11 +254,14 @@ function renderEdl(dir, edl, outPath, opts = {}) {
       const startFrame = c.startFrame || 1;
       const fc = c.frameCount || 0;
       const selectVf = fc > 0 ? `select='lt(n\\,${fc})',setpts=N/${c.fps}/TB,` : '';
+      // Automation timelapse is silent — add a matching silent track so it
+      // concatenates cleanly alongside narrated manual clips.
       run(ffmpeg, [
         '-y', '-framerate', String(c.fps), '-start_number', String(startFrame),
         '-i', path.join(segDir, 'frame-%06d.jpg'),
-        '-vf', `${selectVf}${VF}`, '-r', String(fps),
-        '-c:v', 'libx264', '-preset', preset, '-crf', String(crf), '-pix_fmt', 'yuv420p', out,
+        '-f', 'lavfi', '-i', SILENT_AUDIO,
+        '-vf', `${selectVf}${VF}`, '-map', '0:v', '-map', '1:a', '-r', String(fps),
+        ...vEnc, ...AUDIO_ENC, '-shortest', out,
       ]);
     }
     parts.push(out);

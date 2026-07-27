@@ -81,6 +81,53 @@ function collectDeps(pkgName, visited = new Set()) {
 const allDeps = new Set();
 for (const dep of runtimeDeps) collectDeps(dep, allDeps);
 
+// ─── Re-seal the bundle so macOS keeps its TCC grants ─────────────────────────
+// Injecting files into an already-signed .app breaks the code signature's
+// sealed-resource hashes ("a sealed resource is missing or invalid"). macOS then
+// treats the app as tampered and DROPS its privacy grants — most visibly Screen
+// Recording, which the Demos tab needs (desktopCapturer throws "Failed to get
+// sources"). Re-signing after every inject restores a valid seal. For a
+// cert-signed build the TCC grant is keyed to the designated requirement
+// (bundle id + team), so once granted it survives all future rebuilds; an
+// ad-hoc fallback still yields a valid seal (re-grant needed only after a rebuild).
+let _signIdentity; // memoized across targets — resolve at most once
+function resolveSignIdentity() {
+  if (_signIdentity !== undefined) return _signIdentity;
+  // 1) explicit override (set BUILD_STUDIO_SIGN_IDENTITY to a keychain identity name)
+  const override = process.env.BUILD_STUDIO_SIGN_IDENTITY;
+  if (override && override.trim()) return (_signIdentity = override.trim());
+  // 2) auto-detect an Apple Development identity in the keychain. (Deliberately
+  //    NOT Apple Distribution — that needs a provisioning profile and would make
+  //    the app fail to launch locally.)
+  try {
+    const out = execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], { encoding: 'utf8' });
+    const m = out.match(/"(Apple Development:[^"]+)"/);
+    if (m) return (_signIdentity = m[1]);
+  } catch { /* security unavailable — fall through to ad-hoc */ }
+  // 3) ad-hoc — valid seal, no cert required
+  return (_signIdentity = '-');
+}
+
+function resealApp(resourcesPath) {
+  // resourcesPath is <App>.app/Contents/Resources — the bundle root is two up.
+  const appBundle = path.dirname(path.dirname(resourcesPath));
+  if (!appBundle.endsWith('.app')) {
+    console.warn(`  (Re-seal skipped: ${appBundle} is not an .app bundle)`);
+    return;
+  }
+  const identity = resolveSignIdentity();
+  const label = identity === '-' ? 'ad-hoc' : identity;
+  try {
+    execFileSync('codesign', ['--force', '--deep', '--sign', identity, appBundle], { stdio: ['ignore', 'ignore', 'pipe'] });
+    console.log(`  Re-sealed signature (${label})`);
+  } catch (e) {
+    // Non-fatal: an unsigned/broken seal only costs privacy grants, it doesn't
+    // stop the app from launching. Warn loudly so the cause is discoverable.
+    const detail = (e.stderr && e.stderr.toString().trim()) || e.message;
+    console.warn(`  (Re-seal failed with ${label} — Screen Recording grant may reset: ${detail})`);
+  }
+}
+
 for (const appPath of appPaths) {
   const standaloneDest = path.join(appPath, 'standalone');
 
@@ -189,6 +236,10 @@ for (const appPath of appPaths) {
     console.error(`Error: injection incomplete for ${appPath} — the app would launch to a black window.`);
     process.exit(1);
   }
+
+  // Re-seal now that all files for this target are in place, so the modified
+  // bundle keeps a valid signature (and thus its macOS privacy grants).
+  resealApp(appPath);
 }
 
 // Clear Electron browser cache so the app loads fresh JS/CSS

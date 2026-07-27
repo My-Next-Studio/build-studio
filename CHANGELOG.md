@@ -12,6 +12,49 @@ the category most likely to surprise a fork.
 
 ---
 
+## 2026-07-27 — Demo recorder: output folder, narration, signature re-seal
+
+### Added
+
+- **The demo recordings folder is configurable** from the Demos tab. Precedence:
+  `DEMO_RECORDINGS_DIR` env → your setting → a folder next to your managed
+  projects → `~/Movies/build-studio-demos`. The panel shows which tier won, and
+  goes read-only when the env var overrides. Backed by
+  `GET`/`PUT /api/demos/settings`, which writes `demoRecordingsDir` into
+  `~/.build-studio/config.json`.
+
+### Fixed
+
+- **Narration was dropped from rendered demos.** The EDL render passed `-an`, so
+  microphone audio on manual segments never reached the output. Segments with an
+  audio stream now keep it, speed-matched to the video via an `atempo` chain
+  (ffmpeg clamps `atempo` to 0.5–2.0, so larger factors chain), and silent
+  clips — automation timelapses have no audio — are padded with `anullsrc` so
+  everything concatenates uniformly.
+- **Injecting into the `.app` broke its code signature and silently revoked
+  Screen Recording.** Writing files into an already-signed bundle invalidates the
+  sealed-resource hashes; macOS then treats the app as tampered and drops its TCC
+  grants, so `desktopCapturer` fails with "Failed to get sources".
+  `inject-resources.js` now re-seals after every inject, auto-detecting an Apple
+  Development identity (override with `BUILD_STUDIO_SIGN_IDENTITY`) and falling
+  back to ad-hoc signing. Added `NSScreenCaptureUsageDescription` so the prompt
+  explains itself.
+- **The recorder and the hub resolved the recordings folder with two separate
+  copies of the same logic**, which could drift and have the recorder write where
+  the hub does not look. Both now call
+  `@build-studio/shared/demo-recordings`.
+
+### Upgrade steps
+
+- **Re-grant Screen Recording once** if you injected before this landed: macOS
+  may still hold a revoked grant for the tampered bundle. System Settings →
+  Privacy & Security → Screen Recording, toggle Build Studio off and on, then
+  restart the app. With a cert-signed build the grant is keyed to the designated
+  requirement, so it survives all later rebuilds; an ad-hoc fallback needs a
+  re-grant after each rebuild.
+- Existing recordings are unaffected — the default resolution order is unchanged,
+  so a folder that resolved before still resolves the same way.
+
 ## 2026-07-27 — Model catalog auto-discovery, uniform role slots
 
 Claude model list auto-discovery, uniform role slots, and per-step overrides

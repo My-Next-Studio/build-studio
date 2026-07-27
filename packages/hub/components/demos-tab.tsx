@@ -266,6 +266,10 @@ function MicBtn({ lang, onText, current, setErr }: { lang: string; onText: (t: s
 // external recording that appears in the list and flows through the editor.
 interface RecStatus { recording: boolean; source?: string; elapsedMs?: number; markers?: number; project?: string | null; booted?: { udid: string; name: string }[] }
 interface CaptureSource { id: string; name: string; thumbnail: string | null }
+interface DirInfo { dir: string; source: 'env' | 'config' | 'projects' | 'default'; configured: string | null; envOverride: boolean }
+const DIR_SOURCE_LABEL: Record<DirInfo['source'], string> = {
+  env: 'DEMO_RECORDINGS_DIR env var', config: 'your setting', projects: 'next to your projects (default)', default: '~/Movies (default)',
+}
 interface DemoBridge { listCaptureSources?: () => Promise<CaptureSource[]>; setCaptureSource?: (id: string | null) => Promise<boolean> }
 function bridge(): DemoBridge | null {
   if (typeof window === 'undefined') return null
@@ -285,6 +289,26 @@ function RecordPanel({ onStopped }: { onStopped: (id?: string) => void }) {
   const [sources, setSources] = useState<CaptureSource[] | null>(null)
   const winRec = useRef<{ rec: MediaRecorder; stream: MediaStream; pending: Promise<unknown>[] } | null>(null)
   const canWindow = !!bridge()?.listCaptureSources
+
+  // Output-folder setting (where recordings land).
+  const [dirInfo, setDirInfo] = useState<DirInfo | null>(null)
+  const [dirInput, setDirInput] = useState('')
+  const [dirSaving, setDirSaving] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [dirErr, setDirErr] = useState<string | null>(null)
+  const loadDirInfo = useCallback(async () => {
+    const info = await fetch('/api/demos/settings').then((x) => x.json()).catch(() => null)
+    if (info && !info.error) { setDirInfo(info); setDirInput(info.configured || '') }
+  }, [])
+  useEffect(() => { loadDirInfo() }, [loadDirInfo])
+  const saveDir = async (value: string | null) => {
+    setDirSaving('saving'); setDirErr(null)
+    try {
+      const r = await fetch('/api/demos/settings', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ demoRecordingsDir: value }) }).then((x) => x.json())
+      if (r.error) { setDirSaving('error'); setDirErr(r.error); return }
+      setDirInfo(r); setDirInput(r.configured || ''); setDirSaving('saved'); onStopped()
+      setTimeout(() => setDirSaving('idle'), 1500)
+    } catch (e) { setDirSaving('error'); setDirErr(e instanceof Error ? e.message : 'save failed') }
+  }
 
   const poll = useCallback(async () => {
     const s = await fetch('/api/demos/record/status').then((x) => x.json()).catch(() => null)
@@ -375,6 +399,25 @@ function RecordPanel({ onStopped }: { onStopped: (id?: string) => void }) {
           <div style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)', marginTop: 6 }}>
             {booted.length ? `Simulator: ${booted[0].name}` : 'No booted simulator'}{canWindow ? '' : ' · window capture needs the desktop app'}
           </div>
+
+          {dirInfo && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+              <div style={{ fontFamily: mono, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-dim)', marginBottom: 6 }}>Output folder</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input value={dirInput} onChange={(e) => setDirInput(e.target.value)} placeholder="~/Movies/build-studio-demos" disabled={dirInfo.envOverride}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !dirInfo.envOverride) saveDir(dirInput) }}
+                  style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', padding: '4px 8px', borderRadius: 4, background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', fontFamily: mono, fontSize: 11, opacity: dirInfo.envOverride ? 0.5 : 1 }} />
+                <Btn onClick={() => saveDir(dirInput)} disabled={dirInfo.envOverride || dirSaving === 'saving' || dirInput.trim() === (dirInfo.configured || '')}>Save</Btn>
+                {dirInfo.configured && !dirInfo.envOverride && <Btn onClick={() => saveDir(null)} disabled={dirSaving === 'saving'}>Reset</Btn>}
+              </div>
+              <div style={{ fontFamily: mono, fontSize: 9, color: 'var(--muted)', marginTop: 6 }}>
+                {dirInfo.envOverride
+                  ? <>Overridden by <code>DEMO_RECORDINGS_DIR</code> — unset it to edit here. Saving to <code>{dirInfo.dir}</code></>
+                  : <>Saving to <code>{dirInfo.dir}</code> · using {DIR_SOURCE_LABEL[dirInfo.source]}{dirSaving === 'saved' ? ' · saved ✓' : ''}</>}
+              </div>
+              {dirErr && <div style={{ fontFamily: mono, fontSize: 10, color: 'var(--red)', marginTop: 4 }}>{dirErr}</div>}
+            </div>
+          )}
         </>
       )}
       {err && <div style={{ fontFamily: mono, fontSize: 10, color: 'var(--red)', marginTop: 6 }}>{err}</div>}

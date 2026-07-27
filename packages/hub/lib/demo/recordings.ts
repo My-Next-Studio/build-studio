@@ -2,32 +2,15 @@
 
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import { probeDuration } from './edl'
 
-function commonParent(paths: string[]): string | null {
-  if (!paths.length) return null
-  const split = paths.map((p) => path.resolve(p).split(path.sep))
-  const first = split[0]; const out: string[] = []
-  for (let i = 0; i < first.length; i++) {
-    const seg = first[i]
-    if (split.every((s) => s[i] === seg)) out.push(seg); else break
-  }
-  return out.join(path.sep) || null
-}
-
-// Output base: env → next to the managed projects (sibling of build-studio on
-// the external drive) → ~/Movies fallback. Mirrors demoRecorder.resolveBaseDir.
+// Output base: env → user setting → next-to-projects heuristic → ~/Movies
+// fallback. Resolution lives in @build-studio/shared so the hub (read path) and
+// the recorder (write path, demoRecorder.js) can never resolve different folders.
 export function resolveBaseDir(): string {
-  if (process.env.DEMO_RECORDINGS_DIR) return process.env.DEMO_RECORDINGS_DIR
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { registry } = require(/* turbopackIgnore: true */ '@build-studio/shared')
-    const projects = registry.list().map((p: any) => p.path).filter(Boolean)
-    const parent = commonParent(projects)
-    if (parent && parent.split(path.sep).filter(Boolean).length >= 2) return path.join(parent, 'demo-recordings')
-  } catch { /* registry not resolvable */ }
-  return path.join(os.homedir(), 'Movies', 'build-studio-demos')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { demoRecordings } = require(/* turbopackIgnore: true */ '@build-studio/shared')
+  return demoRecordings.resolveDemoRecordingsDir()
 }
 
 function safeJoin(base: string, id: string): string {

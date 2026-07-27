@@ -15,7 +15,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
 const { DemoRecordingManifest } = require('./demoRecordingManifest');
 const { DemoPrivacyMode } = require('./demoPrivacyMode');
@@ -43,34 +42,11 @@ const STEP_PHASE_LABEL = {
 
 function pad(n, w = 6) { return String(n).padStart(w, '0'); }
 
-// Longest common parent directory of a set of absolute paths.
-function commonParent(paths) {
-  if (!paths.length) return null;
-  const split = paths.map((p) => path.resolve(p).split(path.sep));
-  const first = split[0];
-  const out = [];
-  for (let i = 0; i < first.length; i++) {
-    const seg = first[i];
-    if (split.every((s) => s[i] === seg)) out.push(seg); else break;
-  }
-  const joined = out.join(path.sep);
-  return joined || null;
-}
-
-// Output base: env override → next to the managed projects (which sit beside
-// the build-studio repo on the external drive) → ~/Movies fallback.
+// Output base: env override → user setting → next-to-projects heuristic →
+// ~/Movies fallback. The resolution itself lives in @build-studio/shared so the
+// hub API (recordings.ts) resolves the exact same folder we write to.
 function resolveBaseDir() {
-  if (process.env.DEMO_RECORDINGS_DIR) return process.env.DEMO_RECORDINGS_DIR;
-  try {
-    const shared = require('@build-studio/shared');
-    const projects = shared.registry.list().map((p) => p.path).filter(Boolean);
-    const parent = commonParent(projects);
-    // Guard against a uselessly-shallow common root (e.g. '/' or '/Volumes').
-    if (parent && parent.split(path.sep).filter(Boolean).length >= 2) {
-      return path.join(parent, 'demo-recordings');
-    }
-  } catch (_) { /* registry not resolvable — fall through */ }
-  return path.join(os.homedir(), 'Movies', 'build-studio-demos');
+  return require('@build-studio/shared').demoRecordings.resolveDemoRecordingsDir();
 }
 
 function timestampFolder(d) {
