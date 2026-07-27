@@ -1,6 +1,9 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+// Shared model-name → CLI model-id map. Was a private inline copy pinned to
+// Opus/Sonnet 4.6, two generations behind the workflow launch path.
+const { MODEL_IDS } = require('@build-studio/shared/cli');
 
 function createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecutionPlan) {
   const router = express.Router();
@@ -113,7 +116,6 @@ function createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecuti
       const { resolvePermissionMode, claudePermissionFlag } = require('../permission-mode');
       const dangerFlag = allowAll ? claudePermissionFlag(resolvePermissionMode(config.agent_defaults)) : '';
       const taskModel = task.model || config.agent_defaults.model || 'opus';
-      const MODEL_IDS = { opus: 'claude-opus-4-6', sonnet: 'claude-sonnet-4-6' };
       const modelFlag = ` --model ${MODEL_IDS[taskModel] || taskModel}`;
       const initialPrompt = `Read TASK.md and execute the task using /${skill}. When you are done, commit your output files with git (git add docs/ src/ && git commit -m "feat: <short description>"). Do NOT add or commit TASK.md or start.sh. Do not skip the commit.`;
       // Brew shellenv is Apple-Silicon-pathed; add a command -v fallback probe

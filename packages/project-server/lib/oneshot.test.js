@@ -7,6 +7,7 @@ const path = require('path');
 const os = require('os');
 const { EventEmitter } = require('events');
 const { createOneShotRunner, sweepOldFiles, buildSpawnOptions } = require('./oneshot');
+const { MODEL_IDS } = require('@build-studio/shared/cli');
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -495,22 +496,22 @@ test('buildSpawnOptions: unset_api_key=true → ANTHROPIC_API_KEY removed from e
   }
 });
 
-test('buildSpawnOptions: model=opus → --model claude-opus-4-6', () => {
+test('buildSpawnOptions: model=opus resolves via the shared alias map', () => {
   const { argv } = buildSpawnOptions({
     promptFile: '/tmp/p.txt',
     projectRoot: '/tmp/proj',
     agentDefaults: { model: 'opus' },
   });
-  assert.deepEqual(argv, ['--model', 'claude-opus-4-6', '--permission-mode', 'auto', '-p', '@/tmp/p.txt']);
+  assert.deepEqual(argv, ['--model', MODEL_IDS.opus, '--permission-mode', 'auto', '-p', '@/tmp/p.txt']);
 });
 
-test('buildSpawnOptions: model=sonnet → --model claude-sonnet-4-6', () => {
+test('buildSpawnOptions: model=sonnet resolves via the shared alias map', () => {
   const { argv } = buildSpawnOptions({
     promptFile: '/tmp/p.txt',
     projectRoot: '/tmp/proj',
     agentDefaults: { model: 'sonnet' },
   });
-  assert.ok(argv.includes('claude-sonnet-4-6'));
+  assert.ok(argv.includes(MODEL_IDS.sonnet));
 });
 
 test('buildSpawnOptions: unknown model name passed through verbatim', () => {
@@ -533,7 +534,7 @@ test('buildSpawnOptions: full example-web-shaped agent_defaults → all three tr
       agentDefaults: { skip_permissions: true, unset_api_key: true, model: 'opus' },
     });
     assert.deepEqual(argv,
-      ['--model', 'claude-opus-4-6', '--permission-mode', 'bypassPermissions', '-p', '@/tmp/p.txt']);
+      ['--model', MODEL_IDS.opus, '--permission-mode', 'bypassPermissions', '-p', '@/tmp/p.txt']);
     assert.ok(!('ANTHROPIC_API_KEY' in spawnOpts.env));
   } finally {
     process.env = original;
@@ -566,7 +567,9 @@ test('runOneShot: agent_defaults are threaded into the spawn call', async () => 
     assert.ok(args.includes('--permission-mode'));
     assert.ok(args.includes('bypassPermissions'));
     assert.ok(args.includes('--model'));
-    assert.ok(args.includes('claude-sonnet-4-6'));
+    // Resolved through the shared MODEL_IDS alias map, not a private copy —
+    // asserting against it keeps this test honest when `sonnet` re-points.
+    assert.ok(args.includes(MODEL_IDS.sonnet));
     assert.ok(!('ANTHROPIC_API_KEY' in (options.env || {})),
       'env passed to spawn must drop ANTHROPIC_API_KEY when unset_api_key=true');
   } finally {

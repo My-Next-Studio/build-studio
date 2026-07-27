@@ -9,6 +9,9 @@ const {
   resolveEffortForRole,
   resolveEffectiveCliConfig,
   resolveAgentLaunchSettings,
+  buildCliFlags,
+  resolveStepModelForCli,
+  resolveStepEffortForCli,
   isValidEffortToken,
   normalizeCliBlock,
   hasGlobalCliDefaults,
@@ -36,9 +39,13 @@ test('resolver: per-role config slots — developer_cli / reviewer_cli beat defa
   assert.equal(resolveCliForRole('Backend Dev', exec, cfg), 'opencode');
   assert.equal(resolveCliForRole('Code Reviewer', exec, cfg), 'codex');
   assert.equal(resolveCliForRole('Security', exec, cfg), 'codex');
+  assert.equal(resolveCliForRole('Final Reviewer', exec, cfg), 'codex');
   assert.equal(resolveCliForRole('QA', exec, cfg), 'claude');
-  // Reviewer slot is execution-only — review workflows' reviewer roles use default
-  assert.equal(resolveCliForRole('Code Reviewer', { type: 'review' }, cfg), 'claude');
+  // The configured reviewer slot applies in EVERY workflow type, not just execution
+  for (const type of ['review', 'bugfix', 'kickoff', 'demo_review', 'onboarding']) {
+    assert.equal(resolveCliForRole('Code Reviewer', { type }, cfg), 'codex', type);
+    assert.equal(resolveCliForRole('Security', { type }, cfg), 'codex', type);
+  }
   // Slots unset → default
   assert.equal(resolveCliForRole('Frontend Dev', exec, { default: 'opencode' }), 'opencode');
   assert.equal(resolveCliForRole('Code Reviewer', exec, { default: 'opencode' }), 'opencode');
@@ -94,9 +101,11 @@ test('model: per-role selectors, default fallback, null when unset', () => {
   assert.equal(resolveModelForRole('opencode', 'Code Reviewer', exec, cfg), 'openrouter/c/c');
   assert.equal(resolveModelForRole('opencode', 'PM', exec, cfg), 'openrouter/a/a');
 
-  // Reviewer without a dedicated model falls back to the default model.
+  // Either dedicated slot, left unset, falls back to the default model.
   const cfgNoRev = { ...cfg, reviewer_model: null };
   assert.equal(resolveModelForRole('opencode', 'Security', exec, cfgNoRev), 'openrouter/a/a');
+  const cfgNoDev = { ...cfg, developer_model: null };
+  assert.equal(resolveModelForRole('opencode', 'Fullstack Dev', exec, cfgNoDev), 'openrouter/a/a');
 
   // Nothing set anywhere → null (the CLI runs its own configured default).
   assert.equal(resolveModelForRole('opencode', 'Fullstack Dev', exec, { default: 'opencode' }), null);
@@ -125,10 +134,9 @@ test('effort: per-role selectors mirror the model slots', () => {
   assert.equal(resolveEffortForRole('Code Reviewer', exec, cfg), 'max');
   assert.equal(resolveEffortForRole('PM', exec, cfg), 'low');
 
-  // Reviewer without a dedicated effort falls back to default (like the model).
+  // Either slot, left unset, falls back to default (same as the model slots).
   assert.equal(resolveEffortForRole('Security', exec, { ...cfg, reviewer_effort: null }), 'low');
-  // Developer has NO default fallback (mirrors developer_model semantics).
-  assert.equal(resolveEffortForRole('Fullstack Dev', exec, { ...cfg, developer_effort: null }), null);
+  assert.equal(resolveEffortForRole('Fullstack Dev', exec, { ...cfg, developer_effort: null }), 'low');
   // Nothing set → null (no effort flag).
   assert.equal(resolveEffortForRole('PM', exec, { default: 'opencode' }), null);
   assert.equal(resolveEffortForRole('PM', exec, null), null);
@@ -306,10 +314,13 @@ test('launch settings: Default / Developer / Reviewer slots + flag fragments', (
   assert.equal(rev.modelFlag, ' --model gpt-5.2-codex');
   assert.equal(rev.effortFlag, ' -c model_reasoning_effort=medium');
 
-  // Reviewer role outside execution → Default slot (claude)
+  // Reviewer role outside execution → still the Reviewer slot. Reviewing is
+  // reviewing whatever workflow it happens in; only the legacy per-run
+  // wf.reviewerCli knob stays execution-scoped.
   const revKick = resolveAgentLaunchSettings('Code Reviewer', KICKOFF, cfg);
-  assert.equal(revKick.cli, 'claude');
-  assert.equal(revKick.model, 'opus4.7[1m]');
+  assert.equal(revKick.cli, 'codex');
+  assert.equal(revKick.model, 'gpt-5.2-codex');
+  assert.equal(revKick.effort, 'medium');
 });
 
 test('launch settings: Use-default path (global) drives every role', () => {
@@ -342,24 +353,96 @@ test('launch settings: Use-default path (global) drives every role', () => {
   assert.equal(sec.effort, 'max');
 });
 
-test('launch settings: reviewer model/effort falls back to default slot; developer does not', () => {
+test('launch settings: both developer and reviewer model/effort fall back to the default slot', () => {
   const cfg = {
     default: 'opencode',
     default_model: 'openrouter/a/a', default_effort: 'low',
-    developer_cli: 'opencode', // no developer_model / effort
+    developer_cli: 'opencode', // no developer_model / effort → inherit default_
     reviewer_cli: 'opencode', // no reviewer_model / effort → inherit default_
   };
   const dev = resolveAgentLaunchSettings('iOS Dev', EXEC, cfg);
-  assert.equal(dev.model, null); // developer_model has no default fallback
-  assert.equal(dev.effort, null);
-  assert.equal(dev.modelFlag, '');
-  assert.equal(dev.effortFlag, '');
+  assert.equal(dev.model, 'openrouter/a/a');
+  assert.equal(dev.effort, 'low');
+  assert.equal(dev.modelFlag, ' -m openrouter/a/a');
+  assert.equal(dev.effortFlag, ' --variant low');
 
   const rev = resolveAgentLaunchSettings('Code Reviewer', EXEC, cfg);
-  assert.equal(rev.model, 'openrouter/a/a'); // falls back
+  assert.equal(rev.model, 'openrouter/a/a');
   assert.equal(rev.effort, 'low');
   assert.equal(rev.modelFlag, ' -m openrouter/a/a');
   assert.equal(rev.effortFlag, ' --variant low');
+});
+
+test('launch settings: Final Reviewer uses the reviewer slot, in non-execution runs too', () => {
+  const cfg = {
+    default: 'claude', default_model: 'sonnet5', default_effort: 'low',
+    reviewer_cli: 'codex', reviewer_model: 'gpt-5.2-codex', reviewer_effort: 'high',
+  };
+  for (const wf of [EXEC, { type: 'bugfix' }, { type: 'review' }]) {
+    const fin = resolveAgentLaunchSettings('Final Reviewer', wf, cfg);
+    assert.equal(fin.cli, 'codex', `${wf.type} cli`);
+    assert.equal(fin.model, 'gpt-5.2-codex', `${wf.type} model`);
+    assert.equal(fin.effort, 'high', `${wf.type} effort`);
+  }
+  // …while a non-reviewer role in the same runs still uses the default slot.
+  const pm = resolveAgentLaunchSettings('PM', { type: 'bugfix' }, cfg);
+  assert.equal(pm.cli, 'claude');
+  assert.equal(pm.model, 'sonnet5');
+});
+
+// ─── per-step overrides across CLIs ─────────────────────────────────────────
+
+test('step efforts: a bare token applies to every CLI, not just claude', () => {
+  // This is the gap: step_efforts used to be read only on the claude path, so
+  // a codex or opencode agent silently ran at the CLI's own default.
+  for (const cli of VALID_CLIS) {
+    assert.equal(resolveStepEffortForCli('xhigh', cli), 'xhigh', cli);
+  }
+  // Per-CLI map narrows it when one CLI wants a different level.
+  const perCli = { claude: 'max', codex: 'high', opencode: 'low' };
+  assert.equal(resolveStepEffortForCli(perCli, 'claude'), 'max');
+  assert.equal(resolveStepEffortForCli(perCli, 'codex'), 'high');
+  assert.equal(resolveStepEffortForCli(perCli, 'opencode'), 'low');
+  // Absent CLI in the map, and unset/garbage entries → no flag.
+  assert.equal(resolveStepEffortForCli({ claude: 'max' }, 'codex'), null);
+  assert.equal(resolveStepEffortForCli(null, 'claude'), null);
+  assert.equal(resolveStepEffortForCli('high; rm -rf ~', 'claude'), null);
+  assert.equal(resolveStepEffortForCli({ codex: '$(whoami)' }, 'codex'), null);
+});
+
+test('step models: a bare string stays claude-only; a per-CLI map reaches the others', () => {
+  // Every shipped preset uses the bare form (`task_execution: 'sonnet'`), and
+  // that is a CLAUDE short name — handing it to opencode would emit `-m sonnet`,
+  // which is not a provider-scoped id.
+  assert.equal(resolveStepModelForCli('sonnet', 'claude'), 'sonnet');
+  assert.equal(resolveStepModelForCli('sonnet', 'codex'), null);
+  assert.equal(resolveStepModelForCli('sonnet', 'opencode'), null);
+
+  const perCli = { claude: 'sonnet5', codex: 'gpt-5.2-codex', opencode: 'openrouter/moonshotai/kimi-k3' };
+  assert.equal(resolveStepModelForCli(perCli, 'claude'), 'sonnet5');
+  assert.equal(resolveStepModelForCli(perCli, 'codex'), 'gpt-5.2-codex');
+  assert.equal(resolveStepModelForCli(perCli, 'opencode'), 'openrouter/moonshotai/kimi-k3');
+  assert.equal(resolveStepModelForCli({ claude: 'sonnet5' }, 'opencode'), null);
+  assert.equal(resolveStepModelForCli(null, 'claude'), null);
+  assert.equal(resolveStepModelForCli(42, 'claude'), null);
+});
+
+test('buildCliFlags: per-CLI spelling, with incompatible values dropped', () => {
+  assert.deepEqual(
+    buildCliFlags('claude', 'sonnet5', 'xhigh'),
+    { model: 'sonnet5', effort: 'xhigh', modelFlag: ` --model ${MODEL_IDS.sonnet5}`, effortFlag: ' --effort xhigh' });
+  assert.deepEqual(
+    buildCliFlags('opencode', 'openrouter/a/a', 'low'),
+    { model: 'openrouter/a/a', effort: 'low', modelFlag: ' -m openrouter/a/a', effortFlag: ' --variant low' });
+  assert.deepEqual(
+    buildCliFlags('codex', 'gpt-5.2-codex', 'high'),
+    { model: 'gpt-5.2-codex', effort: 'high', modelFlag: ' --model gpt-5.2-codex', effortFlag: ' -c model_reasoning_effort=high' });
+
+  // A mistyped step_models entry must never reach a shell command line.
+  assert.deepEqual(buildCliFlags('opencode', 'sonnet', null),
+    { model: null, effort: null, modelFlag: '', effortFlag: '' });
+  assert.deepEqual(buildCliFlags('claude', 'openrouter/a/a', 'max; rm -rf ~'),
+    { model: null, effort: null, modelFlag: '', effortFlag: '' });
 });
 
 test('launch settings: incompatible model for the slot CLI is dropped (no flag)', () => {

@@ -8,74 +8,38 @@
 //                               hand-maintained comments must survive), then
 //                               hot-reload the live config object.
 // GET  /api/opencode/models   → `opencode models` output (provider/model per
-//                               line), disk-cached; ?refresh=1 re-fetches.
+//                               line); ?refresh=1 re-fetches.
 // GET  /api/opencode/model-efforts → per-model effort variants from models.dev
-//                               (reasoning_options[type=effort].values), disk-
-//                               cached; powers the effort dropdowns.
+//                               (reasoning_options[type=effort].values).
+// Both catalog routes are thin slices of the shared getCatalog, sharing one
+// project-scoped cache file (.build-studio/cli-catalog-cache.json) with its
+// TTL, schema-guard and stale-fallback behavior. The hub's own Agents/Model
+// tab reads the installation-wide /api/cli-catalog instead; these remain for
+// per-project callers.
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
 const { loadLocalOverrides, saveLocalOverrides, reloadConfig } = require('../config');
 const {
   VALID_CLIS, resolveEnabledClis, detectClis, isValidEffortToken,
   loadHubConfig, hasGlobalCliDefaults, normalizeCliBlock,
 } = require('@build-studio/shared/cli');
-const { parseOpencodeModelsOutput, parseModelEfforts } = require('@build-studio/shared/opencode-catalog');
-
-const MODELS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const MODELS_DEV_URL = 'https://models.dev/api.json';
+const { getCatalog } = require('@build-studio/shared/opencode-catalog');
 
 function createCliConfigRouter(config) {
   const router = express.Router();
   const projectRoot = config.projectRoot;
 
-  function modelsCachePath() {
-    return path.join(projectRoot, '.build-studio', 'opencode-models-cache.json');
+  // Both catalog routes below are backed by the SHARED getCatalog, just with a
+  // project-scoped cache file. They used to hand-roll their own fetch + TTL +
+  // stale-fallback logic across two cache files, which duplicated the shared
+  // module and carried its own copy of every bug fixed there — including the
+  // one where a cache written before a field existed still satisfied the TTL
+  // and served that field as undefined for a full day after an upgrade.
+  function catalogCachePath() {
+    return path.join(projectRoot, '.build-studio', 'cli-catalog-cache.json');
   }
-  function effortsCachePath() {
-    return path.join(projectRoot, '.build-studio', 'opencode-model-efforts-cache.json');
-  }
-
-  function readJsonCache(p) {
-    try {
-      const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
-      if (raw && raw.fetchedAt) return raw;
-    } catch (_) {}
-    return null;
-  }
-
-  function readModelsCache() {
-    const raw = readJsonCache(modelsCachePath());
-    return raw && Array.isArray(raw.models) ? raw : null;
-  }
-  function readEffortsCache() {
-    const raw = readJsonCache(effortsCachePath());
-    return raw && raw.efforts && typeof raw.efforts === 'object' ? raw : null;
-  }
-
-  function fetchOpencodeModels() {
-    // Same env as the start scripts (zsh + brew shellenv) so a GUI-launched
-    // project-server finds the binary too.
-    const out = execFileSync(
-      'zsh',
-      ['-c', 'eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null; opencode models'],
-      { stdio: 'pipe', timeout: 30000, encoding: 'utf8' }
-    );
-    const models = parseOpencodeModelsOutput(out);
-    const payload = { fetchedAt: new Date().toISOString(), models };
-    try { fs.writeFileSync(modelsCachePath(), JSON.stringify(payload, null, 2), 'utf8'); } catch (_) {}
-    return payload;
-  }
-
-  // Per-model effort variants from models.dev (the same catalog opencode
-  // consumes). ~3MB JSON; cached 24h with stale fallback, same as the model list.
-  async function fetchModelEfforts() {
-    const res = await fetch(MODELS_DEV_URL, { signal: AbortSignal.timeout(30000) });
-    if (!res.ok) throw new Error(`models.dev HTTP ${res.status}`);
-    const payload = { fetchedAt: new Date().toISOString(), efforts: parseModelEfforts(await res.json()) };
-    try { fs.writeFileSync(effortsCachePath(), JSON.stringify(payload), 'utf8'); } catch (_) {}
-    return payload;
+  function wantsRefresh(req) {
+    return req.query.refresh === '1' || req.query.refresh === 'true';
   }
 
   router.get('/config/cli', (req, res) => {
@@ -160,41 +124,32 @@ function createCliConfigRouter(config) {
     });
   });
 
-  router.get('/opencode/models', (req, res) => {
-    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
-    if (!refresh) {
-      const cached = readModelsCache();
-      if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < MODELS_CACHE_TTL_MS) {
-        return res.json({ ...cached, cached: true });
-      }
-    }
+  router.get('/opencode/models', async (req, res) => {
     try {
-      const payload = fetchOpencodeModels();
-      return res.json({ ...payload, cached: false });
+      const cat = await getCatalog({ cachePath: catalogCachePath(), refresh: wantsRefresh(req) });
+      return res.json({
+        fetchedAt: cat.fetchedAt,
+        models: cat.models || [],
+        cached: cat.cached,
+        ...(cat.stale ? { stale: true, warning: cat.warning } : {}),
+      });
     } catch (e) {
-      // Fall back to a stale cache rather than hard-failing the picker.
-      const stale = readModelsCache();
-      if (stale) return res.json({ ...stale, cached: true, stale: true, warning: `opencode models failed: ${e.message}` });
       return res.status(502).json({ error: `Failed to list opencode models: ${e.message}`, models: [] });
     }
   });
 
-  // Per-model effort variant options for the effort dropdowns — same cache +
-  // stale-fallback pattern as the model list.
+  // Per-model effort variant options for the effort dropdowns — same catalog,
+  // same cache file, different slice of it.
   router.get('/opencode/model-efforts', async (req, res) => {
-    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
-    if (!refresh) {
-      const cached = readEffortsCache();
-      if (cached && Date.now() - new Date(cached.fetchedAt).getTime() < MODELS_CACHE_TTL_MS) {
-        return res.json({ ...cached, cached: true });
-      }
-    }
     try {
-      const payload = await fetchModelEfforts();
-      return res.json({ ...payload, cached: false });
+      const cat = await getCatalog({ cachePath: catalogCachePath(), refresh: wantsRefresh(req) });
+      return res.json({
+        fetchedAt: cat.fetchedAt,
+        efforts: cat.efforts || {},
+        cached: cat.cached,
+        ...(cat.stale ? { stale: true, warning: cat.warning } : {}),
+      });
     } catch (e) {
-      const stale = readEffortsCache();
-      if (stale) return res.json({ ...stale, cached: true, stale: true, warning: `models.dev fetch failed: ${e.message}` });
       return res.status(502).json({ error: `Failed to fetch model efforts: ${e.message}`, efforts: {} });
     }
   });
@@ -202,4 +157,4 @@ function createCliConfigRouter(config) {
   return router;
 }
 
-module.exports = { createCliConfigRouter, parseModelEfforts };
+module.exports = { createCliConfigRouter };

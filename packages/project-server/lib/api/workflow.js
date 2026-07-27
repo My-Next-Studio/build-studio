@@ -88,15 +88,18 @@ const {
   resolveEffortForRole,
   resolveAgentLaunchSettings,
   resolveAutoReviewerCli,
+  buildCliFlags,
+  resolveStepModelForCli,
+  resolveStepEffortForCli,
   MODEL_IDS,
 } = require('@build-studio/shared/cli');
 
-// The reviewer-CLI flip (cross-model review) applies ONLY to execution workflows.
-// In a PRD review it adds no value (reviewing a doc, not code) and just risks a
-// second-CLI auth/availability failure (the codex-token stall, 2026-06-05). So the
-// per-run reviewerCli knob only takes effect when wf.type === 'execution'; in all
-// other workflow types reviewers run on the project's default CLI (config.cli.default)
-// like every other non-developer role. See resolveCliForRole in shared/cli.
+// The LEGACY per-run reviewerCli knob (cross-model review) applies ONLY to
+// execution workflows. In a PRD review it adds no value (reviewing a doc, not
+// code) and just risks a second-CLI auth/availability failure (the codex-token
+// stall, 2026-06-05). The CONFIGURED reviewer slot (config.cli.reviewer_cli) is
+// separate and applies in every workflow type — a Code Reviewer is a reviewer
+// whatever run it appears in. See resolveCliForRole in shared/cli.
 
 // Normalize role names for lookup so the API accepts every reasonable form an
 // agent might reconstruct from its skill filename or memory after compaction
@@ -1732,16 +1735,18 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     // Per-STEP overrides (config.yaml step_models / wf.stepModelOverrides) sit
     // at the top of the model chain; the per-agent resolution below inserts
     // the cli block's per-role model slot between these and agent_defaults.
-    const stepModel = (wf.stepModelOverrides && wf.stepModelOverrides[resolvedStep])
+    // Kept RAW here — each entry is narrowed to the agent's own CLI inside the
+    // loop below, since a step can carry a per-CLI map.
+    const stepModelEntry = (wf.stepModelOverrides && wf.stepModelOverrides[resolvedStep])
       || (config.step_models && config.step_models[resolvedStep])
       || null;
-    // Effort level for Claude's adaptive thinking. Valid CLI values: low,
-    // medium, high (default), xhigh (Opus-only deep-reasoning mode), max.
-    // Configure via `step_efforts: { task_execution: xhigh }` for per-step
-    // control, or `agent_defaults.effort` for a global default. Omit to use
-    // Claude Code's own default (high). See docs/experiments/prd-009-
-    // orchestration-model-matrix.md for the use case driving this.
-    const stepEffort = (wf.stepEffortOverrides && wf.stepEffortOverrides[resolvedStep])
+    // Effort level for the agent's reasoning depth. Valid values: low, medium,
+    // high (default), xhigh, max. Configure via `step_efforts: {
+    // task_execution: xhigh }` for per-step control, or `agent_defaults.effort`
+    // for a global default. The token vocabulary is shared by all three CLIs,
+    // so a bare value applies to whichever one the step's agents land on. See
+    // docs/experiments/prd-009-orchestration-model-matrix.md.
+    const stepEffortEntry = (wf.stepEffortOverrides && wf.stepEffortOverrides[resolvedStep])
       || (config.step_efforts && config.step_efforts[resolvedStep])
       || null;
 
@@ -1782,18 +1787,25 @@ ${EFFICIENCY_INSTRUCTIONS}`,
         : buildLearningsContext(agent.role, taskDesc);
 
       // Which CLI / model / effort this agent launches with — shared pure
-      // resolver (also unit-tested). Claude still layers step_models /
-      // step_efforts / agent_defaults on top below.
+      // resolver (also unit-tested), with the per-step overrides layered on
+      // top for EVERY CLI, not just claude.
       const launch = resolveAgentLaunchSettings(agent.role, wf, config.cli);
       const agentCli = launch.cli;
-      // Claude model chain: step override > cli role slot > agent_defaults.
-      const modelShortName = agentCli === 'claude'
-        ? (stepModel || launch.model || config.agent_defaults.model || 'opus')
-        : null;
-      const modelId = modelShortName ? (MODEL_IDS[modelShortName] || modelShortName) : null;
-      const effortLevel = agentCli === 'claude'
-        ? (stepEffort || launch.effort || (config.agent_defaults && config.agent_defaults.effort) || null)
-        : null;
+      const stepModel = resolveStepModelForCli(stepModelEntry, agentCli);
+      const stepEffort = resolveStepEffortForCli(stepEffortEntry, agentCli);
+      // Model chain: step override > cli role slot > agent_defaults. The
+      // agent_defaults tail is claude-only — its `model` holds a claude short
+      // name, so it can't stand in for a codex slug or an opencode id.
+      const modelShortName = stepModel || launch.model
+        || (agentCli === 'claude' ? (config.agent_defaults.model || 'opus') : null);
+      // Effort chain: same shape, and agent_defaults.effort IS CLI-agnostic.
+      const effortLevel = stepEffort || launch.effort
+        || (config.agent_defaults && config.agent_defaults.effort) || null;
+      // One builder for all three CLIs — drops a model that doesn't fit the CLI
+      // and an effort that isn't a plain token, so a mistyped step_models entry
+      // can never reach a shell command line.
+      const flags = buildCliFlags(agentCli, modelShortName, effortLevel);
+      const modelId = flags.model ? (MODEL_IDS[flags.model] || flags.model) : null;
       // Permission mapping per CLI. Claude gets --permission-mode (default
       // resolves to 'auto': no routine prompts, classifier-reviewed). Codex has
       // no classifier equivalent — never-prompt intents keep its bypass flag.
@@ -1824,17 +1836,10 @@ ${EFFICIENCY_INSTRUCTIONS}`,
 
       const scriptName = `start-${windowName}.sh`;
       const promptFileName = `prompt-${windowName}.txt`;
-      // Model/effort flags. Claude uses the step-aware chain above; opencode +
-      // codex use the pure launch resolver flags directly (same source the
-      // unit tests assert against).
-      const modelFlag = agentCli === 'claude' && modelId
-        ? ` --model ${modelId}`
-        : (agentCli === 'opencode' || agentCli === 'codex') ? launch.modelFlag : '';
-      const effortFlag = agentCli === 'claude' && effortLevel
-        ? ` --effort ${effortLevel}`
-        : '';
-      const variantFlag = agentCli === 'opencode' ? launch.effortFlag : '';
-      const codexEffortFlag = agentCli === 'codex' ? launch.effortFlag : '';
+      // Model/effort flags — one step-aware chain for all three CLIs. The
+      // per-CLI spelling (--effort / --variant / -c model_reasoning_effort)
+      // lives in buildCliFlags, so there is a single source of truth.
+      const { modelFlag, effortFlag } = flags;
       const cliBin = agentCli;
       // Pin the Claude session id at launch so a killed agent process can be
       // auto-resumed WITH its context (`claude --resume <id>` — see the
@@ -1856,9 +1861,9 @@ ${EFFICIENCY_INSTRUCTIONS}`,
         ? path.join(logsPath, `${windowName}-${wf.id}.events.jsonl`)
         : null;
       const cliInvocation = agentCli === 'codex'
-        ? `codex exec${dangerFlag}${modelFlag}${codexEffortFlag} "$(cat '${promptFileName}')"`
+        ? `codex exec${dangerFlag}${modelFlag}${effortFlag} "$(cat '${promptFileName}')"`
         : agentCli === 'opencode'
-          ? `opencode run --format json${dangerFlag}${modelFlag}${variantFlag} < '${promptFileName}' | tee '${eventsFileName}'`
+          ? `opencode run --format json${dangerFlag}${modelFlag}${effortFlag} < '${promptFileName}' | tee '${eventsFileName}'`
           : `claude --session-id ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${promptFileName}')"`;
       // Write prompt to a separate file to avoid shell escaping issues with backticks, quotes, etc.
       fs.writeFileSync(path.join(agentCwd, promptFileName), prompt, 'utf-8');

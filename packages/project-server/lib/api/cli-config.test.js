@@ -1,9 +1,10 @@
 'use strict';
 
-// Tests for the effort-level additions to the cli-config API:
-//  - parseModelEfforts: models.dev api.json → { 'provider/model': ['low',…] }
+// Tests for the cli-config API:
 //  - PUT /api/config/cli: default_effort / developer_effort / reviewer_effort
 //    validation (shell-safety — the value lands on the opencode command line)
+// The models.dev parsing this file used to cover now lives in — and is tested
+// with — @build-studio/shared/opencode-catalog, which owns the catalog cache.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -12,35 +13,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { createCliConfigRouter, parseModelEfforts } = require('./cli-config');
-
-// ─── parseModelEfforts ──
-
-test('parseModelEfforts: extracts effort values per provider/model, skips non-effort entries', () => {
-  const apiJson = {
-    openrouter: {
-      models: {
-        'moonshotai/kimi-k3': { reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'high', 'max'] }] },
-        'some/text-only': { reasoning: false },
-        'bad/entry': { reasoning_options: [{ type: 'effort', values: [] }] },
-        'odd/entry': { reasoning_options: [{ type: 'budget', values: ['1000'] }] },
-      },
-    },
-    opencode: {
-      models: {
-        'big-pickle': { reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high'] }] },
-      },
-    },
-    'no-models-key': {},
-  };
-  const efforts = parseModelEfforts(apiJson);
-  assert.deepEqual(efforts['openrouter/moonshotai/kimi-k3'], ['low', 'high', 'max']);
-  assert.deepEqual(efforts['opencode/big-pickle'], ['minimal', 'low', 'medium', 'high']);
-  assert.equal(efforts['openrouter/some/text-only'], undefined);
-  assert.equal(efforts['openrouter/bad/entry'], undefined);
-  assert.equal(efforts['openrouter/odd/entry'], undefined);
-  assert.deepEqual(parseModelEfforts(null), {});
-});
+const { createCliConfigRouter } = require('./cli-config');
 
 // ─── PUT validation ──
 

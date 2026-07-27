@@ -63,16 +63,39 @@ async function fetchModelEfforts({ fetchImpl, timeoutMs = 30000 } = {}) {
   const res = await f(MODELS_DEV_URL, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`models.dev HTTP ${res.status}`);
   const apiJson = await res.json();
-  return { efforts: parseModelEfforts(apiJson), openaiModels: parseProviderModelIds(apiJson, 'openai') };
+  return {
+    efforts: parseModelEfforts(apiJson),
+    contexts: parseModelContexts(apiJson),
+    openaiModels: parseProviderModelIds(apiJson, 'openai'),
+    anthropicModels: parseProviderModelIds(apiJson, 'anthropic'),
+  };
 }
 
-// Model ids of one provider in models.dev's api.json — used for the codex
-// model picker (the codex CLI has no `models` command; models.dev's openai
-// provider is the closest public list of slugs it accepts).
+// Model ids of one provider in models.dev's api.json — used for the codex and
+// claude model pickers. Neither CLI has a `models` command (unlike opencode),
+// so models.dev's openai/anthropic providers are the closest public list of
+// slugs they accept. Both resolve through `MODEL_IDS[v] || v`, so a raw id
+// discovered here passes straight to --model.
 function parseProviderModelIds(apiJson, provider) {
   const models = apiJson?.[provider]?.models;
   if (!models || typeof models !== 'object') return [];
   return Object.keys(models);
+}
+
+// models.dev api.json → { 'provider/model': contextWindowTokens }. Mirrors
+// parseModelEfforts; the claude picker uses it to decide which ids get a
+// synthesized `[1m]` variant.
+function parseModelContexts(apiJson) {
+  const out = {};
+  for (const [provider, pdata] of Object.entries(apiJson || {})) {
+    const models = pdata && pdata.models;
+    if (!models || typeof models !== 'object') continue;
+    for (const [id, m] of Object.entries(models)) {
+      const ctx = m && m.limit && m.limit.context;
+      if (typeof ctx === 'number') out[`${provider}/${id}`] = ctx;
+    }
+  }
+  return out;
 }
 
 function readCatalogCache(cachePath) {
@@ -81,6 +104,22 @@ function readCatalogCache(cachePath) {
     if (raw && raw.fetchedAt && Array.isArray(raw.models)) return raw;
   } catch (_) {}
   return null;
+}
+
+// Does a cache payload carry every field the current code reads? A cache
+// written by an older build satisfies the TTL check but has `undefined` where
+// a newly-added field should be, so callers silently serve empty lists for up
+// to a full TTL window after an upgrade — which is exactly how the claude
+// picker fell back to its static list after `anthropicModels` was introduced.
+// Missing fields make a payload unusable as a FRESH read, but it stays good
+// enough as the degraded fallback when a refresh can't reach the network.
+function isCurrentCatalogSchema(raw) {
+  return !!raw
+    && Array.isArray(raw.models)
+    && Array.isArray(raw.openaiModels)
+    && Array.isArray(raw.anthropicModels)
+    && !!raw.efforts
+    && !!raw.contexts;
 }
 
 function writeCatalogCache(cachePath, payload) {
@@ -98,7 +137,11 @@ function writeCatalogCache(cachePath, payload) {
  */
 async function getCatalog({ cachePath = GLOBAL_CACHE_PATH, ttlMs = CATALOG_CACHE_TTL_MS, refresh = false, execImpl, fetchImpl } = {}) {
   const cached = readCatalogCache(cachePath);
-  if (!refresh && cached && Date.now() - new Date(cached.fetchedAt).getTime() < ttlMs) {
+  // An upgrade that adds a field must not be served stale-empty from a cache
+  // written before that field existed — schema mismatch forces a refetch even
+  // inside the TTL. The old payload is still kept as the failure fallback below.
+  if (!refresh && cached && isCurrentCatalogSchema(cached)
+      && Date.now() - new Date(cached.fetchedAt).getTime() < ttlMs) {
     return { ...cached, cached: true };
   }
   const [modelsR, effortsR] = await Promise.allSettled([
@@ -109,11 +152,14 @@ async function getCatalog({ cachePath = GLOBAL_CACHE_PATH, ttlMs = CATALOG_CACHE
     if (cached) return { ...cached, cached: true, stale: true, warning: `catalog refresh failed: ${modelsR.reason?.message || 'unknown'}` };
     throw modelsR.reason || new Error('catalog refresh failed');
   }
+  const fresh = effortsR.status === 'fulfilled' ? effortsR.value : null;
   const payload = {
     fetchedAt: new Date().toISOString(),
     models: modelsR.status === 'fulfilled' ? modelsR.value : (cached?.models || []),
-    efforts: effortsR.status === 'fulfilled' ? effortsR.value.efforts : (cached?.efforts || {}),
-    openaiModels: effortsR.status === 'fulfilled' ? effortsR.value.openaiModels : (cached?.openaiModels || []),
+    efforts: fresh ? fresh.efforts : (cached?.efforts || {}),
+    contexts: fresh ? fresh.contexts : (cached?.contexts || {}),
+    openaiModels: fresh ? fresh.openaiModels : (cached?.openaiModels || []),
+    anthropicModels: fresh ? fresh.anthropicModels : (cached?.anthropicModels || []),
   };
   writeCatalogCache(cachePath, payload);
   return { ...payload, cached: false, ...(modelsR.status === 'rejected' || effortsR.status === 'rejected' ? { stale: true } : {}) };
@@ -122,11 +168,13 @@ async function getCatalog({ cachePath = GLOBAL_CACHE_PATH, ttlMs = CATALOG_CACHE
 module.exports = {
   parseOpencodeModelsOutput,
   parseModelEfforts,
+  parseModelContexts,
   parseProviderModelIds,
   fetchOpencodeModels,
   fetchModelEfforts,
   getCatalog,
   readCatalogCache,
+  isCurrentCatalogSchema,
   CATALOG_CACHE_TTL_MS,
   GLOBAL_CACHE_PATH,
 };

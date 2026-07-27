@@ -5,13 +5,14 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn: defaultSpawn } = require('child_process');
 const { createTmuxOps } = require('./tmux');
+// Single source of truth for model-name → CLI model-id, shared with the
+// workflow launch path. This used to be a private two-entry copy pinned to
+// Opus/Sonnet 4.6, which silently held oneshot launches two generations behind
+// the workflow agents it was supposed to mirror.
+const { MODEL_IDS } = require('@build-studio/shared/cli');
 
 const DEFAULT_MAX_DURATION_MS = 10 * 60 * 1000; // 10 minutes
 const RETENTION_DAYS = 7;
-
-// Mirror run.js's model-name → CLI model-id mapping so oneshot launches use the
-// same model the workflow agents do for the same project.
-const MODEL_IDS = { opus: 'claude-opus-4-6', sonnet: 'claude-sonnet-4-6' };
 
 /**
  * Resolve the argv + env for a `claude` spawn from the project's agent_defaults.

@@ -34,16 +34,30 @@ preset: web-app
 # checklist informationally at `demo_review` — no separate step, no evidence
 # file to write. Approving demo_review confirms them; nothing to configure.
 
-# Override model assignments per step (optional):
+# Override model assignments per step (optional).
+# A bare value is a CLAUDE short name, so it applies only to steps whose agents
+# run on Claude — handing `sonnet` to OpenCode would emit `-m sonnet`, which is
+# not a provider-scoped id. To pin a step on another CLI, use a per-CLI map.
 # step_models:
-#   implementation: sonnet   # use cheaper model for implementation
+#   implementation: sonnet   # claude-only: cheaper model for implementation
+#   code_review:             # per-CLI: works whichever CLI the reviewer slot uses
+#     claude: sonnet5
+#     codex: gpt-5.6-sol
+#     opencode: openrouter/moonshotai/kimi-k3
 
 # Override per-step reasoning effort (optional; merges over the preset's
 # step_efforts — the solo preset keeps judgment steps at high and dials
-# mechanical steps to low). xhigh is an Opus-only deep-reasoning tier.
+# mechanical steps to low). Unlike step_models, the effort tokens are shared by
+# all three CLIs (claude --effort, codex model_reasoning_effort, opencode
+# --variant), so a bare value applies to whichever CLI the step lands on; a
+# per-CLI map narrows it. Not every model accepts every level — older Codex
+# models top out at `high`, and OpenCode variants are per-model.
 # step_efforts:
-#   task_execution: xhigh    # e.g. whole-PRD monolithic builds on Opus
+#   task_execution: xhigh    # e.g. whole-PRD monolithic builds
 #   capture_learnings: low
+#   code_review:
+#     claude: max
+#     codex: high            # this model has no xhigh/max tier
 
 # How the monolithic task_execution builder is driven (optional, hot-reloaded):
 #   role (default) — classic role-prompted session

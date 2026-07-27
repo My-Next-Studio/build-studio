@@ -318,9 +318,11 @@ const BUILD_STUDIO_GITIGNORE_PATTERNS = [
   '.build-studio/run-state.json',
   '.build-studio/snapshots/',
   '.build-studio/*.bak*',
-  '# Hub-written local overrides (Agents-tab CLI settings) + OpenCode model cache — machine-local',
+  '# Hub-written local overrides (Agents-tab CLI settings) + model catalog cache — machine-local',
   '.build-studio/local.json',
-  '.build-studio/opencode-models-cache.json',
+  // Glob rather than named files: the effort cache was missed when it was added
+  // and got committed into managed projects. Any future cache is covered too.
+  '.build-studio/*-cache.json',
   'docs/agent-status.json',
   'tmp/',
   '',

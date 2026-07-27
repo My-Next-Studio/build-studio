@@ -14,13 +14,24 @@ const fs = require('fs');
 const path = require('path');
 const { BUILD_STUDIO_DIR } = require('./constants');
 
-// Claude model ids — the canonical map (moved from project-server workflow.js
-// so the hub's catalog endpoint can serve the picker list). Keys are the
-// config-facing short names; values are the CLI ids passed to --model.
+// Claude model ALIASES — short config-facing names mapped to the CLI ids
+// passed to --model. This is no longer the picker list: the Agents/Model tab
+// discovers Claude models from models.dev at runtime (see the hub's
+// /api/cli-catalog), the same source that already drives the Codex and
+// OpenCode lists. Resolution everywhere is `MODEL_IDS[v] || v`, so a raw id
+// like `claude-opus-5` passes straight through and needs no entry here.
+//
+// What still belongs in this map:
+//   - the CLI's own MOVING aliases (`claude --model opus|sonnet|fable`), which
+//     no catalog can express because they re-point on Anthropic's schedule
+//   - legacy pinned keys already written into project configs, kept so those
+//     configs keep resolving
+//
 // `opus` and `opus[1m]` resolve to 4.8 (promoted 2026-05-29 after the PRD-009
 // orchestration-matrix re-run on 4.8). Configs that say `opus`/`opus[1m]`
 // auto-upgrade. `sonnet`/`sonnet[1m]` resolve to Sonnet 5 (promoted 2026-07-01).
-// Explicit-version aliases let a config pin a specific generation.
+// Opus 5 is deliberately NOT promoted onto the bare `opus` alias yet — pick
+// `claude-opus-5` explicitly until it has been through the same matrix run.
 const MODEL_IDS = {
   opus: 'claude-opus-4-8',
   sonnet: 'claude-sonnet-5',
@@ -41,10 +52,24 @@ const MODEL_IDS = {
 };
 const CLAUDE_MODELS = Object.keys(MODEL_IDS);
 
-// Effort options per CLI. Claude: the documented --effort values (xhigh is
-// Opus-only — the UI filters it for non-opus models). Codex: fallback
-// reasoning efforts when a model carries no variants in the catalog
-// (models.dev openai/* reasoning_options are authoritative when present).
+// The moving aliases shown at the head of the Claude picker, above the
+// discovered ids. `claude --model` documents these as "an alias for the latest
+// model"; they are the one thing a models.dev-derived list can't represent.
+const CLAUDE_ALIASES = ['opus', 'sonnet', 'fable', 'opus[1m]', 'sonnet[1m]', 'fable[1m]'];
+
+// Claude models with a 1M context window take a `[1m]` id suffix. models.dev
+// has no concept of it, so the catalog synthesizes the variants from each
+// model's context limit rather than suffixing everything (Haiku 4.5 and
+// Opus 4.1/4.5 are 200K — a `[1m]` variant of those would not resolve).
+const LONG_CONTEXT_MIN_TOKENS = 1000000;
+
+// Effort options per CLI. Claude: the documented --effort values, used as the
+// fallback when models.dev carries no reasoning_options for a model — its
+// anthropic coverage is partial (claude-sonnet-5 reports none despite
+// supporting the full ladder), and hiding a real control is worse than
+// offering one the CLI ignores. Codex: fallback reasoning efforts when a model
+// carries no variants in the catalog (models.dev openai/* reasoning_options
+// are authoritative when present).
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const CODEX_DEFAULT_EFFORTS = ['low', 'medium', 'high'];
 
@@ -116,10 +141,12 @@ function detectClis() {
 // role is added to a preset, add it here too.
 const DEVELOPER_ROLE_NAMES = new Set(['Frontend Dev', 'Backend Dev', 'Fullstack Dev', 'iOS Dev', 'Android Dev']);
 
-// Reviewer roles whose CLI follows the per-run wf.reviewerCli knob (execution
-// runs only — cross-model review of *code*). Covers code_review (Code
-// Reviewer) and security_audit (Security).
-const REVIEWER_ROLE_NAMES = new Set(['Code Reviewer', 'Security']);
+// Reviewer roles — the ones whose job is judging work rather than producing
+// it. Covers code_review (Code Reviewer), security_audit (Security) and
+// final_review (Final Reviewer). These follow the reviewer slot in EVERY
+// workflow type; only the legacy per-run wf.reviewerCli knob stays scoped to
+// execution runs (see resolveCliForRole).
+const REVIEWER_ROLE_NAMES = new Set(['Code Reviewer', 'Security', 'Final Reviewer']);
 
 function isDeveloperRole(roleName) {
   return DEVELOPER_ROLE_NAMES.has(roleName);
@@ -130,11 +157,11 @@ function isReviewerRole(roleName) {
 }
 
 // Which CLI launches a given agent role in a given workflow run.
-//   developer role          → run's legacy developerCli (in-flight runs only),
-//                             then cli.developer_cli, then cli.default
-//   reviewer role (execution) → run's legacy reviewerCli, then cli.reviewer_cli,
-//                             then cli.default
-//   everything else         → cli.default
+//   developer role  → run's legacy developerCli (in-flight runs only),
+//                     then cli.developer_cli, then cli.default
+//   reviewer role   → run's legacy reviewerCli (execution runs only),
+//                     then cli.reviewer_cli, then cli.default
+//   everything else → cli.default
 // Per-run developerCli/reviewerCli pickers were removed (2026-07-21) in favor
 // of the per-role selectors on the Agents tab; legacy wf fields are still
 // honored so in-flight runs keep their assignment.
@@ -142,8 +169,13 @@ function resolveCliForRole(roleName, wf, cliConfig) {
   const cfg = cliConfig || {};
   const projectDefault = cfg.default || 'claude';
   if (isDeveloperRole(roleName)) return wf.developerCli || cfg.developer_cli || projectDefault;
-  if (isReviewerRole(roleName) && wf.type === 'execution') {
-    return wf.reviewerCli || cfg.reviewer_cli || projectDefault;
+  if (isReviewerRole(roleName)) {
+    // The configured reviewer slot applies in every workflow type — a Code
+    // Reviewer in a bugfix run is still a reviewer. Only the LEGACY per-run
+    // knob stays execution-scoped: it was only ever set by the old execution
+    // launcher, so honoring it elsewhere would retro-change in-flight runs.
+    const legacy = wf.type === 'execution' ? wf.reviewerCli : null;
+    return legacy || cfg.reviewer_cli || projectDefault;
   }
   return projectDefault;
 }
@@ -160,15 +192,20 @@ function isModelCompatibleWithCli(cli, model) {
 }
 
 // The model for a role, from the project's cli block. The slot semantics are
-// CLI-agnostic (a row holds whatever model fits its selected CLI): developer
-// uses only its dedicated selector, reviewer falls back to default, every
-// other role uses default. Returns null when unset or incompatible with the
-// resolved CLI — no model flag is passed and the CLI uses its own default.
+// CLI-agnostic (a row holds whatever model fits its selected CLI) and uniform
+// across slots: developer and reviewer each use their dedicated selector and
+// fall back to default when unset; every other role uses default. Returns null
+// when unset or incompatible with the resolved CLI — no model flag is passed
+// and the CLI uses its own default.
+//
+// The developer fallback used to be missing (an unset developer_model meant
+// "no flag" rather than "inherit default"), which silently diverged from the
+// reviewer slot and from how the CLI row itself falls back.
 function resolveModelForRole(cli, roleName, wf, cliConfig) {
   if (!cliConfig) return null;
   let v;
-  if (isDeveloperRole(roleName)) v = cliConfig.developer_model || null;
-  else if (isReviewerRole(roleName) && wf.type === 'execution') v = cliConfig.reviewer_model || cliConfig.default_model || null;
+  if (isDeveloperRole(roleName)) v = cliConfig.developer_model || cliConfig.default_model || null;
+  else if (isReviewerRole(roleName)) v = cliConfig.reviewer_model || cliConfig.default_model || null;
   else v = cliConfig.default_model || null;
   return isModelCompatibleWithCli(cli, v) ? v : null;
 }
@@ -226,8 +263,8 @@ function mergeGlobalCli(base, globalCli) {
 function resolveEffortForRole(roleName, wf, cliConfig) {
   if (!cliConfig) return null;
   let v;
-  if (isDeveloperRole(roleName)) v = cliConfig.developer_effort || null;
-  else if (isReviewerRole(roleName) && wf.type === 'execution') v = cliConfig.reviewer_effort || cliConfig.default_effort || null;
+  if (isDeveloperRole(roleName)) v = cliConfig.developer_effort || cliConfig.default_effort || null;
+  else if (isReviewerRole(roleName)) v = cliConfig.reviewer_effort || cliConfig.default_effort || null;
   else v = cliConfig.default_effort || null;
   return isValidEffortToken(v) ? v : null;
 }
@@ -302,19 +339,72 @@ function resolveAgentLaunchSettings(roleName, wf, cliConfig) {
   const cli = resolveCliForRole(roleName, wf || {}, cliConfig);
   const model = resolveModelForRole(cli, roleName, wf || {}, cliConfig);
   const effort = resolveEffortForRole(roleName, wf || {}, cliConfig);
+  return { cli, ...buildCliFlags(cli, model, effort) };
+}
+
+/**
+ * The one place that turns a resolved {cli, model, effort} into command-line
+ * fragments. The workflow launcher calls this directly after layering its
+ * per-step overrides on top, so both paths emit identical flags for identical
+ * inputs — previously the launcher hand-rolled its own `--model`/`--effort`
+ * strings for claude and reused this function's output only for the other two,
+ * which is how step overrides came to apply to claude alone.
+ *
+ * Validates as it goes: a model incompatible with the CLI, or an effort that
+ * isn't a plain token, is dropped rather than pasted onto a shell command.
+ */
+function buildCliFlags(cli, model, effort) {
+  const m = isModelCompatibleWithCli(cli, model) && model ? model : null;
+  const e = isValidEffortToken(effort) ? effort : null;
   let modelFlag = '';
   let effortFlag = '';
   if (cli === 'claude') {
-    if (model) modelFlag = ` --model ${MODEL_IDS[model] || model}`;
-    if (effort) effortFlag = ` --effort ${effort}`;
+    if (m) modelFlag = ` --model ${MODEL_IDS[m] || m}`;
+    if (e) effortFlag = ` --effort ${e}`;
   } else if (cli === 'opencode') {
-    if (model) modelFlag = ` -m ${model}`;
-    if (effort) effortFlag = ` --variant ${effort}`;
+    if (m) modelFlag = ` -m ${m}`;
+    if (e) effortFlag = ` --variant ${e}`;
   } else if (cli === 'codex') {
-    if (model) modelFlag = ` --model ${model}`;
-    if (effort) effortFlag = ` -c model_reasoning_effort=${effort}`;
+    if (m) modelFlag = ` --model ${m}`;
+    if (e) effortFlag = ` -c model_reasoning_effort=${e}`;
   }
-  return { cli, model, effort, modelFlag, effortFlag };
+  return { model: m, effort: e, modelFlag, effortFlag };
+}
+
+/**
+ * Narrow one `step_models` entry to the CLI an agent is actually launching on.
+ *
+ * A bare string is a CLAUDE short name — that is the historical shape and what
+ * every preset ships (`task_execution: 'sonnet'`), so it stays claude-only.
+ * Feeding it to another CLI would emit `-m sonnet` at OpenCode, which is not a
+ * provider-scoped id, or an unknown slug at Codex.
+ *
+ * To pin a step on another CLI, give the entry a per-CLI map:
+ *   step_models:
+ *     code_review:
+ *       claude: sonnet
+ *       codex: gpt-5.2-codex
+ *       opencode: openrouter/moonshotai/kimi-k3
+ */
+function resolveStepModelForCli(entry, cli) {
+  if (typeof entry === 'string') return cli === 'claude' ? entry : null;
+  if (!entry || typeof entry !== 'object') return null;
+  const v = entry[cli];
+  return typeof v === 'string' ? v : null;
+}
+
+/**
+ * Narrow one `step_efforts` entry to a CLI. Unlike models, the effort token
+ * vocabulary is shared across all three (claude --effort, opencode --variant,
+ * codex -c model_reasoning_effort), so a bare string applies EVERYWHERE — this
+ * is the half that was silently claude-only before. A per-CLI map still works
+ * when one CLI needs a different level.
+ */
+function resolveStepEffortForCli(entry, cli) {
+  if (typeof entry === 'string') return isValidEffortToken(entry) ? entry : null;
+  if (!entry || typeof entry !== 'object') return null;
+  const v = entry[cli];
+  return isValidEffortToken(v) ? v : null;
 }
 
 // Deterministic "auto" reviewer CLI: cross-model review is the point, so auto
@@ -338,7 +428,9 @@ module.exports = {
   HUB_CONFIG_PATH,
   MODEL_IDS,
   CLAUDE_MODELS,
+  CLAUDE_ALIASES,
   CLAUDE_EFFORTS,
+  LONG_CONTEXT_MIN_TOKENS,
   CODEX_DEFAULT_EFFORTS,
   loadHubConfig,
   saveHubConfig,
@@ -355,6 +447,9 @@ module.exports = {
   resolveEffortForRole,
   resolveEffectiveCliConfig,
   resolveAgentLaunchSettings,
+  buildCliFlags,
+  resolveStepModelForCli,
+  resolveStepEffortForCli,
   providersFromCliConfig,
   CLI_SLOT_DEFAULTS,
   isValidEffortToken,

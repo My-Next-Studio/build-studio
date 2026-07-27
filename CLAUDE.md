@@ -67,6 +67,32 @@ cd packages/hub && npm run dev          # Hub on :18080 (Turbopack, hot reload)
 cd packages/project-server && node index.js /path/to/project  # Direct server
 ```
 
+## Changelog
+
+**IMPORTANT — update `CHANGELOG.md` in the same commit as the change it
+describes.** Build Studio ships from `main` with no tagged releases, and it is
+forked, so `CHANGELOG.md` is the only place a downstream user learns what a pull
+will do to them. A change landed without an entry is invisible to every fork.
+
+Entries are grouped by date, newest first. Add to today's section if one exists,
+otherwise open a new one. Use these headings, omitting any that don't apply:
+
+- **Added** — new capability
+- **Changed** — behaviour that shifts *on an unmodified config*. This is the
+  highest-value section; it is what breaks a fork silently.
+- **Fixed** — bugs, with the user-visible symptom, not just the cause
+- **Upgrade steps** — anything a puller must actively *do*: rebuild/inject,
+  restart, migrate config, untrack a file, clear state. Omit only when the answer
+  is genuinely "pull and go".
+- **Notes for forks** — invariants a fork must preserve when extending the code
+
+Write for someone who did not see the diff: name the user-visible symptom, not
+the implementation. Skip entries for pure refactors, comment or test-only
+changes, and formatting — unless they move a public surface (an exported helper,
+an API route, a config key, a cache-file name).
+
+When a change needs no entry, say so and why rather than silently skipping it.
+
 ## Key Patterns
 
 ### Adding a tab to a function (Project/Development/Operations)
