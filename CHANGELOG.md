@@ -193,8 +193,15 @@ Behaviour that shifts on an unmodified config:
    cd packages/desktop && node inject-resources.js
    ```
 
-   Then restart the app. Project-servers run in-process inside the Electron main
-   process, so the app restart covers them — no per-project stop/start needed.
+   Then restart the app. Project-servers are separate `node` processes spawned by
+   the app, so confirm they actually went down before relaunching — quitting the
+   app can leave them orphaned (`ppid 1`) and still serving on their ports:
+
+   ```bash
+   lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(18080|300[0-9])'
+   ```
+
+   Anything still listed is running the old code; terminate it before relaunch.
 
 2. **Check each managed project for a committed cache file.** This is the one
    thing that fails silently, because the efforts cache was never gitignored:
