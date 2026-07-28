@@ -12,6 +12,39 @@ the category most likely to surprise a fork.
 
 ---
 
+## 2026-07-28 — Start a run from the Backlog tab
+
+### Added
+
+- **A Start button on every backlog row**, so a run can be kicked off from the
+  item instead of retyping its id into the Workflow tab. The run type is derived
+  from the item, mirroring the server's own start guardrails:
+
+  | Item | Status | Starts |
+  | --- | --- | --- |
+  | Bug | `Backlog` or `Blocked` | `bugfix` |
+  | Feature / Task | `Drafted` | `review` |
+  | Feature / Task | `Reviewed` | `execution` |
+
+  Anything else hides the button rather than offering a click that would 409.
+  Run options are fixed per type, matching how these are run in practice:
+  review goes out auto-advance + strict, execution and bugfix go out
+  auto-advance + skip-demo-review.
+
+- **`GET /workflow/start-readiness`** — reports `activeWorkflow`, `branch`,
+  `onDefaultBranch` and `dirty`, so the button can show *why* it is blocked
+  before the click. Read-only; it runs the same git reads the start guardrail
+  does. The server remains authoritative — this only avoids offering a
+  click that would be rejected.
+
+  The two blocked states are coloured differently on purpose, because they ask
+  different things of you: **amber "Busy"** (a run is already active) clears by
+  itself when that run ends; **red "Blocked"** (uncommitted changes, or not on
+  the default branch) waits for you to commit, stash, or switch back. A dirty
+  tree blocks execution and bugfix only — review creates no branch and commits
+  to the default branch, so it runs fine alongside uncommitted drafts, exactly
+  as the server guardrail allows.
+
 ## 2026-07-28 — Auto-advance no longer walks past a dead step
 
 ### Fixed

@@ -120,11 +120,44 @@ export function BacklogTab({
     }
   }, [api])
 
+  // Whether a run can start right now. Mirrors POST /workflow/start's guardrails
+  // so a blocked Start button says why before the click, not after a 409.
+  const [readiness, setReadiness] = useState<Readiness | null>(null)
+  const loadReadiness = useCallback(async () => {
+    try { setReadiness(await api.get('/workflow/start-readiness')) } catch { setReadiness(null) }
+  }, [api])
+
   useEffect(() => {
     load()
-    const id = setInterval(load, 30_000)
+    loadReadiness()
+    const id = setInterval(() => { load(); loadReadiness() }, 30_000)
     return () => clearInterval(id)
-  }, [load])
+  }, [load, loadReadiness])
+
+  // Starting a run flips the project to busy and moves the item's status, so
+  // both the rows and the readiness need re-reading.
+  const [starting, setStarting] = useState<string | null>(null)
+  const [startError, setStartError] = useState<{ id: string; message: string } | null>(null)
+  const startRun = useCallback(async (id: string, run: RunType) => {
+    setStarting(id)
+    setStartError(null)
+    try {
+      const res = await api.post('/workflow/start', { type: run, input: id })
+      if (res && res.error) { setStartError({ id, message: res.error }); return }
+      // Fixed per run type, per the owner's standing preference: reviews run
+      // strict (any finding blocks), execution/bugfix skip the demo gate so they
+      // don't park on a human step.
+      await api.post('/workflow/auto-advance', run === 'review'
+        ? { enabled: true, strict: true }
+        : { enabled: true, skipDemoReview: true })
+    } catch (e) {
+      setStartError({ id, message: e instanceof Error ? e.message : 'Could not start the run' })
+    } finally {
+      setStarting(null)
+      load()
+      loadReadiness()
+    }
+  }, [api, load, loadReadiness])
 
   function toggle(id: string) {
     setExpanded(prev => {
@@ -447,8 +480,10 @@ export function BacklogTab({
     return (
       <div ref={setNodeRef} style={rowStyle} {...attributes}>
         <div style={{
+          // Third column is the Start button — a sibling of the expand button,
+          // never a child of it (nested <button> is invalid and swallows clicks).
           display: 'grid',
-          gridTemplateColumns: '24px 1fr',
+          gridTemplateColumns: '24px 1fr auto',
           alignItems: 'stretch',
           background: isExpanded ? 'var(--surface2)' : 'transparent',
           borderBottom: isExpanded ? '1px solid var(--border-subtle)' : 'none',
@@ -498,7 +533,20 @@ export function BacklogTab({
             </div>
             <StatusPill status={item?.status} onChange={onStatusChange ? (next) => onStatusChange(id, next) : undefined} />
           </button>
+          <div style={{ display: 'flex', alignItems: 'center', paddingRight: 12 }}>
+            <StartRunButton
+              state={startStateFor(item, readiness)}
+              busy={starting === id}
+              onStart={(run) => startRun(id, run)}
+            />
+          </div>
         </div>
+        {startError && startError.id === id && (
+          <div style={{
+            fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)',
+            padding: '6px 12px 8px 64px', lineHeight: 1.45,
+          }}>{startError.message}</div>
+        )}
 
         {isExpanded && item && (
                       <div style={{
@@ -566,6 +614,53 @@ export function BacklogTab({
 
 // ─── Subcomponents ────────────────────────────────────────────────────────
 
+/**
+ * Per-item Start button. Four visual states, and the two *blocked* ones are
+ * deliberately different colours because they need different things from the
+ * owner: amber "busy" resolves itself when the running workflow ends, red
+ * "tree" does not — it waits for a commit, stash, or branch switch.
+ */
+function StartRunButton({ state, busy, onStart }: {
+  state: StartState
+  busy: boolean
+  onStart: (run: RunType) => void
+}) {
+  const base: React.CSSProperties = {
+    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700,
+    letterSpacing: '0.04em', textTransform: 'uppercase',
+    padding: '4px 10px', borderRadius: 5, whiteSpace: 'nowrap',
+    minWidth: 72, textAlign: 'center',
+  }
+  if (state.kind === 'ineligible' || state.kind === 'loading') {
+    // Rendered (not omitted) so rows don't reflow as statuses change.
+    return <span style={{ ...base, opacity: 0, pointerEvents: 'none' }} aria-hidden>—</span>
+  }
+  const blocked = state.kind === 'busy' || state.kind === 'tree'
+  const tone = state.kind === 'busy' ? 'var(--orange)' : state.kind === 'tree' ? 'var(--red)' : 'var(--accent)'
+  const label = busy ? '…'
+    : state.kind === 'busy' ? 'Busy'
+      : state.kind === 'tree' ? 'Blocked'
+        : RUN_LABEL[state.run]
+  const title = state.kind === 'busy' ? `Blocked — ${state.detail}. Clears when that run finishes.`
+    : state.kind === 'tree' ? `Blocked — ${state.detail}.`
+      : `Start the ${state.run} workflow`
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); if (state.kind === 'ready' && !busy) onStart(state.run) }}
+      disabled={blocked || busy}
+      title={title}
+      style={{
+        ...base,
+        cursor: blocked || busy ? 'not-allowed' : 'pointer',
+        border: `1px solid ${tone}`,
+        background: blocked ? 'transparent' : tone,
+        color: blocked ? tone : '#0d0f14',
+        opacity: blocked ? 0.75 : 1,
+      }}
+    >{label}</button>
+  )
+}
+
 function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
@@ -605,6 +700,65 @@ function TypeBadge({ type }: { type?: string }) {
 // items but new picks should use the current lifecycle. Also excludes 'Fixing':
 // the bugfix workflow owns that transition (Backlog → Fixing → Done); picking it
 // by hand would strand the bug with no run attached.
+// ─── Start-a-run affordance ───────────────────────────────────────────────
+// Which run an item is ready for, and — when none — why the button is off.
+// These rules MIRROR the server's start guardrails (validateBugfixStart and the
+// review/execution requiredStatus gate in POST /workflow/start). The server
+// stays authoritative; this only avoids offering a click that would 409.
+
+type RunType = 'bugfix' | 'review' | 'execution'
+
+interface Readiness {
+  activeWorkflow: { id: string; type: string; input: string | null; currentStep: string } | null
+  branch: string
+  defaultBranch: string
+  onDefaultBranch: boolean
+  dirty: boolean
+}
+
+/** The run this item's (type, status) makes it eligible for, or null. */
+function plannedRunFor(item?: Item): RunType | null {
+  if (!item) return null
+  if (item.type === 'Bug') {
+    // validateBugfixStart: Backlog or Blocked only.
+    return item.status === 'Backlog' || item.status === 'Blocked' ? 'bugfix' : null
+  }
+  // Features and Tasks share the PRD lifecycle; the server requires an exact match.
+  if (item.status === 'Drafted') return 'review'
+  if (item.status === 'Reviewed') return 'execution'
+  return null
+}
+
+type StartState =
+  | { kind: 'ready'; run: RunType }
+  | { kind: 'loading' }
+  | { kind: 'ineligible' }
+  /** Clears by itself when the current run ends — the owner need do nothing. */
+  | { kind: 'busy'; detail: string }
+  /** Needs the owner to commit/stash or switch branch before it can clear. */
+  | { kind: 'tree'; detail: string }
+
+function startStateFor(item: Item | undefined, r: Readiness | null): StartState {
+  const run = plannedRunFor(item)
+  if (!run) return { kind: 'ineligible' }
+  if (!r) return { kind: 'loading' }
+  if (r.activeWorkflow) {
+    const a = r.activeWorkflow
+    return { kind: 'busy', detail: `${a.type} run in progress${a.input ? ` (${a.input})` : ''}` }
+  }
+  if (!r.onDefaultBranch) {
+    return { kind: 'tree', detail: `on "${r.branch || 'detached HEAD'}", not ${r.defaultBranch}` }
+  }
+  // Review commits to the default branch and creates no run branch, so it is
+  // fine with uncommitted drafts present — matching the server guardrail.
+  if ((run === 'execution' || run === 'bugfix') && r.dirty) {
+    return { kind: 'tree', detail: `${r.defaultBranch} has uncommitted changes` }
+  }
+  return { kind: 'ready', run }
+}
+
+const RUN_LABEL: Record<RunType, string> = { bugfix: 'Fix', review: 'Review', execution: 'Execute' }
+
 const STATUS_OPTIONS = ['Backlog', 'Drafted', 'Reviewed', 'Implemented', 'Done', 'Blocked']
 const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   // Feature lifecycle (PRD-004 follow-up)

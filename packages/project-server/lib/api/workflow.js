@@ -3444,6 +3444,36 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     res.json({ ok: true });
   });
 
+  // Can a run be started right now, and if not, why? Mirrors the guardrails in
+  // POST /workflow/start so the Backlog tab's per-item Start button can show the
+  // blocked reason UP FRONT instead of letting the owner click into a 409.
+  //
+  // The two blockers are deliberately distinct: `activeWorkflow` clears on its
+  // own when the current run finishes, while `dirty`/`wrongBranch` need the
+  // owner to do something. The UI colours them differently for that reason.
+  //
+  // Read-only — runs the same git reads the start guardrail does, nothing else.
+  router.get('/workflow/start-readiness', (req, res) => {
+    const { execFileSync } = require('child_process');
+    const g = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    let defaultBranch = 'main';
+    try { defaultBranch = (g(['rev-parse', '--abbrev-ref', 'origin/HEAD']) || '').replace(/^origin\//, '') || 'main'; } catch (_) {}
+    let branch = '';
+    try { branch = g(['branch', '--show-current']); } catch (_) {}
+    // A git read that throws is reported as not-dirty rather than blocking every
+    // button — the authoritative check still runs server-side at start.
+    let dirty = false;
+    try { dirty = g(['status', '--porcelain']).length > 0; } catch (_) {}
+    const active = state.loadWorkflow();
+    res.json({
+      activeWorkflow: active ? { id: active.id, type: active.type, input: active.input || null, currentStep: active.currentStep } : null,
+      branch,
+      defaultBranch,
+      onDefaultBranch: !!branch && branch === defaultBranch,
+      dirty,
+    });
+  });
+
   router.get('/workflow/snapshots', (req, res) => {
     res.json({ snapshots: state.listSnapshots() });
   });
