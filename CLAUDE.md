@@ -93,6 +93,28 @@ an API route, a config key, a cache-file name).
 
 When a change needs no entry, say so and why rather than silently skipping it.
 
+## Plans
+
+`docs/plans/` holds design notes: what is being considered, what was ruled out,
+and why. It is **committed and public** — this repo is public and forked, and the
+plans are often the most useful thing in it for someone deciding whether to
+contribute or fork.
+
+Because they are public, a plan must not carry:
+
+- names of managed projects, or their ticket ids
+- release timing, launch dates, or anything about an unshipped product
+- verbatim owner quotes
+
+State the request neutrally instead ("owner request: …"). An agent working from
+inside a managed project will reach for that project's framing by default —
+that is the case to watch for, because the plan reads fine there and only leaks
+once it lands here.
+
+Mark the header `Status: proposed <date>` or `Status: implemented <date>`, so a
+reader can tell a record of shipped work from a proposal without reading the
+body.
+
 ## Key Patterns
 
 ### Adding a tab to a function (Project/Development/Operations)
