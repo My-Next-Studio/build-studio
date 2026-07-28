@@ -12,6 +12,34 @@ the category most likely to surprise a fork.
 
 ---
 
+## 2026-07-28 — Auto-advance no longer walks past a dead step
+
+### Fixed
+
+- **Opening the app could advance a workflow past a step whose agents all died,
+  marking unreviewed work `completed` and merging it.** Auto-advance is
+  implemented twice — a server-side tick and a client-side loop in
+  `workflow-view.tsx` that runs whenever the workflow view is mounted. Only the
+  server had the guard for a step where every agent errored with no feedback; the
+  client counted `status: 'error'` as done, found no blocking verdict (there was
+  no feedback at all to find one in), and approved the step forward. The server
+  would halt and stash `step.autoAdvanceError`, and the next time anyone opened
+  the app the client walked straight past it.
+
+  Seen on fazon `faz-197`: a Codex reviewer died three seconds in on an MCP
+  authorization error, the server correctly halted for seven hours, and opening
+  the app advanced `code_review` through `merge_to_main` — merging five fix
+  commits whose round-2 review never ran. The client now mirrors the server's
+  guard. Note the guard is deliberately narrow: a step where *some* agents
+  reported still advances on those reports; only a step where *nothing* reported
+  is treated as dead.
+
+### Known issues
+
+- **Auto-advance still exists in two places.** This fix brings the client back in
+  line, but two implementations of one policy will drift again. The durable fix
+  is to delete the client loop and let the server tick own advancement.
+
 ## 2026-07-27 — Next.js 16.2.12 (nine advisories)
 
 ### Fixed

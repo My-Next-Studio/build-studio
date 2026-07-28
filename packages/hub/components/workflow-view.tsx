@@ -351,6 +351,22 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // Don't auto-advance blocked steps (e.g. validation failure in planning)
     if (step.status === 'blocked') return
 
+    // A step where EVERY agent errored without producing feedback has nothing to
+    // advance on. `allDone` above counts 'error' as done — deliberately, so a
+    // partly-failed step can still advance on the agents that did report — but a
+    // step where NOTHING reported is a dead step, and approving it forward walks
+    // the workflow to a green "completed" with zero output.
+    //
+    // The server-side tick has this guard (workflow.js, "halted instead of
+    // advancing past a dead step") and stashes step.autoAdvanceError. This copy
+    // did not, so the server would halt and then this loop would walk straight
+    // past it on the next mount — which is exactly what happened to fazon
+    // faz-197 on 2026-07-28: a Codex reviewer died 3s in on an MCP auth error,
+    // the server halted for seven hours, and simply opening the app advanced
+    // code_review → merge_to_main with the round-2 review never run.
+    const allErrored = agents.length > 0 && agents.every(a => a.status === 'error')
+    if (allErrored && agents.every(a => !a.feedback)) return
+
     let action: string | null = null
 
     // Skip Demo Review: same action the human Skip button fires
