@@ -635,15 +635,20 @@ function StartRunButton({ state, busy, onStart }: {
     // Rendered (not omitted) so rows don't reflow as statuses change.
     return <span style={{ ...base, opacity: 0, pointerEvents: 'none' }} aria-hidden>—</span>
   }
-  const blocked = state.kind === 'busy' || state.kind === 'tree'
-  const tone = state.kind === 'busy' ? 'var(--orange)' : state.kind === 'tree' ? 'var(--red)' : 'var(--accent)'
+  const blocked = state.kind === 'busy' || state.kind === 'tree' || state.kind === 'attention'
+  // Amber resolves itself; red waits for the owner.
+  const tone = state.kind === 'busy' ? 'var(--orange)'
+    : state.kind === 'tree' || state.kind === 'attention' ? 'var(--red)'
+      : 'var(--accent)'
   const label = busy ? '…'
     : state.kind === 'busy' ? 'Busy'
-      : state.kind === 'tree' ? 'Blocked'
-        : RUN_LABEL[state.run]
+      : state.kind === 'attention' ? (state.detail.startsWith('Run finished') ? 'Finish' : 'Halted')
+        : state.kind === 'tree' ? 'Blocked'
+          : RUN_LABEL[state.run]
   const title = state.kind === 'busy' ? `Blocked — ${state.detail}. Clears when that run finishes.`
-    : state.kind === 'tree' ? `Blocked — ${state.detail}.`
-      : `Start the ${state.run} workflow`
+    : state.kind === 'attention' ? `${state.detail} — ${state.action}`
+      : state.kind === 'tree' ? `Blocked — ${state.detail}.`
+        : `Start the ${state.run} workflow`
   return (
     <button
       onClick={(e) => { e.stopPropagation(); if (state.kind === 'ready' && !busy) onStart(state.run) }}
@@ -710,6 +715,9 @@ type RunType = 'bugfix' | 'review' | 'execution'
 
 interface Readiness {
   activeWorkflow: { id: string; type: string; input: string | null; currentStep: string } | null
+  /** Server-derived halt reason for the active run — null while it is simply
+   *  working. Distinguishes "busy, wait" from "finished, close it out". */
+  needsAttention: { reason: string; title: string; detail: string; action: string } | null
   branch: string
   defaultBranch: string
   onDefaultBranch: boolean
@@ -737,6 +745,9 @@ type StartState =
   | { kind: 'busy'; detail: string }
   /** Needs the owner to commit/stash or switch branch before it can clear. */
   | { kind: 'tree'; detail: string }
+  /** A run holds the slot but is halted — finished, blocked, or waiting at a
+   *  gate. Needs the owner, so it shares the red register with 'tree'. */
+  | { kind: 'attention'; detail: string; action: string }
 
 function startStateFor(item: Item | undefined, r: Readiness | null): StartState {
   const run = plannedRunFor(item)
@@ -744,6 +755,13 @@ function startStateFor(item: Item | undefined, r: Readiness | null): StartState 
   if (!r) return { kind: 'loading' }
   if (r.activeWorkflow) {
     const a = r.activeWorkflow
+    // A run that has FINISHED still occupies the single workflow slot until it
+    // is closed out, so a start still 409s — but calling that "busy" is wrong
+    // twice over: nothing is running, and it will never clear on its own. By
+    // the colour rule (amber resolves itself, red waits for you) it is red.
+    if (r.needsAttention) {
+      return { kind: 'attention', detail: r.needsAttention.title, action: r.needsAttention.action }
+    }
     return { kind: 'busy', detail: `${a.type} run in progress${a.input ? ` (${a.input})` : ''}` }
   }
   if (!r.onDefaultBranch) {

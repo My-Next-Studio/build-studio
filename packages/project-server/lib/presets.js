@@ -459,17 +459,30 @@ function resolvePreset(presetName, overrides = {}, projectRoot = null) {
     }
   }
 
-  // --- Resolve step_models ---
+  // --- Resolve step_models / step_efforts ---
+  // Merged for backwards compatibility, but ALSO returned split, because the
+  // two halves carry different authority and the launcher has to tell them
+  // apart. A project's own entries are a current, deliberate choice and outrank
+  // the Agents-tab role slots. A preset's entries are shipped defaults that
+  // predate UI model configuration — they must NOT override an explicit slot,
+  // or picking a model in the UI silently does nothing on every step a preset
+  // happens to name. Flattening these into one object is what made that
+  // precedence impossible to express.
   const step_models = { ...preset.step_models, ...(overrides.step_models || {}) };
-
-  // --- Resolve step_efforts (per-step --effort for Claude agents; shallow
-  // merge, project config wins — e.g. example-ios keeps task_execution: xhigh) ---
   const step_efforts = { ...(preset.step_efforts || {}), ...(overrides.step_efforts || {}) };
+  const presetStepModels = { ...(preset.step_models || {}) };
+  const presetStepEfforts = { ...(preset.step_efforts || {}) };
+  const projectStepModels = { ...(overrides.step_models || {}) };
+  const projectStepEfforts = { ...(overrides.step_efforts || {}) };
 
   // --- Resolve features ---
   const features = { ...(preset.features || {}), ...(overrides.features || {}) };
 
-  return { roles, workflow, step_models, step_efforts, features, preset: presetName, presetDescription: preset.description };
+  return {
+    roles, workflow, step_models, step_efforts, features,
+    presetStepModels, presetStepEfforts, projectStepModels, projectStepEfforts,
+    preset: presetName, presetDescription: preset.description,
+  };
 }
 
 /**

@@ -25,12 +25,27 @@ interface WorkflowAgent {
   window?: string
   taskIndex?: number
   model?: string
+  /** Which layer chose `model`: 'step' (project config.yaml / per-run override),
+   *  'role' (Agents-tab slot), 'preset' (shipped default), 'default'
+   *  (agent_defaults). Absent on runs launched before this was recorded. */
+  modelSource?: 'step' | 'role' | 'preset' | 'default'
   /** Which CLI this agent launched on (server-set; absent in pre-multi-CLI runs — derive from model then). */
   cli?: AgentCli
   /** OpenCode only (FU-1): the ACTUAL serving model resolved from the session export
    *  (e.g. the routed model behind openrouter/auto); absent → badge shows the configured string. */
   actualModel?: string
   tokenUsage?: { inputTokens: number; outputTokens: number; cacheCreate: number; cacheRead: number; costUSD: number }
+}
+
+/** Server-derived halt reason — project-server/lib/needs-attention.js.
+ *  Null whenever the run can proceed on its own. `reason` is a stable key;
+ *  the rest is prose meant to be shown verbatim. */
+interface NeedsAttention {
+  reason: 'completed_not_finished' | 'review_cap_reached' | 'dead_step' | 'blocked' | 'human_gate'
+  step: string | null
+  title: string
+  detail: string
+  action: string
 }
 
 interface WorkflowStep {
@@ -41,6 +56,9 @@ interface WorkflowStep {
   autoAdvanceError?: string
   agents: WorkflowAgent[]
   mergeResults?: { branch: string; status: string; error?: string }[]
+  /** 'monolithic' when one agent takes every fix task in a single pass. Absent
+   *  on the sequential path, where per-task counters are real. */
+  strategy?: string
   completedTasks?: { id?: number; name: string; status: string }[]
   currentTask?: { id?: number; name: string; description: string; roles: string[] }
 }
@@ -187,6 +205,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   const api = useProjectApi()
   const [wf, setWf] = useState<Workflow | null>(null)
   const [pathologySignals, setPathologySignals] = useState<PathologySignals | null>(null)
+  // Server-derived "can this proceed without me, and if not why" — see
+  // project-server/lib/needs-attention.js. One signal covering every halt
+  // (dead step, blocked guardrail, human gate, round cap, finished-but-open).
+  const [needsAttention, setNeedsAttention] = useState<NeedsAttention | null>(null)
   const [findings, setFindings] = useState<Finding[]>([])
   const [findingOverrides, setFindingOverrides] = useState<Record<string, Finding['status']>>({})
   const [projectWorkflowSteps, setProjectWorkflowSteps] = useState<Record<string, string[]> | null>(null)
@@ -258,6 +280,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     const data = await api.get('/workflow')
     setWf(data.workflow || null)
     setPathologySignals(data.pathologySignals || null)
+    setNeedsAttention(data.needsAttention || null)
     setFindings(Array.isArray(data.findings) ? data.findings : [])
     // projectWorkflowSteps is the resolved per-project workflow step list
     // (after preset + overrides). Used below to filter the timeline so that
@@ -1083,9 +1106,12 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             }}>dismiss</button>
           </div>
         )}
-        {/* Auto-advance paused — server-side auto-advance hit a gate it can't clear and stopped
-            hammering. Surface the reason so the stall isn't invisible (the old failure mode). */}
-        {wf && wf.currentStep !== 'completed' && wf.steps?.[wf.currentStep]?.autoAdvanceError && (
+        {/* The run is stopped and will stay stopped until someone acts. Covers every
+            halt the engine can reach — a dead step, a blocked guardrail, a human
+            gate, the round cap, or a finished run still holding the slot — because
+            the server derives them all into one answer rather than each consumer
+            re-assembling it from a different subset. */}
+        {needsAttention && (
           <div style={{
             marginBottom: 12, padding: '10px 14px', borderRadius: 4,
             background: 'color-mix(in srgb, var(--orange) 13%, transparent)',
@@ -1093,11 +1119,13 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--orange)',
             display: 'flex', alignItems: 'flex-start', gap: 10,
           }}>
-            <span style={{ flexShrink: 0 }}>⏸</span>
+            <span style={{ flexShrink: 0 }}>{needsAttention.reason === 'human_gate' ? '⏸' : '⚠'}</span>
             <span style={{ flex: 1 }}>
-              Auto-advance paused on <b>{wf.currentStep}</b>: {wf.steps[wf.currentStep].autoAdvanceError}
+              <b>{needsAttention.title}</b>
               <br />
-              <span style={{ color: 'var(--muted)' }}>Fix the cause then re-enable Auto-advance, or use the step actions below (approve / override / skip / send back).</span>
+              {needsAttention.detail}
+              <br />
+              <span style={{ color: 'var(--muted)' }}>{needsAttention.action}</span>
             </span>
           </div>
         )}
@@ -1249,6 +1277,12 @@ function StepDetail({
     <div>
       <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
         {activeKey === 'fix_plan' ? `Fix Plan (from ${wf.fixSource || 'review'})`
+          // Monolithic mode hands every fix to ONE agent in a single pass, so
+          // there is no per-task position to report: fixTaskIndex sits at 0 and
+          // jumps straight to N when the agent finishes. Naming "Fix 1/N" there
+          // claimed the agent was on task 1 — it is working on all of them.
+          : activeKey === 'fix_execution' && wf.fixPlan && step.strategy === 'monolithic'
+          ? `${wf.fixPlan.tasks.length} fixes in one pass`
           : activeKey === 'fix_execution' && wf.fixPlan
           ? `Fix ${(wf.fixTaskIndex || 0) + 1}/${wf.fixPlan.tasks.length}: ${wf.fixPlan.tasks[wf.fixTaskIndex || 0]?.name || ''}`
           : ([...Object.values(WF_STEPS).flat(),
@@ -1259,7 +1293,12 @@ function StepDetail({
         } {wf.round > 1 && `— Round ${wf.round}`}
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 16 }}>
-        {activeKey === 'fix_execution' && wf.fixPlan
+        {/* No progress fraction in monolithic mode — completedTasks stays empty
+            until the single agent finishes and all N are written at once, so a
+            count would read 0/N for the whole run and then jump to N/N. */}
+        {activeKey === 'fix_execution' && wf.fixPlan && step.strategy === 'monolithic'
+          ? `${wf.fixPlan.tasks.length} fixes this round · progress shows on the agent card`
+          : activeKey === 'fix_execution' && wf.fixPlan
           ? `${step.completedTasks?.length || 0}/${wf.fixPlan.tasks.length} fix tasks completed`
           : activeKey === 'task_execution' ? ''
           : agents.length > 0 ? `${doneCount}/${agents.length} done` : ''}
@@ -2794,7 +2833,16 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
           const background = isCodex ? 'rgba(16,163,127,0.12)' : isOpencode ? 'rgba(245,158,11,0.12)' : isOpus ? 'rgba(167,139,250,0.1)' : 'var(--surface3)'
           return (
             <span
-              title={isOpencode && agent.actualModel ? `actual: ${agent.actualModel} · configured: ${agent.model}` : undefined}
+              title={[
+                isOpencode && agent.actualModel ? `actual: ${agent.actualModel} · configured: ${agent.model}` : `model: ${agent.model || 'default'}`,
+                // Which layer chose it. Without this a preset or project step
+                // model reads as the Agents-tab picker being broken.
+                agent.modelSource === 'step' ? 'set by step_models in this project\u2019s config.yaml'
+                  : agent.modelSource === 'role' ? 'set by the role slot on the Agents tab'
+                    : agent.modelSource === 'preset' ? 'set by the workflow preset (no role slot or step_models entry applies)'
+                      : agent.modelSource === 'default' ? 'agent_defaults fallback \u2014 nothing more specific was set'
+                        : null,
+              ].filter(Boolean).join(' \u00b7 ')}
               style={{
                 fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 600,
                 color, background,

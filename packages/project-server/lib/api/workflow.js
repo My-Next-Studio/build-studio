@@ -6,6 +6,7 @@ const path = require('path');
 const { stripAnsi } = require('../tmux');
 const opencodeTelemetry = require('../opencode-telemetry');
 const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
+const { deriveNeedsAttention } = require('../needs-attention');
 
 // Common instruction fragments injected into all agent prompts.
 // Placeholders {{CONTEXT_BUDGET}} and {{SOFT_THRESHOLD}} are replaced
@@ -1732,14 +1733,26 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     const permissionMode = resolvePermissionMode(config.agent_defaults);
     const unsetKey = config.agent_defaults.unset_api_key;
     const resolvedStep = stepKey || wf.currentStep;
-    // Per-STEP overrides (config.yaml step_models / wf.stepModelOverrides) sit
-    // at the top of the model chain; the per-agent resolution below inserts
-    // the cli block's per-role model slot between these and agent_defaults.
+    // Per-step model/effort, split by PROVENANCE — the two halves sit on
+    // opposite sides of the Agents-tab role slots:
+    //
+    //   per-run override  >  project config.yaml  >  UI role slot  >  preset
+    //
+    // A project's own step_models entry is a current, deliberate choice and is
+    // more specific than a role slot, so it wins. A PRESET's entry is a shipped
+    // default from before models were configurable in the UI; letting it win
+    // meant picking a model in the UI silently did nothing on every step a
+    // preset happened to name (`reviewing: 'sonnet'` overrode an explicit Opus
+    // selection, with no signal anywhere). Presets are now the fallback they
+    // were always meant to be — they still cover a project nobody has
+    // configured, including mid-reconfig when a slot is momentarily unset.
+    //
     // Kept RAW here — each entry is narrowed to the agent's own CLI inside the
     // loop below, since a step can carry a per-CLI map.
     const stepModelEntry = (wf.stepModelOverrides && wf.stepModelOverrides[resolvedStep])
-      || (config.step_models && config.step_models[resolvedStep])
+      || (config.projectStepModels && config.projectStepModels[resolvedStep])
       || null;
+    const presetModelEntry = (config.presetStepModels && config.presetStepModels[resolvedStep]) || null;
     // Effort level for the agent's reasoning depth. Valid values: low, medium,
     // high (default), xhigh, max. Configure via `step_efforts: {
     // task_execution: xhigh }` for per-step control, or `agent_defaults.effort`
@@ -1747,8 +1760,9 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     // so a bare value applies to whichever one the step's agents land on. See
     // docs/experiments/prd-009-orchestration-model-matrix.md.
     const stepEffortEntry = (wf.stepEffortOverrides && wf.stepEffortOverrides[resolvedStep])
-      || (config.step_efforts && config.step_efforts[resolvedStep])
+      || (config.projectStepEfforts && config.projectStepEfforts[resolvedStep])
       || null;
+    const presetEffortEntry = (config.presetStepEfforts && config.presetStepEfforts[resolvedStep]) || null;
 
     for (const agent of agents) {
       const branch = agent.branch;
@@ -1793,14 +1807,20 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       const agentCli = launch.cli;
       const stepModel = resolveStepModelForCli(stepModelEntry, agentCli);
       const stepEffort = resolveStepEffortForCli(stepEffortEntry, agentCli);
-      // Model chain: step override > cli role slot > agent_defaults. The
-      // agent_defaults tail is claude-only — its `model` holds a claude short
-      // name, so it can't stand in for a codex slug or an opencode id.
-      const modelShortName = stepModel || launch.model
+      const presetModel = resolveStepModelForCli(presetModelEntry, agentCli);
+      const presetEffort = resolveStepEffortForCli(presetEffortEntry, agentCli);
+      // Model chain: project step override > cli role slot > preset step model >
+      // agent_defaults. The agent_defaults tail is claude-only — its `model`
+      // holds a claude short name, so it can't stand in for a codex slug or an
+      // opencode id.
+      const modelShortName = stepModel || launch.model || presetModel
         || (agentCli === 'claude' ? (config.agent_defaults.model || 'opus') : null);
       // Effort chain: same shape, and agent_defaults.effort IS CLI-agnostic.
-      const effortLevel = stepEffort || launch.effort
+      const effortLevel = stepEffort || launch.effort || presetEffort
         || (config.agent_defaults && config.agent_defaults.effort) || null;
+      // Which layer decided, so the card can say so instead of showing a value
+      // with no explanation of why the Agents-tab pick didn't apply.
+      const modelSource = stepModel ? 'step' : launch.model ? 'role' : presetModel ? 'preset' : 'default';
       // One builder for all three CLIs — drops a model that doesn't fit the CLI
       // and an effort that isn't a plain token, so a mistyped step_models entry
       // can never reach a shell command line.
@@ -1991,6 +2011,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         : agentCli === 'opencode'
           ? (opencodeModel ? `opencode:${opencodeModel}` : 'opencode')
           : 'codex';
+      // Which layer chose that model — 'step' (project config.yaml or a per-run
+      // override), 'role' (Agents-tab slot), 'preset' (shipped default), or
+      // 'default'. Recorded so the UI can explain a model that isn't the one
+      // picked in the UI, rather than leaving it to be read as a bug.
+      agent.modelSource = modelSource;
       agent.startedAt = new Date().toISOString();
       agent.agentCwd = agentCwd;
       agent.injectedLearnings = learningsResult.injected;
@@ -2791,7 +2816,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     const pathologySignals = computePathologySignals(wf);
     // PRD-001 findings — parsed from code_review / qa_validation feedback. Read-only.
     const findings = extractFindings(wf);
-    res.json({ workflow: wf, projectWorkflowSteps, preset: config.preset, pathologySignals, findings, maxReviewRounds: config.max_review_rounds || 4 });
+    // "Can this proceed without a human, and if not, why?" — one derived answer
+    // (lib/needs-attention.js) instead of every consumer reassembling it from a
+    // different subset of autoAdvanceError / blocked / gate / cap / completed.
+    const needsAttention = deriveNeedsAttention(wf);
+    res.json({ workflow: wf, projectWorkflowSteps, preset: config.preset, pathologySignals, findings, needsAttention, maxReviewRounds: config.max_review_rounds || 4 });
   });
 
   // PRD-001 pathology signals — pure function, derives "is this run healthy?"
@@ -3465,7 +3494,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     let dirty = false;
     try { dirty = g(['status', '--porcelain']).length > 0; } catch (_) {}
     const active = state.loadWorkflow();
+    // needsAttention distinguishes "a run is working" from "a run is finished
+    // but still holding the slot" — both block a start, but only the second one
+    // clears when the owner does something.
     res.json({
+      needsAttention: deriveNeedsAttention(active),
       activeWorkflow: active ? { id: active.id, type: active.type, input: active.input || null, currentStep: active.currentStep } : null,
       branch,
       defaultBranch,

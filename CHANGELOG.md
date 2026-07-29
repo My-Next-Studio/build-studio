@@ -21,6 +21,79 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-07-29 — Say why a run is stopped, and stop overruling the model picker
+
+### Added
+
+- **One derived answer to "can this proceed without me?"**
+  (`project-server/lib/needs-attention.js`). The engine already halted correctly
+  in half a dozen places, but each recorded itself differently — a stashed
+  `autoAdvanceError`, a `blocked` step, a `review_cap_reached` step, a manual
+  gate, a finished run still holding the slot. Nothing named the *condition*, so
+  every consumer re-derived it from a different subset and they disagreed.
+
+  Now derived (never stored — a stale "needs you" is worse than none) and served
+  on `GET /workflow` and `GET /workflow/start-readiness` as
+  `{ reason, step, title, detail, action }`. The Workflow tab shows one banner
+  covering every halt, saying what happened and what clears it, replacing a
+  banner that only knew about `autoAdvanceError`.
+
+- **`modelSource` on each agent**, recording which layer chose its model —
+  `step`, `role`, `preset`, or `default` — surfaced in the agent card's model
+  tooltip. A model that isn't the one picked in the Agents tab now explains
+  itself instead of reading as a broken picker.
+
+### Changed
+
+- **Workflow preset `step_models` / `step_efforts` no longer override the
+  Agents-tab role slots.** They predate UI model configuration and encode a cost
+  trade-off (`reviewing: 'sonnet'` — *"near-Opus at code analysis, far
+  cheaper"*), and they silently outranked an explicit UI selection on every step
+  a preset happened to name. Precedence is now:
+
+  ```
+  per-run override  >  project config.yaml  >  UI role slot  >  preset  >  agent_defaults
+  ```
+
+  A project's own `step_models` still wins over a role slot — it is a current,
+  deliberate, more-specific choice. Only the *shipped* half was demoted, and it
+  remains the fallback for a project nobody has configured, including a slot
+  momentarily cleared mid-reconfig. `agent_defaults` is still the last resort, so
+  an agent can never launch without a model.
+
+  This was only possible after splitting the merge in `resolvePreset`, which
+  flattened preset and project entries into one object with no provenance.
+
+- **A completed-but-unfinished run no longer reads as "Busy" on the Backlog
+  Start button.** It holds the workflow slot until closed, so a start still
+  fails — but nothing is running and it will never clear on its own. It now shows
+  red **Finish** with the reason, matching the rule that amber resolves itself
+  and red waits for you.
+
+### Fixed
+
+- **The fix-task counter no longer shows a fraction that cannot move.** Under the
+  monolithic fix builder one agent takes every task in a single pass, so
+  `fixTaskIndex` stays at 0 and `completedTasks` stays empty until both jump to N
+  at the end — the panel read `Fix 1/7` and `0/7 fix tasks completed` for the
+  whole run, then completed. Worse, `Fix 1/7` named a specific task the agent was
+  not working on. Monolithic runs now read `7 fixes in one pass`; the sequential
+  path keeps its counter, where the count is real.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both changed: `cd packages/hub &&
+npx next build`, then `cd packages/desktop && node inject-resources.js`. Restart
+the app **and the project-servers** — `needsAttention` and the precedence change
+are server-side.
+
+**In each managed project** — nothing to do. But **check your agent cards after
+the first run**: if a step was previously running a preset's model, it will now
+run whatever the Agents tab says. That is the intended fix, and it may be a
+stronger and more expensive model than before. To pin a step regardless of the
+slot, set it in that project's `config.yaml` under `step_models` — project
+entries still win.
+
 ## 2026-07-28 — Start a run from the Backlog tab
 
 ### Added

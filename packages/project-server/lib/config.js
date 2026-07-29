@@ -140,6 +140,10 @@ function loadConfig(projectRoot) {
 
   // Resolve preset if specified, otherwise use legacy format
   let roles, workflow, step_models, step_efforts, features, presetName;
+  // Split view of the same data — the launcher needs to know which entries came
+  // from the project (explicit, outranks the UI role slots) and which came from
+  // a preset (shipped default, must not override an explicit slot).
+  let projectStepModels = {}, projectStepEfforts = {}, presetStepModels = {}, presetStepEfforts = {};
 
   if (raw.preset) {
     // New format: preset-based config
@@ -154,6 +158,10 @@ function loadConfig(projectRoot) {
     workflow = resolved.workflow;
     step_models = resolved.step_models;
     step_efforts = resolved.step_efforts;
+    projectStepModels = resolved.projectStepModels || {};
+    projectStepEfforts = resolved.projectStepEfforts || {};
+    presetStepModels = resolved.presetStepModels || {};
+    presetStepEfforts = resolved.presetStepEfforts || {};
     features = resolved.features;
     presetName = resolved.preset;
   } else if (raw.roles && (raw.roles.review || raw.roles.execution || raw.roles.standalone)) {
@@ -170,6 +178,10 @@ function loadConfig(projectRoot) {
     };
     step_models = { ...PRESETS['web-app'].step_models, ...(raw.step_models || {}) };
     step_efforts = raw.step_efforts || {};
+    projectStepModels = { ...(raw.step_models || {}) };
+    projectStepEfforts = { ...(raw.step_efforts || {}) };
+    presetStepModels = { ...PRESETS['web-app'].step_models };
+    presetStepEfforts = { ...(PRESETS['web-app'].step_efforts || {}) };
     features = { ...PRESETS['web-app'].features, ...(raw.features || {}) };
     presetName = null;
   } else {
@@ -179,6 +191,10 @@ function loadConfig(projectRoot) {
     workflow = resolved.workflow;
     step_models = resolved.step_models;
     step_efforts = resolved.step_efforts;
+    projectStepModels = resolved.projectStepModels || {};
+    projectStepEfforts = resolved.projectStepEfforts || {};
+    presetStepModels = resolved.presetStepModels || {};
+    presetStepEfforts = resolved.presetStepEfforts || {};
     features = resolved.features;
     presetName = 'web-app';
   }
@@ -190,6 +206,10 @@ function loadConfig(projectRoot) {
     workflow,
     step_models,
     step_efforts,
+    projectStepModels,
+    projectStepEfforts,
+    presetStepModels,
+    presetStepEfforts,
     features,
     preset: presetName,
     agent_defaults: { ...DEFAULTS.agent_defaults, ...(raw.agent_defaults || {}), ...(local.agent_defaults || {}) },
