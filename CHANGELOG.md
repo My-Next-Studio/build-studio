@@ -6,9 +6,18 @@ Build Studio ships from `main` — there are no tagged releases — so entries a
 grouped by date, newest first. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Read `Upgrade steps` first.** That section lists what you must *do* when
-pulling; `Changed` lists behaviour that shifts on an unmodified config, which is
-the category most likely to surprise a fork.
+**Read `Upgrade steps` first.** It lists what you must *do* after pulling, split
+by where the work happens:
+
+- **In Build Studio** — done once, in this repo (rebuild, inject, restart).
+- **In each managed project** — done per project, in repos that are *not* this
+  one. Build Studio writes into the projects it manages, so an update here can
+  require a change there. This is the step most easily missed.
+- **Nothing to do** — stated explicitly when that is the answer, so silence is
+  never ambiguous.
+
+Then read `Changed` — behaviour that shifts on an unmodified config, i.e. things
+that move underneath you without your having edited anything.
 
 ---
 
@@ -45,6 +54,15 @@ the category most likely to surprise a fork.
   to the default branch, so it runs fine alongside uncommitted drafts, exactly
   as the server guardrail allows.
 
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both changed, so a full inject, not
+`--sync-only`: `cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`. Restart the app, and restart
+the project-servers too — the readiness endpoint is server-side.
+
+**In each managed project** — nothing to do.
+
 ## 2026-07-28 — Auto-advance no longer walks past a dead step
 
 ### Fixed
@@ -73,6 +91,17 @@ the category most likely to surprise a fork.
   line, but two implementations of one policy will drift again. The durable fix
   is to delete the client loop and let the server tick own advancement.
 
+### Upgrade steps
+
+**In Build Studio** — hub-only change: `cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`, then restart the app. The
+project-servers can keep running; the guard is client-side.
+
+**In each managed project** — nothing to do. But if a workflow of yours ever
+advanced past a step whose agents all died, its later steps ran on unreviewed
+work — worth checking any run that reported success while an agent shows
+`status: error`.
+
 ## 2026-07-27 — Next.js 16.2.12 (nine advisories)
 
 ### Fixed
@@ -99,6 +128,14 @@ the category most likely to surprise a fork.
   in neither the standalone build output nor the shipped `.app`, it processes
   only this repo's own stylesheets during `next build`, and all three advisories
   require attacker-controlled CSS. Expected to resolve when `next` bumps its pin.
+
+### Upgrade steps
+
+**In Build Studio** — `npm install` to pick up the lockfile change, then rebuild
+and inject. A Next version change lives in the standalone bundle, so this needs
+the full `node inject-resources.js`, not `--sync-only`.
+
+**In each managed project** — nothing to do.
 
 ## 2026-07-27 — Security: bind to loopback, patch `fast-uri`
 
@@ -153,6 +190,23 @@ the category most likely to surprise a fork.
   Next declares. **Re-evaluate before adding any image upload, any
   user-supplied avatar, or an `images.remotePatterns` entry.**
 
+### Upgrade steps
+
+**In Build Studio** — `npm install` for the `fast-uri` override, then rebuild and
+inject. **Restart the project-servers, not just the app** — the loopback bind is
+project-server code, so any server left running from before stays on `0.0.0.0`
+and the fix appears not to have worked. Confirm with:
+
+```bash
+lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(18080|300[0-9])'
+```
+
+Every line should read `127.0.0.1`, not `*`.
+
+**In each managed project** — nothing to do. But if you have been running Build
+Studio on untrusted networks, note that the dashboard and every project-server
+API were reachable by anyone on that network, unauthenticated, until this change.
+
 ## 2026-07-27 — Demo recorder: output folder, narration, signature re-seal
 
 ### Added
@@ -187,14 +241,17 @@ the category most likely to surprise a fork.
 
 ### Upgrade steps
 
-- **Re-grant Screen Recording once** if you injected before this landed: macOS
-  may still hold a revoked grant for the tampered bundle. System Settings →
-  Privacy & Security → Screen Recording, toggle Build Studio off and on, then
-  restart the app. With a cert-signed build the grant is keyed to the designated
-  requirement, so it survives all later rebuilds; an ad-hoc fallback needs a
-  re-grant after each rebuild.
-- Existing recordings are unaffected — the default resolution order is unchanged,
-  so a folder that resolved before still resolves the same way.
+**In Build Studio** — **re-grant Screen Recording once** if you injected before
+this landed: macOS may still hold a revoked grant for the tampered bundle.
+System Settings → Privacy & Security → Screen Recording, toggle Build Studio off
+and on, then restart the app. With a cert-signed build the grant is keyed to the
+designated requirement, so it survives all later rebuilds; an ad-hoc fallback
+needs a re-grant after each rebuild.
+
+**In each managed project** — nothing to do.
+
+Existing recordings are unaffected: the default resolution order is unchanged,
+so a folder that resolved before still resolves the same way.
 
 ## 2026-07-27 — Model catalog auto-discovery, uniform role slots
 
@@ -288,6 +345,8 @@ Behaviour that shifts on an unmodified config:
 
 ### Upgrade steps
 
+**In Build Studio**
+
 1. **Rebuild, inject, restart.** Both `hub/` and `project-server/`+`shared/`
    changed, so `--sync-only` is not enough:
 
@@ -318,28 +377,34 @@ Behaviour that shifts on an unmodified config:
    lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(18080|300[0-9])'
    ```
 
-2. **Check each managed project for a committed cache file.** This is the one
-   thing that fails silently, because the efforts cache was never gitignored:
+2. **Review the `Changed` section above** — several items alter agent behaviour
+   without any config edit.
+
+**In each managed project** — run this in every repo Build Studio manages, not
+just in Build Studio itself:
+
+1. **Untrack any committed cache file.** This is the one thing that fails
+   silently, because the efforts cache was never in the gitignore list, so it was
+   committed into managed projects:
 
    ```bash
-   git ls-files '.build-studio/*-cache.json'
+   git ls-files '.build-studio/*-cache.json'    # anything listed is tracked
    git rm --cached <anything listed>
    ```
 
    Re-onboarding adds the `.build-studio/*-cache.json` glob automatically;
-   otherwise add it by hand.
+   otherwise add it to that project's `.gitignore` by hand.
+
+2. **Delete the two orphaned caches** (optional, ~350KB each). A new
+   `.build-studio/cli-catalog-cache.json` replaces
+   `opencode-models-cache.json` and `opencode-model-efforts-cache.json`; the old
+   two are no longer read.
 
 3. **Nothing to migrate in `config.yaml`.** Bare `step_models` / `step_efforts`
    values keep working unchanged.
 
-4. **Caches self-heal.** The hub's `~/.build-studio/opencode-catalog-cache.json`
-   refetches on schema mismatch. Per-project, a new `cli-catalog-cache.json`
-   replaces `opencode-models-cache.json` and
-   `opencode-model-efforts-cache.json`; the old two are orphaned and safe to
-   delete.
-
-5. **Review the `Changed` section above** — several items alter agent behaviour
-   without any config edit.
+The hub's own `~/.build-studio/opencode-catalog-cache.json` needs no action — it
+refetches itself on schema mismatch.
 
 ### Notes for forks
 

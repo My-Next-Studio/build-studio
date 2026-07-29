@@ -70,21 +70,49 @@ cd packages/project-server && node index.js /path/to/project  # Direct server
 ## Changelog
 
 **IMPORTANT — update `CHANGELOG.md` in the same commit as the change it
-describes.** Build Studio ships from `main` with no tagged releases, and it is
-forked, so `CHANGELOG.md` is the only place a downstream user learns what a pull
-will do to them. A change landed without an entry is invisible to every fork.
+describes.** Build Studio ships from `main` with no tagged releases, so
+`CHANGELOG.md` is the only place a downstream user learns what a pull will do to
+them. A change landed without an entry is invisible to everyone downstream.
+
+**Write for someone who cloned the repo and just ran `git pull`.** That is the
+main audience — larger than the forks, and the one with no diff to read. Forks
+are a secondary audience with an extra need (see *Notes for forks*).
 
 Entries are grouped by date, newest first. Add to today's section if one exists,
 otherwise open a new one. Use these headings, omitting any that don't apply:
 
 - **Added** — new capability
 - **Changed** — behaviour that shifts *on an unmodified config*. This is the
-  highest-value section; it is what breaks a fork silently.
+  highest-value section; it is what changes underneath someone silently.
 - **Fixed** — bugs, with the user-visible symptom, not just the cause
-- **Upgrade steps** — anything a puller must actively *do*: rebuild/inject,
-  restart, migrate config, untrack a file, clear state. Omit only when the answer
-  is genuinely "pull and go".
+- **Upgrade steps** — anything a puller must actively *do*. Split by **where the
+  work happens**, because these reach different repositories (see below).
+- **Known issues** — something left unfixed, and why. Better recorded than
+  carried silently.
 - **Notes for forks** — invariants a fork must preserve when extending the code
+
+### Upgrade steps must say *where*
+
+Build Studio manages other repositories, so an update can require action in
+projects that are not Build Studio. That is the step most easily missed, because
+nothing about "I updated Build Studio" suggests going and touching a different
+repo. Split the section:
+
+```
+### Upgrade steps
+
+**In Build Studio** — rebuild, inject, restart; anything done once, here.
+
+**In each managed project** — config migrations, files to untrack, state to
+clear; anything done N times, elsewhere. Give a command that can be run per
+project rather than prose.
+
+**Nothing to do** — say this explicitly when it is true.
+```
+
+State "nothing to do" rather than omitting the section. A reader cannot tell
+silence apart from an oversight, and this file is summarised into published
+release notes where that distinction matters.
 
 Write for someone who did not see the diff: name the user-visible symptom, not
 the implementation. Skip entries for pure refactors, comment or test-only
