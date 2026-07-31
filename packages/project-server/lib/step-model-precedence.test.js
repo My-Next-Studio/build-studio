@@ -2,12 +2,19 @@
 
 // The model-selection precedence, pinned end to end.
 //
-//   per-run override  >  project config.yaml  >  UI role slot  >  preset  >  agent_defaults
+//   per-run override  >  UI role slot  >  project config.yaml  >  preset  >  agent_defaults
 //
-// The load-bearing pair is the middle two: a PRESET step model must NOT beat an
-// explicit Agents-tab slot (that made picking a model in the UI silently do
-// nothing on every step a preset named), while a PROJECT step model must, since
-// it is a current deliberate choice and more specific than a role slot.
+// Owner-specified (2026-07-31): what the Model page shows is what runs. The UI
+// slot resolves to the PROJECT Model page when "Use default" is unchecked and
+// the GLOBAL Model page otherwise — resolveEffectiveCliConfig collapses those
+// two into one value before this chain sees it.
+//
+// Everything below the slot is a FALLBACK for what the UI has not configured.
+// config.yaml `step_models` used to outrank the slot, which meant choosing a
+// model in the UI silently did nothing on any step config.yaml named, and the
+// agent card showed the config.yaml value with no hint the picker was ignored.
+// A per-run override still wins over everything: it is an explicit choice made
+// for this run.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -20,13 +27,12 @@ const {
 function pickModel({ cfg, step, role, wf = { type: 'execution' }, runOverride = null }) {
   const launch = resolveAgentLaunchSettings(role, wf, cfg.cli);
   const cli = launch.cli;
-  const stepEntry = runOverride || (cfg.projectStepModels || {})[step] || null;
-  const presetEntry = (cfg.presetStepModels || {})[step] || null;
-  const stepModel = resolveStepModelForCli(stepEntry, cli);
-  const presetModel = resolveStepModelForCli(presetEntry, cli);
-  const model = stepModel || launch.model || presetModel
+  const runModel = resolveStepModelForCli(runOverride, cli);
+  const stepModel = resolveStepModelForCli((cfg.projectStepModels || {})[step] || null, cli);
+  const presetModel = resolveStepModelForCli((cfg.presetStepModels || {})[step] || null, cli);
+  const model = runModel || launch.model || stepModel || presetModel
     || (cli === 'claude' ? (cfg.agent_defaults.model || 'opus') : null);
-  const source = stepModel ? 'step' : launch.model ? 'role' : presetModel ? 'preset' : 'default';
+  const source = runModel ? 'run' : launch.model ? 'role' : stepModel ? 'step' : presetModel ? 'preset' : 'default';
   return { cli, model, source };
 }
 
@@ -61,12 +67,31 @@ test('an explicit UI role slot now beats a preset step model', () => {
   assert.equal(got.source, 'role');
 });
 
-test('a project step model still beats the UI role slot', () => {
+test('the UI role slot now beats a project config.yaml step model', () => {
+  // Reversed on owner instruction (2026-07-31). config.yaml is a fallback for
+  // what the UI has not configured, not an override of it — the previous order
+  // made the Model page silently inert on any step config.yaml named.
   const cfg = configWith({
     projectStepModels: { task_execution: 'opus[1m]' },
     cli: { default: 'claude', default_model: 'sonnet5' },
   });
   const got = pickModel({ cfg, step: 'task_execution', role: 'QA' });
+  assert.equal(got.model, 'sonnet5');
+  assert.equal(got.source, 'role');
+});
+
+test('a project config.yaml step model applies when no slot is set', () => {
+  // The fallback role config.yaml keeps: per-step tuning still works on a
+  // project whose Model page leaves the slot empty.
+  const cfg = configWith({ projectStepModels: { task_execution: 'opus[1m]' }, cli: { default: 'claude' } });
+  const got = pickModel({ cfg, step: 'task_execution', role: 'QA' });
+  assert.equal(got.model, 'opus[1m]');
+  assert.equal(got.source, 'step');
+});
+
+test('config.yaml still outranks the preset', () => {
+  const cfg = configWith({ projectStepModels: { reviewing: 'opus[1m]' }, cli: { default: 'claude' } });
+  const got = pickModel({ cfg, step: 'reviewing', role: 'PM' });
   assert.equal(got.model, 'opus[1m]');
   assert.equal(got.source, 'step');
 });
@@ -78,7 +103,7 @@ test('a per-run override beats everything', () => {
   });
   const got = pickModel({ cfg, step: 'task_execution', role: 'QA', runOverride: 'fable' });
   assert.equal(got.model, 'fable');
-  assert.equal(got.source, 'step');
+  assert.equal(got.source, 'run');
 });
 
 test('the preset still applies when no slot and no project entry are set', () => {
@@ -112,14 +137,21 @@ test('a claude-only preset value is not forced onto a codex agent', () => {
 
 test('effort follows the same order', () => {
   const r = resolvePreset('solo', { step_efforts: { task_execution: 'max' } });
-  const cli = { default: 'claude', default_effort: 'medium' };
-  const pick = (step) => {
+  const pick = (step, cli) => {
     const launch = resolveAgentLaunchSettings('QA', { type: 'execution' }, cli);
-    return resolveStepEffortForCli(r.projectStepEfforts[step] || null, launch.cli)
-      || launch.effort
+    return launch.effort
+      || resolveStepEffortForCli(r.projectStepEfforts[step] || null, launch.cli)
       || resolveStepEffortForCli(r.presetStepEfforts[step] || null, launch.cli)
       || null;
   };
-  assert.equal(pick('task_execution'), 'max');   // project wins
-  assert.equal(pick('reviewing'), 'medium');     // slot beats the preset's 'high'
+  const withSlot = { default: 'claude', default_effort: 'medium' };
+  const noSlot = { default: 'claude' };
+  // Slot set: it wins over BOTH config.yaml and the preset — this is the
+  // reversal. A project running an xhigh per-step experiment now needs that
+  // effort in the Model page, or an empty slot, for it to apply.
+  assert.equal(pick('task_execution', withSlot), 'medium');
+  assert.equal(pick('reviewing', withSlot), 'medium');
+  // Slot empty: config.yaml then the preset still fill in.
+  assert.equal(pick('task_execution', noSlot), 'max');
+  assert.equal(pick('reviewing', noSlot), 'high');
 });

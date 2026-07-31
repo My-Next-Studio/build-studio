@@ -412,10 +412,22 @@ function startServer(projectRoot, opts = {}) {
       // been written to for AGENT_IDLE_TIMEOUT_MS. tmux pipe-pane streams all
       // pane output (including the Claude CLI's per-second spinner updates)
       // to the log, so log mtime is a reliable "is the agent alive" signal.
-      const currentStep = activeWf.steps[activeWf.currentStep];
-      if (currentStep && currentStep.agents) {
+      //
+      // Read through the task_execution mirror, for the same reason the
+      // stale-session sweep above does: task agents live on
+      // taskExecution.taskStates[i].agents and the step's copy is routinely
+      // empty, so watching only the step skipped every task_execution run. A
+      // codex agent that died on a usage limit therefore sat 'running' with a
+      // shell prompt in its pane and nothing reported it (fazon FAZ-196,
+      // 2026-07-31 — 40 minutes past a 15-minute timeout, needsAttention null).
+      // allAgentsOf rather than the current step's list: it yields BOTH homes,
+      // so marking an agent updates the mirror and the source together. (The
+      // mirror is a shallow copy — marking one and not the other leaves the
+      // launch guard still seeing 'running'.) Scoping by status is equivalent
+      // to scoping by step, since only current-step agents are ever 'running'.
+      {
         const now = Date.now();
-        for (const agent of currentStep.agents) {
+        for (const agent of agentRecovery.allAgentsOf(activeWf)) {
           if (agent.status !== 'running' || !agent.startedAt || !agent.window) continue;
           const elapsed = now - new Date(agent.startedAt).getTime();
           if (elapsed < AGENT_MIN_RUNTIME_MS) continue;

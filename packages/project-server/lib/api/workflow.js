@@ -567,15 +567,6 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   // Higher per-token price; right choice for monolithic tasks that exceed 200K.
   // MODEL_IDS comes from @build-studio/shared/cli (top-level import).
 
-  function resolveModel(stepKey, wf) {
-    // Priority: workflow state override > step_models config > agent_defaults.model
-    const override = wf.stepModelOverrides && wf.stepModelOverrides[stepKey];
-    const stepDefault = config.step_models && config.step_models[stepKey];
-    const globalDefault = config.agent_defaults.model || 'opus';
-    const shortName = override || stepDefault || globalDefault;
-    return MODEL_IDS[shortName] || shortName;
-  }
-
   function appendTelemetryLog(wf, entry) {
     try {
       const logDir = path.join(config.tmpPath, 'logs');
@@ -1667,7 +1658,11 @@ ${EFFICIENCY_INSTRUCTIONS}`,
   }
 
   function launchWorkflowAgents(wf, agents, { useWorktrees = false, allowAll = true, cwd = projectRoot, stepKey = null } = {}) {
-    console.log(`[workflow] Launching ${agents.length} agents for step=${wf.currentStep} round=${wf.round} model=${resolveModel(stepKey || wf.currentStep, wf)}`);
+    // No model in this line on purpose: each agent resolves its own CLI, model
+    // and effort in the loop below (a step's agents can differ), and each is
+    // logged with its provenance there. A single step-level model here was an
+    // approximation that could disagree with what actually launched.
+    console.log(`[workflow] Launching ${agents.length} agents for step=${wf.currentStep} round=${wf.round}`);
     fs.mkdirSync(worktreesPath, { recursive: true });
     fs.mkdirSync(logsPath, { recursive: true });
 
@@ -1761,25 +1756,29 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     const permissionMode = resolvePermissionMode(config.agent_defaults);
     const unsetKey = config.agent_defaults.unset_api_key;
     const resolvedStep = stepKey || wf.currentStep;
-    // Per-step model/effort, split by PROVENANCE — the two halves sit on
-    // opposite sides of the Agents-tab role slots:
+    // Per-step model/effort, split by PROVENANCE. Owner-specified order
+    // (2026-07-31) — what the UI shows is what runs:
     //
-    //   per-run override  >  project config.yaml  >  UI role slot  >  preset
+    //   per-run override  >  UI role slot  >  project config.yaml  >  preset
+    //                        (project Model page when "Use default" is
+    //                         unchecked, otherwise the global Model page —
+    //                         resolveEffectiveCliConfig picks between them)
     //
-    // A project's own step_models entry is a current, deliberate choice and is
-    // more specific than a role slot, so it wins. A PRESET's entry is a shipped
-    // default from before models were configurable in the UI; letting it win
-    // meant picking a model in the UI silently did nothing on every step a
-    // preset happened to name (`reviewing: 'sonnet'` overrode an explicit Opus
-    // selection, with no signal anywhere). Presets are now the fallback they
-    // were always meant to be — they still cover a project nobody has
+    // config.yaml is a FALLBACK for what the UI has not configured, not an
+    // override of it. It previously outranked the role slots, which meant a
+    // model chosen in the UI silently did nothing on any step config.yaml
+    // happened to name, and the agent card showed the config.yaml value with no
+    // hint that the picker had been ignored. A per-run override still wins over
+    // everything: it is an explicit choice made for this run.
+    //
+    // A PRESET entry stays last — it is a shipped default from before models
+    // were configurable at all, and still covers a project nobody has
     // configured, including mid-reconfig when a slot is momentarily unset.
     //
     // Kept RAW here — each entry is narrowed to the agent's own CLI inside the
     // loop below, since a step can carry a per-CLI map.
-    const stepModelEntry = (wf.stepModelOverrides && wf.stepModelOverrides[resolvedStep])
-      || (config.projectStepModels && config.projectStepModels[resolvedStep])
-      || null;
+    const runModelEntry = (wf.stepModelOverrides && wf.stepModelOverrides[resolvedStep]) || null;
+    const stepModelEntry = (config.projectStepModels && config.projectStepModels[resolvedStep]) || null;
     const presetModelEntry = (config.presetStepModels && config.presetStepModels[resolvedStep]) || null;
     // Effort level for the agent's reasoning depth. Valid values: low, medium,
     // high (default), xhigh, max. Configure via `step_efforts: {
@@ -1787,9 +1786,8 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     // for a global default. The token vocabulary is shared by all three CLIs,
     // so a bare value applies to whichever one the step's agents land on. See
     // docs/experiments/prd-009-orchestration-model-matrix.md.
-    const stepEffortEntry = (wf.stepEffortOverrides && wf.stepEffortOverrides[resolvedStep])
-      || (config.projectStepEfforts && config.projectStepEfforts[resolvedStep])
-      || null;
+    const runEffortEntry = (wf.stepEffortOverrides && wf.stepEffortOverrides[resolvedStep]) || null;
+    const stepEffortEntry = (config.projectStepEfforts && config.projectStepEfforts[resolvedStep]) || null;
     const presetEffortEntry = (config.presetStepEfforts && config.presetStepEfforts[resolvedStep]) || null;
 
     for (const agent of agents) {
@@ -1833,22 +1831,24 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       // top for EVERY CLI, not just claude.
       const launch = resolveAgentLaunchSettings(agent.role, wf, config.cli);
       const agentCli = launch.cli;
+      const runModel = resolveStepModelForCli(runModelEntry, agentCli);
+      const runEffort = resolveStepEffortForCli(runEffortEntry, agentCli);
       const stepModel = resolveStepModelForCli(stepModelEntry, agentCli);
       const stepEffort = resolveStepEffortForCli(stepEffortEntry, agentCli);
       const presetModel = resolveStepModelForCli(presetModelEntry, agentCli);
       const presetEffort = resolveStepEffortForCli(presetEffortEntry, agentCli);
-      // Model chain: project step override > cli role slot > preset step model >
-      // agent_defaults. The agent_defaults tail is claude-only — its `model`
-      // holds a claude short name, so it can't stand in for a codex slug or an
-      // opencode id.
-      const modelShortName = stepModel || launch.model || presetModel
+      // Model chain: per-run override > UI role slot > project config.yaml >
+      // preset > agent_defaults. The agent_defaults tail is claude-only — its
+      // `model` holds a claude short name, so it can't stand in for a codex
+      // slug or an opencode id.
+      const modelShortName = runModel || launch.model || stepModel || presetModel
         || (agentCli === 'claude' ? (config.agent_defaults.model || 'opus') : null);
       // Effort chain: same shape, and agent_defaults.effort IS CLI-agnostic.
-      const effortLevel = stepEffort || launch.effort || presetEffort
+      const effortLevel = runEffort || launch.effort || stepEffort || presetEffort
         || (config.agent_defaults && config.agent_defaults.effort) || null;
       // Which layer decided, so the card can say so instead of showing a value
       // with no explanation of why the Agents-tab pick didn't apply.
-      const modelSource = stepModel ? 'step' : launch.model ? 'role' : presetModel ? 'preset' : 'default';
+      const modelSource = runModel ? 'run' : launch.model ? 'role' : stepModel ? 'step' : presetModel ? 'preset' : 'default';
       // One builder for all three CLIs — drops a model that doesn't fit the CLI
       // and an effort that isn't a plain token, so a mistyped step_models entry
       // can never reach a shell command line.

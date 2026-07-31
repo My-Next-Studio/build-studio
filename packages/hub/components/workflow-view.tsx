@@ -28,7 +28,7 @@ interface WorkflowAgent {
   /** Which layer chose `model`: 'step' (project config.yaml / per-run override),
    *  'role' (Agents-tab slot), 'preset' (shipped default), 'default'
    *  (agent_defaults). Absent on runs launched before this was recorded. */
-  modelSource?: 'step' | 'role' | 'preset' | 'default'
+  modelSource?: 'run' | 'role' | 'step' | 'preset' | 'default'
   /** Which CLI this agent launched on (server-set; absent in pre-multi-CLI runs — derive from model then). */
   cli?: AgentCli
   /** OpenCode only (FU-1): the ACTUAL serving model resolved from the session export
@@ -2896,11 +2896,12 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
                 isOpencode && agent.actualModel ? `actual: ${agent.actualModel} · configured: ${agent.model}` : `model: ${agent.model || 'default'}`,
                 // Which layer chose it. Without this a preset or project step
                 // model reads as the Agents-tab picker being broken.
-                agent.modelSource === 'step' ? 'set by step_models in this project\u2019s config.yaml'
-                  : agent.modelSource === 'role' ? 'set by the role slot on the Agents tab'
-                    : agent.modelSource === 'preset' ? 'set by the workflow preset (no role slot or step_models entry applies)'
-                      : agent.modelSource === 'default' ? 'agent_defaults fallback \u2014 nothing more specific was set'
-                        : null,
+                agent.modelSource === 'run' ? 'overridden for this run only'
+                  : agent.modelSource === 'role' ? 'set by the role slot on the Model page'
+                    : agent.modelSource === 'step' ? 'fallback: step_models in this project\u2019s config.yaml (no role slot is set)'
+                      : agent.modelSource === 'preset' ? 'fallback: the workflow preset (nothing more specific is set)'
+                        : agent.modelSource === 'default' ? 'agent_defaults fallback \u2014 nothing more specific was set'
+                          : null,
               ].filter(Boolean).join(' \u00b7 ')}
               style={{
                 fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 600,

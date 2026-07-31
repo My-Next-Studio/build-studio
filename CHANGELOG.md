@@ -63,6 +63,41 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
 
 ### Changed
 
+- **What the Model page shows is now what runs.** Precedence is reversed so the
+  UI outranks `config.yaml`:
+
+  ```
+  per-run override  >  UI role slot  >  project config.yaml  >  preset  >  agent_defaults
+                       (project Model page when "Use default" is unchecked,
+                        otherwise the global Model page)
+  ```
+
+  `config.yaml` `step_models` / `step_efforts` used to outrank the role slots,
+  so choosing a model in the UI silently did nothing on any step `config.yaml`
+  named — and the agent card showed the `config.yaml` value with no hint the
+  picker had been ignored. They are now a **fallback for what the UI has not
+  configured**. A per-run override still wins over everything.
+
+  **This will change how your steps run.** Because the global Model page always
+  carries `default_model` and `default_effort`, and an empty per-role slot falls
+  back to those, a project's `step_models` / `step_efforts` now only apply when
+  the corresponding slots are *all* empty. A project running a deliberate
+  per-step configuration — e.g. `task_execution: opus[1m]` at effort `xhigh` for
+  whole-PRD monolithic work — will now get the role slot's model and effort
+  instead. **Move that setting to the Model page** (uncheck "Use default" on the
+  project and set the role slot) to keep it. `modelSource` on the agent card
+  names the deciding layer in every case, so a value you did not expect says
+  where it came from.
+
+- **A global Model page change now reaches running project-servers.** The hub
+  writes `~/.build-studio/config.json` and nothing told the servers, so each one
+  kept the CLI slots it resolved at startup. Switching the global developer CLI
+  and immediately starting a run launched agents on the **old** CLI while the UI
+  showed the new one — the setting was right, the running server's copy was
+  stale. Project-level edits never showed this, because saving them calls
+  `reloadConfig()` directly; only the global path had no route back. The global
+  file is now watched alongside `config.yaml` and `local.json`.
+
 - **Finished agents are now closed instead of left running.** A CLI agent does
   not exit when it finishes; it sits at its prompt holding 100-200 MB
   indefinitely. Across a multi-round run this becomes the dominant memory cost —
@@ -96,6 +131,14 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   was only ever recorded by the auto-advance tick, so the identical dead step
   produced no signal at all when auto-advance was off. It is now derived
   directly, and reads the same to every consumer.
+
+- **A stalled task-execution agent is now timed out.** The 15-minute idle
+  watchdog read only `steps[currentStep].agents`, which is empty for
+  task-execution runs, so it never examined them. An agent that died on a
+  provider usage limit sat marked `running` with a shell prompt in its pane for
+  40 minutes past the timeout, reporting nothing wrong. It now sweeps agents in
+  both homes, and marks the step's copy and the task's copy together — marking
+  only one left the launch guard still seeing a running task.
 
 - **A killed tmux session no longer leaves a task-execution run stuck forever.**
   The stale-session sweep marked running agents as failed, but read only
@@ -140,8 +183,17 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
 the project-servers — the reaper, the memory guard and the stale-session sweep
 are all server-side.
 
-**In each managed project** — nothing to do. The two new config keys are
-optional and default to on:
+**In each managed project** — **check any project that sets `step_models` or
+`step_efforts` in `config.yaml`.** Those entries no longer outrank the Model
+page, so a per-step model or effort you rely on will be replaced by the role
+slot's value unless you move it to the Model page (uncheck "Use default" on the
+project, then set the role slot). To find them:
+
+```
+grep -l -E '^(step_models|step_efforts):' */.build-studio/config.yaml
+```
+
+The two new config keys are optional and default to on:
 
 ```yaml
 # config.yaml — both optional

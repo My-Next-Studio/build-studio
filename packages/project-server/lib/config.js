@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 const { resolvePreset, PRESETS } = require('./presets');
-const { VALID_CLIS, loadHubConfig, resolveEffectiveCliConfig } = require('@build-studio/shared/cli');
+const { VALID_CLIS, HUB_CONFIG_PATH, loadHubConfig, resolveEffectiveCliConfig } = require('@build-studio/shared/cli');
 
 // Per-project agent-CLI defaults. `default` applies to every role NOT covered
 // by the per-run developerCli/reviewerCli knobs (kickoff, onboarding, review
@@ -342,7 +342,6 @@ function reloadConfig(config) {
 function watchConfig(config, onReload) {
   const configPath = path.join(config.projectRoot, '.build-studio', 'config.yaml');
   const localPath = path.join(config.projectRoot, '.build-studio', 'local.json');
-  if (!fs.existsSync(configPath)) return () => {};
 
   let debounceTimer = null;
 
@@ -351,7 +350,8 @@ function watchConfig(config, onReload) {
     debounceTimer = setTimeout(() => {
       try {
         reloadConfig(config);
-        console.log(`[config] hot-reloaded ${configPath} — step_strategies=${JSON.stringify(config.step_strategies || {})}, step_models keys=[${Object.keys(config.step_models || {}).join(',')}]`);
+        const c = config.cli || {};
+        console.log(`[config] hot-reloaded — cli default=${c.default}/${c.default_model} developer=${c.developer_cli}/${c.developer_model} reviewer=${c.reviewer_cli}/${c.reviewer_model} use_global=${c.use_global === true}, step_strategies=${JSON.stringify(config.step_strategies || {})}, step_models keys=[${Object.keys(config.step_models || {}).join(',')}]`);
         if (typeof onReload === 'function') {
           try { onReload(config); } catch (e) { console.error('[config] onReload hook error:', e.message); }
         }
@@ -361,10 +361,24 @@ function watchConfig(config, onReload) {
     }, 200);
   };
 
-  const watchers = [fs.watch(configPath, { persistent: false }, onChange)];
-  // local.json may not exist yet — watch the directory entry for it instead.
-  // fs.watch on a missing file throws, so guard it.
-  try { watchers.push(fs.watch(localPath, { persistent: false }, onChange)); } catch (_) {}
+  // Every file that feeds the effective config. fs.watch throws on a missing
+  // file, so each is guarded — a project may have no local.json yet, and a
+  // fresh install may have no global config.
+  //
+  // HUB_CONFIG_PATH is the one that used to be missing, and its absence was
+  // silent in the worst way: the hub's global Model tab writes it, but nothing
+  // told a running project-server, so every server kept the CLI slots it
+  // resolved at startup. Changing the global developer CLI and immediately
+  // starting a run launched agents on the OLD CLI, with the UI showing the new
+  // one — the setting was right, the running server's copy of it was stale
+  // (fazon FAZ-196, 2026-07-31: switched to claude at 20:47 to dodge a codex
+  // usage limit, started a run at 20:48, and it launched on codex anyway).
+  // Project-level edits never showed this because their PUT calls
+  // reloadConfig() directly; only the global path had no route back.
+  const watchers = [];
+  for (const p of [configPath, localPath, HUB_CONFIG_PATH]) {
+    try { watchers.push(fs.watch(p, { persistent: false }, onChange)); } catch (_) {}
+  }
   return () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     for (const w of watchers) { try { w.close(); } catch (_) {} }
