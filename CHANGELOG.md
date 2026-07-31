@@ -21,6 +21,28 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-07-31 — Recover stuck agents, reap finished ones, and pause before thrashing
+
+### Fixed
+
+- **A project could go permanently unstartable because `GET /workflow` crashed.**
+  A fix planner is free to emit a numeric task id — the `WorkflowStep` type has
+  always declared `id?: number` — but the findings matcher called `.split()` and
+  `.includes()` on it. The `TypeError` took the whole endpoint down with a 500,
+  so the Workflow tab rendered nothing, the finished run could not be closed
+  out, and because it still held the project's single workflow slot, *every*
+  Start button in that project stayed blocked with no visible cause. The two
+  endpoints disagreeing was the only clue: `start-readiness` doesn't use the
+  matcher, so it kept correctly reporting "blocked" while the tab showed an
+  empty screen. Ids are coerced instead of assumed. Present since the initial
+  release; it needed a run whose planner happened to number its tasks.
+
+- **A blocked Start button now tells you why.** The tooltip was on the `disabled`
+  button itself, and Chromium dispatches no mouse events on a disabled element —
+  so the explanation appeared only on buttons that weren't blocked, which is
+  exactly backwards. It now lives on a wrapper, so hovering any blocked button
+  gives the reason.
+
 ## 2026-07-29 — Say why a run is stopped, and stop overruling the model picker
 
 ### Added

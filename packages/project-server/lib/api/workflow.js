@@ -2956,13 +2956,21 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     }
 
     // Status inference: in_progress if currentTask matches, done if completed
+    // Task and finding ids are not reliably strings: a fix planner may emit
+    // numeric task ids (the WorkflowStep type has always said `id?: number`),
+    // and the monolithic path copies them through verbatim. Calling .split /
+    // .includes on a number threw a TypeError out of GET /workflow, which took
+    // the whole endpoint down with a 500 — so the Workflow tab rendered nothing
+    // and the run could not be closed out, which in turn blocked every start in
+    // that project. Coerce rather than assume.
     function tailToken(id) {
-      const parts = id.split('-');
+      const parts = String(id == null ? '' : id).split('-');
       return parts[parts.length - 1];
     }
     function looseMatch(findingId, taskId) {
       const tail = tailToken(findingId);
-      return tail && taskId && taskId.includes(tail);
+      if (!tail || taskId == null) return false;
+      return String(taskId).includes(tail);
     }
 
     const currentTaskId = fe.currentTask && typeof fe.currentTask === 'object' ? fe.currentTask.id : null;

@@ -640,29 +640,41 @@ function StartRunButton({ state, busy, onStart }: {
   const tone = state.kind === 'busy' ? 'var(--orange)'
     : state.kind === 'tree' || state.kind === 'attention' ? 'var(--red)'
       : 'var(--accent)'
+  // Both red states read "Blocked". The earlier per-state wording ("Finish") put
+  // a project-level instruction on a per-item row, so it read as "finish THIS
+  // item" when the blocker was an unrelated run holding the slot. The reason
+  // belongs in the tooltip; the button only says whether you can start.
   const label = busy ? '…'
     : state.kind === 'busy' ? 'Busy'
-      : state.kind === 'attention' ? (state.detail.startsWith('Run finished') ? 'Finish' : 'Halted')
-        : state.kind === 'tree' ? 'Blocked'
-          : RUN_LABEL[state.run]
-  const title = state.kind === 'busy' ? `Blocked — ${state.detail}. Clears when that run finishes.`
-    : state.kind === 'attention' ? `${state.detail} — ${state.action}`
+      : state.kind === 'attention' || state.kind === 'tree' ? 'Blocked'
+        : RUN_LABEL[state.run]
+  const title = state.kind === 'busy' ? `Blocked — ${state.detail}. Clears on its own when that run finishes.`
+    : state.kind === 'attention' ? `Blocked — ${state.detail}. ${state.action}`
       : state.kind === 'tree' ? `Blocked — ${state.detail}.`
         : `Start the ${state.run} workflow`
+  // The title lives on a WRAPPER, not on the button. A disabled button dispatches
+  // no mouse events in Chromium, so a `title` on it never renders a tooltip —
+  // which meant the explanation appeared only on the enabled button and silently
+  // vanished on every blocked one, i.e. exactly when it was needed. The wrapper
+  // is never disabled, so it always gets the hover.
   return (
-    <button
-      onClick={(e) => { e.stopPropagation(); if (state.kind === 'ready' && !busy) onStart(state.run) }}
-      disabled={blocked || busy}
-      title={title}
-      style={{
-        ...base,
-        cursor: blocked || busy ? 'not-allowed' : 'pointer',
-        border: `1px solid ${tone}`,
-        background: blocked ? 'transparent' : tone,
-        color: blocked ? tone : '#0d0f14',
-        opacity: blocked ? 0.75 : 1,
-      }}
-    >{label}</button>
+    <span title={title} style={{ display: 'inline-flex' }}>
+      <button
+        onClick={(e) => { e.stopPropagation(); if (state.kind === 'ready' && !busy) onStart(state.run) }}
+        disabled={blocked || busy}
+        aria-label={blocked ? `${label}: ${title}` : title}
+        style={{
+          ...base,
+          cursor: blocked || busy ? 'not-allowed' : 'pointer',
+          border: `1px solid ${tone}`,
+          background: blocked ? 'transparent' : tone,
+          color: blocked ? tone : '#0d0f14',
+          opacity: blocked ? 0.75 : 1,
+          // Let the wrapper receive the hover that the disabled button cannot.
+          pointerEvents: blocked || busy ? 'none' : 'auto',
+        }}
+      >{label}</button>
+    </span>
   )
 }
 
