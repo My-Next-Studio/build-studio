@@ -386,15 +386,24 @@ function startServer(projectRoot, opts = {}) {
     if (activeWf && activeWf.currentStep !== 'completed' && activeWf.sessionName) {
       let changed = false;
 
-      // Check for dead tmux session
+      // Check for dead tmux session.
+      //
+      // Sweep BOTH agent homes. Task-execution agents live on
+      // wf.taskExecution.taskStates[i].agents and are only mirrored onto
+      // steps.task_execution.agents by updateStepAgents — which the normal
+      // launch path does not call, so the mirror is routinely empty while a
+      // task is running. Reading only steps[*].agents therefore missed exactly
+      // the case this check exists for: a machine restart kills the tmux
+      // session, and a task_execution agent stays 'running' forever with no
+      // process behind it (deskrhythm DR-092, 2026-07-29 — the run sat inert
+      // for hours, needsAttention stayed null, and the project could not start
+      // anything else because the slot was still held).
       if (!tmuxOps.hasSession(activeWf.sessionName)) {
-        for (const step of Object.values(activeWf.steps || {})) {
-          for (const agent of step.agents || []) {
-            if (agent.status === 'running') {
-              agent.status = 'error';
-              agent.error = 'Session lost';
-              changed = true;
-            }
+        for (const agent of agentRecovery.allAgentsOf(activeWf)) {
+          if (agent.status === 'running') {
+            agent.status = 'error';
+            agent.error = 'Session lost — the tmux session is gone (machine restart, or the session was killed). Relaunch the step.';
+            changed = true;
           }
         }
       }

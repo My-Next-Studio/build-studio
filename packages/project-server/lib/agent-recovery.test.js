@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts, inResumeGrace } = require('./agent-recovery');
+const { isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts, inResumeGrace, allAgentsOf } = require('./agent-recovery');
 
 const MIN2 = 2 * 60 * 1000;
 
@@ -68,4 +68,52 @@ test('hasResumeArtifacts: only claude agents (session id + script) qualify', () 
   assert.equal(hasResumeArtifacts({ cliSessionId: 'u' }), false);      // no script
   assert.equal(hasResumeArtifacts({}), false);
   assert.equal(hasResumeArtifacts(null), false);
+});
+
+// --- allAgentsOf (2026-07-31) ------------------------------------------------
+//
+// The stale-session sweep in server.js reads every agent through this. It used
+// to read only steps[*].agents, which silently skipped task_execution runs.
+
+test('allAgentsOf finds agents in both homes', () => {
+  const wf = {
+    steps: { code_review: { agents: [{ role: 'CR' }] }, merge_to_main: {} },
+    taskExecution: { taskStates: { 0: { agents: [{ role: 'iOS Dev' }] }, 1: { agents: [] } } },
+  };
+  assert.deepEqual(allAgentsOf(wf).map((a) => a.role), ['CR', 'iOS Dev']);
+});
+
+test('allAgentsOf finds task agents when the step mirror is empty', () => {
+  // deskrhythm DR-092: the shape that made a killed session invisible.
+  const wf = {
+    steps: { task_execution: { status: 'running', agents: [] } },
+    taskExecution: { taskStates: { 0: { agents: [{ role: 'iOS Dev', status: 'running' }] } } },
+  };
+  assert.equal(allAgentsOf(wf).length, 1);
+});
+
+test('allAgentsOf yields live objects, so a sweep can mark them', () => {
+  const wf = { steps: {}, taskExecution: { taskStates: { 0: { agents: [{ role: 'X', status: 'running' }] } } } };
+  for (const a of allAgentsOf(wf)) a.status = 'error';
+  assert.equal(wf.taskExecution.taskStates[0].agents[0].status, 'error');
+});
+
+test('allAgentsOf yields both views when the mirror is populated', () => {
+  // updateStepAgents mirrors a shallow COPY, so both must be marked or the two
+  // views disagree about whether the agent is alive.
+  const src = { role: 'X', status: 'running' };
+  const wf = {
+    steps: { task_execution: { agents: [{ ...src, taskIndex: 0 }] } },
+    taskExecution: { taskStates: { 0: { agents: [src] } } },
+  };
+  const all = allAgentsOf(wf);
+  assert.equal(all.length, 2);
+  for (const a of all) a.status = 'error';
+  assert.equal(wf.steps.task_execution.agents[0].status, 'error');
+  assert.equal(wf.taskExecution.taskStates[0].agents[0].status, 'error');
+});
+
+test('allAgentsOf tolerates an empty or absent workflow', () => {
+  assert.deepEqual(allAgentsOf(null), []);
+  assert.deepEqual(allAgentsOf({}), []);
 });

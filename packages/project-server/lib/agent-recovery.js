@@ -108,4 +108,35 @@ function inResumeGrace(agent, nowMs, graceMs = 3 * 60 * 1000) {
   return nowMs - t < graceMs;
 }
 
-module.exports = { isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts, inResumeGrace };
+/**
+ * Every agent record in a workflow, from BOTH of the places they live.
+ *
+ * Step agents sit on `wf.steps[key].agents`. Task-execution agents sit on
+ * `wf.taskExecution.taskStates[i].agents`, and are only *mirrored* onto
+ * `steps.task_execution.agents` by `updateStepAgents` — which the normal launch
+ * path never calls. So the mirror is routinely empty while a task is running,
+ * and any sweep reading only `steps[*].agents` skips every agent of a
+ * task_execution run. That is how a killed tmux session left deskrhythm DR-092
+ * 'running' with no process behind it (2026-07-29).
+ *
+ * Yields the live objects, so mutating one mutates the workflow. The mirror is
+ * a shallow copy rather than the same object, so both views are yielded on
+ * purpose — marking both keeps them consistent.
+ */
+function allAgentsOf(wf) {
+  const out = [];
+  if (!wf) return out;
+  for (const step of Object.values(wf.steps || {})) {
+    for (const a of step.agents || []) out.push(a);
+  }
+  const states = (wf.taskExecution && wf.taskExecution.taskStates) || {};
+  for (const ts of Object.values(states)) {
+    for (const a of (ts && ts.agents) || []) out.push(a);
+  }
+  return out;
+}
+
+module.exports = {
+  isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts,
+  inResumeGrace, allAgentsOf,
+};

@@ -34,6 +34,23 @@ function currentStepOf(wf) {
 }
 
 /**
+ * The agents actually on the current step.
+ *
+ * `steps.task_execution.agents` is only a mirror of
+ * `taskExecution.taskStates[i].agents`, refreshed by updateStepAgents — which
+ * the normal launch path does not call, so the mirror is routinely empty while
+ * a task is running. Fall back to the source rather than concluding a step has
+ * no agents.
+ */
+function agentsOfStep(wf, stepKey, step) {
+  const mirrored = (step && step.agents) || [];
+  if (mirrored.length > 0) return mirrored;
+  if (stepKey !== 'task_execution') return [];
+  const states = (wf.taskExecution && wf.taskExecution.taskStates) || {};
+  return Object.values(states).flatMap((ts) => (ts && ts.agents) || []);
+}
+
+/**
  * @param {object|null} wf  workflow state, or null when no run is active
  * @returns {null|{reason:string, step:string|null, title:string, detail:string, action:string}}
  */
@@ -80,6 +97,25 @@ function deriveNeedsAttention(wf) {
         step: stepKey,
         title: `${stepKey} cannot advance`,
         detail: String(step.autoAdvanceError),
+        action: 'Fix the cause, then relaunch the step — or override if the halt is not warranted.',
+      };
+    }
+
+    // 3b. Every agent on the step died with nothing to advance on. The
+    //     auto-advance tick already stashes this as autoAdvanceError — but only
+    //     when auto-advance is ON. With it off, the identical dead step
+    //     produced no signal at all, so derive it here too and let both look
+    //     the same to every consumer.
+    const agents = agentsOfStep(wf, stepKey, step);
+    if (agents.length > 0 && agents.every((a) => a.status === 'error' && !a.feedback)) {
+      const firstError = agents.map((a) => a.error).find(Boolean);
+      return {
+        reason: 'dead_step',
+        step: stepKey,
+        title: `${stepKey} cannot advance`,
+        detail: firstError
+          ? `All ${agents.length} agent(s) on this step failed. First error: ${firstError}`
+          : `All ${agents.length} agent(s) on this step failed with no output.`,
         action: 'Fix the cause, then relaunch the step — or override if the halt is not warranted.',
       };
     }

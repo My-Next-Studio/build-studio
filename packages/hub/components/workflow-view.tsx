@@ -48,6 +48,15 @@ interface NeedsAttention {
   action: string
 }
 
+/** An agent whose final report is sitting in its CLI transcript, unreported. */
+interface RecoverableAgent {
+  role: string
+  window?: string
+  status?: string
+  chars: number
+  preview: string
+}
+
 interface WorkflowStep {
   status: string
   error?: string
@@ -209,6 +218,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // project-server/lib/needs-attention.js. One signal covering every halt
   // (dead step, blocked guardrail, human gate, round cap, finished-but-open).
   const [needsAttention, setNeedsAttention] = useState<NeedsAttention | null>(null)
+  const [recoverable, setRecoverable] = useState<RecoverableAgent[]>([])
+  const [recovering, setRecovering] = useState<string | null>(null)
   const [findings, setFindings] = useState<Finding[]>([])
   const [findingOverrides, setFindingOverrides] = useState<Record<string, Finding['status']>>({})
   const [projectWorkflowSteps, setProjectWorkflowSteps] = useState<Record<string, string[]> | null>(null)
@@ -281,6 +292,18 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     setWf(data.workflow || null)
     setPathologySignals(data.pathologySignals || null)
     setNeedsAttention(data.needsAttention || null)
+    // An agent can finish its work and end its turn without ever POSTing its
+    // report — the workflow then waits on output that already exists in the
+    // CLI transcript on disk. Ask whether any of that is sitting there, so the
+    // halt banner can offer to deliver it instead of only offering a relaunch,
+    // which would throw the work away and re-derive it.
+    if (data.needsAttention) {
+      api.get('/workflow/recoverable')
+        .then((r: { recoverable?: RecoverableAgent[] }) => setRecoverable(r.recoverable || []))
+        .catch(() => setRecoverable([]))
+    } else {
+      setRecoverable([])
+    }
     setFindings(Array.isArray(data.findings) ? data.findings : [])
     // projectWorkflowSteps is the resolved per-project workflow step list
     // (after preset + overrides). Used below to filter the timeline so that
@@ -1126,6 +1149,42 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
               {needsAttention.detail}
               <br />
               <span style={{ color: 'var(--muted)' }}>{needsAttention.action}</span>
+              {/* The agent finished but never reported — its output is on disk.
+                  Offered above the relaunch because relaunching discards work
+                  that already exists, and because a wedged agent cannot be
+                  nudged into sending it. */}
+              {recoverable.length > 0 && (
+                <span style={{ display: 'block', marginTop: 8 }}>
+                  <span style={{ color: 'var(--text)' }}>
+                    {recoverable.length === 1
+                      ? `${recoverable[0].role} finished but never reported — its ${recoverable[0].chars.toLocaleString()}-character report is in its transcript.`
+                      : `${recoverable.length} agents finished but never reported — their output is in their transcripts.`}
+                  </span>
+                  <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                    {recoverable.map(r => (
+                      <button
+                        key={r.role}
+                        title={r.preview}
+                        disabled={recovering !== null}
+                        onClick={async () => {
+                          setRecovering(r.role)
+                          try {
+                            await api.post('/workflow/recover', { role: r.role })
+                            await load()
+                          } catch (e) {
+                            alert(`Could not recover ${r.role}: ${e instanceof Error ? e.message : String(e)}`)
+                          } finally {
+                            setRecovering(null)
+                          }
+                        }}
+                        className="wf-btn primary"
+                      >
+                        {recovering === r.role ? 'Recovering…' : `↩ Recover ${r.role}'s report`}
+                      </button>
+                    ))}
+                  </span>
+                </span>
+              )}
             </span>
           </div>
         )}

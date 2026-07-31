@@ -23,7 +23,96 @@ that move underneath you without your having edited anything.
 
 ## 2026-07-31 — Recover stuck agents, reap finished ones, and pause before thrashing
 
+Four separate stalls this week traced back to the same shape: workflow state
+asserting an agent was `running` when nothing was behind it, or an agent
+finishing without telling anyone. Each was recoverable, and in each case the
+obvious remedy — relaunch the step — was the one that destroyed the work.
+
+### Added
+
+- **Recover an agent's report from its transcript.** An agent can complete its
+  work — write the files, make the commit, print the full report — and then end
+  its turn without running the feedback POST. The workflow then waits forever on
+  output that already exists: the Claude CLI writes every turn to a JSONL
+  transcript, and Build Studio already records each agent's `cliSessionId`.
+
+  When a run halts, the banner now offers **↩ Recover \<role\>'s report** if that
+  output is sitting on disk, and delivers it verbatim as the feedback the agent
+  failed to send — full fidelity, not a scrape of the reflowed terminal. It is
+  routed through the normal feedback endpoint, so format gates, telemetry and
+  auto-advance all run unchanged; recovery is not a second, weaker path into
+  workflow state.
+
+  This beats nudging the pane, which is what one would try first: under memory
+  pressure the process stops accepting input altogether, so a nudge cannot land,
+  while the transcript is unaffected. Two agents were recovered this way after
+  being confirmed unreachable. New: `GET /workflow/recoverable`,
+  `POST /workflow/recover`.
+
+- **A memory guard before each fan-out.** Agents are not launched into a machine
+  with no room for them. The budget scales with the batch — roughly 200 MB per
+  agent plus 1 GB headroom — so a one-agent bugfix is not blocked by a ceiling
+  that exists for six-agent review fan-outs.
+
+  It deliberately does *not* gate on swap used, the obvious signal: swap
+  occupancy is a **lagging** measure. Measured at 89% on an idle machine with
+  1.5 GB of agents running, it would have deferred every launch on a healthy
+  box. Available memory (free + inactive + speculative + purgeable, as Activity
+  Monitor counts it) is current rather than historical. Fails open — memory that
+  cannot be read never blocks a launch, so non-macOS hosts are unaffected.
+
+### Changed
+
+- **Finished agents are now closed instead of left running.** A CLI agent does
+  not exit when it finishes; it sits at its prompt holding 100-200 MB
+  indefinitely. Across a multi-round run this becomes the dominant memory cost —
+  one 4-round review left 21 windows from rounds 1-3 resident, about 4 GB, long
+  after the workflow had stopped referencing them (each round overwrites
+  `steps[*].agents`, so nothing pointed at the old ones any more, and no sweeper
+  could have found them either).
+
+  An agent's tmux window is now closed the moment its feedback is recorded —
+  which is also *before* the next round overwrites the record. On a 16 GB
+  machine this is the difference between finishing a review and swapping hard
+  enough that agents stop responding to input.
+
+  **Its logs are not lost.** `pipe-pane` has always streamed each pane to
+  `tmp/.logs/<window>-<workflow-id>.log`, and View Log now falls back to that
+  file when the window is gone — so agent logs now outlive the session, which
+  they previously did not. Set `reap_finished_agents: false` in a project's
+  config to keep the old behaviour.
+
+- **A launch that declines to do anything now says so.** The task-execution
+  guard that refuses to start a second agent while one is in flight answered a
+  bare `200`, indistinguishable from a successful launch. Auto-advance counted
+  it as success and re-fired every 8 seconds forever, and a relaunch that hit it
+  reported success while doing nothing. It now returns a `declined` reason,
+  which auto-advance treats like any other refusal — surfacing it on the step
+  after a few attempts instead of spinning silently.
+
 ### Fixed
+
+- **A halted step is reported even with auto-advance off.** "Every agent died"
+  was only ever recorded by the auto-advance tick, so the identical dead step
+  produced no signal at all when auto-advance was off. It is now derived
+  directly, and reads the same to every consumer.
+
+- **A killed tmux session no longer leaves a task-execution run stuck forever.**
+  The stale-session sweep marked running agents as failed, but read only
+  `steps[*].agents` — and task-execution agents live on
+  `taskExecution.taskStates[i].agents`, mirrored onto the step only by a
+  function the normal launch path never calls. So the mirror is routinely empty
+  while a task runs, and the sweep skipped exactly the case it existed for.
+  After a machine restart the run sat inert with an agent marked `running` and
+  no process behind it, reporting nothing wrong, while the project's workflow
+  slot stayed held so nothing else could start.
+
+- **Relaunching a task-execution step now works.** It reset the step but not
+  `taskExecution`, leaving every in-flight task still marked `running` — so the
+  launch guard declined and the relaunch silently did nothing, ending with the
+  step `pending`, the task `running`, and no process anywhere. In-flight tasks
+  are now returned to pending (finished ones stay done), and `completedTasks` is
+  no longer discarded by the reset.
 
 - **A project could go permanently unstartable because `GET /workflow` crashed.**
   A fix planner is free to emit a numeric task id — the `WorkflowStep` type has
@@ -42,6 +131,50 @@ that move underneath you without your having edited anything.
   so the explanation appeared only on buttons that weren't blocked, which is
   exactly backwards. It now lives on a wrapper, so hovering any blocked button
   gives the reason.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both changed, so a full inject, not
+`--sync-only`: `cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`. Restart the app, and restart
+the project-servers — the reaper, the memory guard and the stale-session sweep
+are all server-side.
+
+**In each managed project** — nothing to do. The two new config keys are
+optional and default to on:
+
+```yaml
+# config.yaml — both optional
+reap_finished_agents: true    # false keeps finished agent windows open
+memory_guard:
+  enabled: true
+  per_agent_mb: 200           # working-set estimate per agent
+  headroom_mb: 1024           # left for the app, servers and OS
+```
+
+### Known issues
+
+- Auto-advance is still implemented twice, client-side and server-side. Both
+  now carry the dead-step guard, but a fix to one still has to be mirrored by
+  hand into the other.
+
+### Notes for forks
+
+- **Agents live in two places.** Step agents are on `steps[key].agents`;
+  task-execution agents are on `taskExecution.taskStates[i].agents` and only
+  *mirrored* onto the step by `updateStepAgents`, which the normal launch path
+  does not call. Any sweep over "all agents" must read both, or it will silently
+  skip every task-execution run — use `agentRecovery.allAgentsOf(wf)`. The
+  mirror is a shallow copy, so both views need marking to stay consistent.
+
+- **Reaping is hooked to feedback, not to a timer.** That is deliberate: a
+  periodic sweeper cannot find agents from earlier rounds, because each round
+  overwrites `steps[*].agents` and the records are gone. The moment feedback is
+  recorded is the last moment the agent is still addressable.
+
+- **The memory guard fails open by design.** A guard that blocks work because it
+  could not take a measurement is worse than no guard. If you extend it, keep
+  unreadable input returning "allow".
 
 ## 2026-07-29 — Say why a run is stopped, and stop overruling the model picker
 

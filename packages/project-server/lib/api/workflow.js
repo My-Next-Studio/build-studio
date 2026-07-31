@@ -7,6 +7,8 @@ const { stripAnsi } = require('../tmux');
 const opencodeTelemetry = require('../opencode-telemetry');
 const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
 const { deriveNeedsAttention } = require('../needs-attention');
+const memoryGuard = require('../memory-guard');
+const transcriptRecovery = require('../transcript-recovery');
 
 // Common instruction fragments injected into all agent prompts.
 // Placeholders {{CONTEXT_BUDGET}} and {{SOFT_THRESHOLD}} are replaced
@@ -1726,6 +1728,32 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       return failed;
     }
 
+    // Pre-launch guard: don't fan out into a machine with no room for it.
+    // See lib/memory-guard.js — agents that thrash stop accepting input, so
+    // refusing here (one Relaunch to recover) beats launching and wedging.
+    // The budget scales with this batch, so a one-agent bugfix is not blocked
+    // by a ceiling that exists for six-agent review fan-outs. Fails open:
+    // memory we cannot read never blocks a launch.
+    const memCfg = config.memory_guard || {};
+    if (memCfg.enabled !== false) {
+      let mem = null;
+      try {
+        mem = memoryGuard.parseAvailableMemory(
+          execFileSync('vm_stat', { encoding: 'utf8' }),
+          Number(execFileSync('sysctl', ['-n', 'hw.memsize'], { encoding: 'utf8' }).trim()),
+        );
+      } catch (_) { mem = null; }
+      const verdict = memoryGuard.evaluate(mem, agents.length, {
+        perAgentMb: memCfg.per_agent_mb,
+        headroomMb: memCfg.headroom_mb,
+      });
+      if (verdict.defer) {
+        console.error(`[workflow] ${verdict.reason}`);
+        return agents.map(a => ({ ...a, status: 'error', error: verdict.reason }));
+      }
+      if (mem) console.log(`[workflow] memory check: ${mem.availableMb} MB available (${mem.pct}%), need ~${verdict.neededMb} MB for ${agents.length} agent(s)`);
+    }
+
     let sessionCreated = tmuxOps.hasSession(wf.sessionName);
     const results = [];
     const dashboardPort = config.port;
@@ -3382,6 +3410,8 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     }
     // FU-1: harvest the opencode events stream into tokenUsage + kick actual-model resolution.
     captureOpencodeTelemetry(wf, agent, (f) => (f.steps?.[wf.currentStep]?.agents || []).find(a => normalizeRole(a.role) === normalizeRole(role)));
+    // Telemetry is harvested from files, not the pane — safe to close it now.
+    reapAgentWindow(wf, agent);
     const feedbackEntry = { role, feedback, round: wf.round, step: wf.currentStep, at: new Date().toISOString() };
     wf.feedback.push(feedbackEntry);
 
@@ -3609,7 +3639,105 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     const wf = state.loadWorkflow();
     if (!wf || !window) return res.json({ log: '' });
     const target = `${wf.sessionName}:${window}`;
-    res.json({ log: stripAnsi(tmuxOps.capturePane(target, lines)) });
+    const live = stripAnsi(tmuxOps.capturePane(target, lines));
+    if (live && live.trim()) return res.json({ log: live, source: 'pane' });
+
+    // The pane is gone — reaped after the agent reported, or lost with the
+    // session. pipe-pane has been streaming it to disk all along, so the log
+    // outlives the window; read the tail of that instead of returning nothing.
+    try {
+      const file = path.join(logsPath, `${window}-${wf.id}.log`);
+      const text = fs.readFileSync(file, 'utf8');
+      const tail = stripAnsi(text).split('\n').slice(-lines).join('\n');
+      return res.json({ log: tail, source: 'file' });
+    } catch (_) {
+      return res.json({ log: live || '', source: 'pane' });
+    }
+  });
+
+  /** Agents on the current step, reading through the task_execution mirror. */
+  function agentsOfCurrentStep(wf) {
+    const step = (wf.steps || {})[wf.currentStep] || {};
+    const mirrored = step.agents || [];
+    if (mirrored.length > 0) return mirrored;
+    if (wf.currentStep !== 'task_execution') return [];
+    const states = (wf.taskExecution && wf.taskExecution.taskStates) || {};
+    return Object.values(states).flatMap((ts) => (ts && ts.agents) || []);
+  }
+
+  // --- Recovering an agent that finished but never reported ------------------
+  //
+  // See lib/transcript-recovery.js. An agent can complete its work and end its
+  // turn without running the feedback curl; the workflow then waits forever on
+  // output that already exists on disk. Nudging the pane is unreliable — under
+  // memory pressure the process stops accepting input at all — so read the
+  // report out of the CLI transcript instead.
+
+  router.get('/workflow/recoverable', (req, res) => {
+    const wf = state.loadWorkflow();
+    if (!wf) return res.json({ recoverable: [] });
+    const recoverable = [];
+    for (const agent of agentsOfCurrentStep(wf)) {
+      if (agent.feedback) continue;
+      const found = transcriptRecovery.recoverAgentOutput(agent);
+      if (!found) continue;
+      recoverable.push({
+        role: agent.role,
+        window: agent.window,
+        status: agent.status,
+        chars: found.chars,
+        preview: found.text.slice(0, 400),
+      });
+    }
+    res.json({ recoverable });
+  });
+
+  router.post('/workflow/recover', (req, res) => {
+    const { role } = req.body || {};
+    const wf = state.loadWorkflow();
+    if (!wf) return res.status(404).json({ error: 'no active workflow' });
+    if (!role) return res.status(400).json({ error: 'role is required' });
+
+    const agent = agentsOfCurrentStep(wf).find(a => normalizeRole(a.role) === normalizeRole(role));
+    if (!agent) return res.status(404).json({ error: `agent ${role} not found on ${wf.currentStep}` });
+    if (agent.feedback) return res.status(400).json({ error: `${role} has already reported` });
+
+    const found = transcriptRecovery.recoverAgentOutput(agent);
+    if (!found) {
+      return res.status(404).json({ error: `nothing to recover for ${role} — no final report in its transcript` });
+    }
+
+    // Deliver it exactly as the agent should have: through the feedback
+    // endpoint, so the format gates, telemetry capture, window reaping and
+    // auto-advance chain all run unchanged. Recovery must not become a second,
+    // weaker way into workflow state.
+    console.log(`[recover] delivering ${found.chars} chars for ${agent.role} from ${found.transcript}`);
+    const http = require('http');
+    const body = JSON.stringify({ role: agent.role, feedback: found.text });
+    const fwd = http.request({
+      hostname: 'localhost',
+      port: config.port,
+      path: '/api/workflow/feedback',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, (r) => {
+      let data = '';
+      r.on('data', c => data += c);
+      r.on('end', () => {
+        let parsed = {};
+        try { parsed = JSON.parse(data) || {}; } catch (_) {}
+        if (r.statusCode >= 400) {
+          return res.status(r.statusCode).json({
+            error: parsed.error || `feedback rejected (HTTP ${r.statusCode})`,
+            recovered: found.chars,
+          });
+        }
+        res.json({ ok: true, role: agent.role, chars: found.chars, transcript: found.transcript });
+      });
+    });
+    fwd.on('error', (e) => res.status(502).json({ error: `could not deliver recovered feedback: ${e.message}` }));
+    fwd.write(body);
+    fwd.end();
   });
 
   // --- Server-side auto-advance ---
@@ -3625,6 +3753,27 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
   // step change, or when auto-advance is re-enabled.
   let _aaReject = { step: null, count: 0, error: null };
   const AUTO_ADVANCE_MAX_REJECTS = 3;
+
+  /**
+   * Record an advance the server refused to act on, and pause once it keeps
+   * happening. Shared by the two ways a refusal arrives: a 4xx from a gate, and
+   * a 200 that declined to do anything (see `declined` below).
+   */
+  function noteAdvanceRefusal(stepKey, action, errMsg) {
+    _aaReject = _aaReject.step === stepKey
+      ? { step: stepKey, count: _aaReject.count + 1, error: errMsg }
+      : { step: stepKey, count: 1, error: errMsg };
+    console.warn(`[auto-advance] ${stepKey} ${action} refused (#${_aaReject.count}): ${errMsg}`);
+    if (_aaReject.count < AUTO_ADVANCE_MAX_REJECTS) return;
+    try {
+      const w = state.loadWorkflow();
+      if (w && w.steps && w.steps[stepKey]) {
+        w.steps[stepKey].autoAdvanceError = errMsg;
+        state.saveWorkflow(w);
+      }
+    } catch (_) {}
+    console.warn(`[auto-advance] paused on step=${stepKey} after ${_aaReject.count} refusals — needs manual attention (fix + re-enable, override, or skip)`);
+  }
 
   function startAutoAdvanceTimer() {
     if (_autoAdvanceTimer) return;
@@ -3802,21 +3951,18 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         // rejections for this step, and once over the ceiling stash the reason on the step
         // and stop retrying so it stops looping invisibly.
         if (advRes.statusCode >= 400) {
-          const errMsg = result.error || `HTTP ${advRes.statusCode}`;
-          _aaReject = _aaReject.step === wf.currentStep
-            ? { step: wf.currentStep, count: _aaReject.count + 1, error: errMsg }
-            : { step: wf.currentStep, count: 1, error: errMsg };
-          console.warn(`[auto-advance] ${wf.currentStep} ${action} rejected (#${_aaReject.count}): ${errMsg}`);
-          if (_aaReject.count >= AUTO_ADVANCE_MAX_REJECTS) {
-            try {
-              const w = state.loadWorkflow();
-              if (w && w.steps && w.steps[wf.currentStep]) {
-                w.steps[wf.currentStep].autoAdvanceError = errMsg;
-                state.saveWorkflow(w);
-              }
-            } catch (_) {}
-            console.warn(`[auto-advance] paused on step=${wf.currentStep} after ${_aaReject.count} rejections — needs manual attention (fix + re-enable, override, or skip)`);
-          }
+          noteAdvanceRefusal(wf.currentStep, action, result.error || `HTTP ${advRes.statusCode}`);
+          return;
+        }
+
+        // A 200 that did nothing. The task-execution launch guard answers this
+        // when a task is already in flight — correct for a concurrent tick, but
+        // it made a no-op indistinguishable from a real launch. A step-level
+        // relaunch that hit the guard therefore looked like it worked, while the
+        // tick re-fired every 8s forever with nothing to show for it
+        // (deskrhythm DR-092, 2026-07-29). Treat it like any other refusal.
+        if (result.declined) {
+          noteAdvanceRefusal(wf.currentStep, action, result.declined);
           return;
         }
 
@@ -3934,8 +4080,33 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
           }
         } catch {}
       }
-      // Reset step to pending so the step-specific handler re-launches it
+      // Reset step to pending so the step-specific handler re-launches it.
+      // completedTasks survives — it records which tasks already finished, not
+      // per-launch scratch state, and dropping it silently lost that history.
+      const priorCompleted = step.completedTasks;
       wf.steps[wf.currentStep] = { status: 'pending', agents: [] };
+      if (priorCompleted) wf.steps[wf.currentStep].completedTasks = priorCompleted;
+
+      // task_execution keeps the agent state that matters on wf.taskExecution;
+      // wf.steps.task_execution is only a mirror. Resetting the mirror alone
+      // left every in-flight task still marked 'running', so the launch guard
+      // below declined and the relaunch did nothing — leaving the run
+      // step:pending + task:running, inert, with no surviving process
+      // (deskrhythm DR-092, 2026-07-29). Return in-flight tasks to pending so
+      // the relaunch can actually take; finished tasks stay done.
+      if (wf.currentStep === 'task_execution' && wf.taskExecution) {
+        for (const ts of Object.values(wf.taskExecution.taskStates || {})) {
+          if (!['running', 'reviewing', 'fixing'].includes(ts.status)) continue;
+          for (const a of ts.agents || []) {
+            if (!a.window) continue;
+            try { tmuxOps.killWindowAndChildren(`${wf.sessionName}:${a.window}`); } catch (_) {}
+          }
+          ts.agents = [];
+          ts.status = 'pending';
+          ts.startedAt = null;
+          ts.completedAt = null;
+        }
+      }
       state.saveWorkflow(wf);
       // Re-enter the advance handler with 'launch' action
       req.body.action = 'launch';
@@ -4306,6 +4477,38 @@ Fix only the issues raised. Commit your changes.`,
     return taskState.agents;
   }
 
+  /**
+   * Close a finished agent's tmux window.
+   *
+   * A CLI agent does not exit when it finishes — it sits at its prompt holding
+   * 100-200 MB indefinitely. Across a multi-round run that becomes the dominant
+   * memory cost: a 4-round review left 21 windows from rounds 1-3 resident
+   * (~4 GB) long after the workflow had stopped referencing them, because each
+   * round overwrites `steps[*].agents` and nothing pointed at the old ones any
+   * more. On a 16 GB machine that is what pushes the box into swap, and a
+   * thrashing agent stops responding to input — which is how two agents ended
+   * up unreachable and unnudgeable on 2026-07-30/31.
+   *
+   * Once feedback is recorded the process has nothing left to contribute, so
+   * this is the moment to close it — and it is *before* the next round
+   * overwrites the record, which a periodic sweeper could no longer find.
+   *
+   * The log is not lost: pipePaneToLog has been streaming the pane to
+   * `logsPath/<window>-<wf.id>.log` all along, and GET /workflow/log falls back
+   * to that file once the window is gone.
+   */
+  function reapAgentWindow(wf, agent) {
+    if (config.reap_finished_agents === false) return;
+    if (!wf || !wf.sessionName || !agent || !agent.window || agent.reaped) return;
+    try {
+      tmuxOps.killWindowAndChildren(`${wf.sessionName}:${agent.window}`);
+      agent.reaped = true;
+    } catch (e) {
+      // Never let cleanup fail a feedback POST — the feedback is the valuable part.
+      console.warn(`[reap] could not close ${agent.window}: ${e.message}`);
+    }
+  }
+
   function updateStepAgents(wf) {
     const allAgents = [];
     for (const [idx, ts] of Object.entries(wf.taskExecution.taskStates)) {
@@ -4368,6 +4571,8 @@ Fix only the issues raised. Commit your changes.`,
       }
       // FU-1: harvest the opencode events stream into tokenUsage + kick actual-model resolution.
       captureOpencodeTelemetry(wf, agent, (f) => (f.taskExecution?.taskStates?.[String(taskIdx)]?.agents || []).find(a => normalizeRole(a.role) === normalizeRole(role)));
+      // Telemetry is harvested from files, not the pane — safe to close it now.
+      reapAgentWindow(wf, agent);
     }
 
     // Evidence sanity-check: agents sometimes claim to have committed files or
@@ -6451,11 +6656,20 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       if (action === 'launch') {
         if (!wf.taskExecution) initTaskExecution(wf);
         if (!wf.steps.task_execution) wf.steps.task_execution = { status: 'pending', agents: [], completedTasks: [] };
-        // Guard: don't launch if a task is already running
+        // Guard: don't launch if a task is already running.
+        //
+        // Say so. This used to answer a bare 200, which is indistinguishable
+        // from a successful launch — so a relaunch that the guard refused
+        // reported success and quietly did nothing, and auto-advance re-fired
+        // into it every 8s without ever surfacing anything.
         if (wf.taskExecution) {
-          const hasRunning = Object.values(wf.taskExecution.taskStates).some(ts => ts.status === 'running' || ts.status === 'reviewing' || ts.status === 'fixing');
-          if (hasRunning) {
-            return res.json({ workflow: wf });
+          const inFlight = Object.entries(wf.taskExecution.taskStates)
+            .filter(([, ts]) => ts.status === 'running' || ts.status === 'reviewing' || ts.status === 'fixing')
+            .map(([i]) => Number(i));
+          if (inFlight.length > 0) {
+            const declined = `task ${inFlight.join(', ')} still in flight — nothing launched. Relaunch the task itself to restart it.`;
+            console.warn(`[workflow] launch declined — ${declined}`);
+            return res.json({ workflow: wf, declined });
           }
         }
         wf.steps.task_execution.status = 'running';
@@ -6487,6 +6701,11 @@ ${EFFICIENCY_INSTRUCTIONS}`,
         ts.status = 'pending';
         ts.startedAt = null;
         ts.completedAt = null;
+        // Keep the step in step with the task. A relaunch after a step-level
+        // reset would otherwise leave the step 'pending' while a task runs
+        // under it — harmless today (launchNextTask overwrites it on
+        // completion) but it reads as a stalled step to anything watching.
+        if (wf.steps.task_execution) wf.steps.task_execution.status = 'running';
         launchTaskImpl(wf, tIdx);
         updateStepAgents(wf);
         state.saveWorkflow(wf);
