@@ -22,11 +22,25 @@ const CLI_DEFAULTS = {
   groups: {},
 };
 
+/**
+ * How many review rounds a PRD gets before the loop stops and asks.
+ *
+ * Raised 4 → 5 (2026-08-01). With strict auto-advance on — where ANY finding,
+ * low severity included, sends the round back to PM — reaching four rounds
+ * before the last LOWs are cleared turned out to be ordinary rather than
+ * pathological, so the cap was interrupting healthy runs.
+ *
+ * The single source: three call sites used to spell their own fallback
+ * (`|| 4`, `|| 4`, `|| 2`), so the loop could cap at a different number than
+ * the UI displayed if a config ever failed to supply the value.
+ */
+const DEFAULT_MAX_REVIEW_ROUNDS = 5;
+
 const DEFAULTS = {
   docs_path: './docs',
   agent_defaults: { unset_api_key: true, model: 'opus' },
   cli: CLI_DEFAULTS,
-  max_review_rounds: 4,
+  max_review_rounds: DEFAULT_MAX_REVIEW_ROUNDS,
   review_mode: 'parallel',
   // builder_strategy: how the monolithic task_execution builder is driven.
   //   'role' — classic role-prompted session (default).
@@ -441,4 +455,4 @@ function watchConfig(config, onReload) {
   };
 }
 
-module.exports = { loadConfig, loadLocalOverrides, saveLocalOverrides, reloadConfig, getAllRoles, findRole, DEFAULTS, CLI_DEFAULTS, watchConfig, watchPaths };
+module.exports = { DEFAULT_MAX_REVIEW_ROUNDS, loadConfig, loadLocalOverrides, saveLocalOverrides, reloadConfig, getAllRoles, findRole, DEFAULTS, CLI_DEFAULTS, watchConfig, watchPaths };

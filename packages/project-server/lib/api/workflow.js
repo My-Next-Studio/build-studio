@@ -7,6 +7,7 @@ const { stripAnsi } = require('../tmux');
 const opencodeTelemetry = require('../opencode-telemetry');
 const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
 const { deriveNeedsAttention } = require('../needs-attention');
+const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
 const memoryGuard = require('../memory-guard');
 const transcriptRecovery = require('../transcript-recovery');
 
@@ -2866,7 +2867,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     // (lib/needs-attention.js) instead of every consumer reassembling it from a
     // different subset of autoAdvanceError / blocked / gate / cap / completed.
     const needsAttention = deriveNeedsAttention(wf);
-    res.json({ workflow: wf, projectWorkflowSteps, preset: config.preset, pathologySignals, findings, needsAttention, maxReviewRounds: config.max_review_rounds || 4 });
+    res.json({ workflow: wf, projectWorkflowSteps, preset: config.preset, pathologySignals, findings, needsAttention, maxReviewRounds: config.max_review_rounds || DEFAULT_MAX_REVIEW_ROUNDS });
   });
 
   // PRD-001 pathology signals — pure function, derives "is this run healthy?"
@@ -3923,7 +3924,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       // blocking). Scoped to the 'reviewing' step — that's where send_to_pm lives.
       let strictEscalate = false;
       if (wf.autoAdvanceStrict && wf.currentStep === 'reviewing' && !hasBlocking) {
-        const maxRounds = config.max_review_rounds || 4;
+        const maxRounds = config.max_review_rounds || DEFAULT_MAX_REVIEW_ROUNDS;
         const anyFindings = agents.some(a => {
           const fb = a.feedback;
           if (!fb) return false;
@@ -4721,7 +4722,7 @@ Fix only the issues raised. Commit your changes.`,
   // Cap at 2 rounds: by round 3 agents tend to fight each other (reviewer keeps
   // finding the same issue, fixer keeps applying the wrong fix). Human triage
   // after round 2 is faster than another autonomous cycle.
-  const MAX_REVIEW_ROUNDS = config.max_review_rounds || 2;
+  const MAX_REVIEW_ROUNDS = config.max_review_rounds || DEFAULT_MAX_REVIEW_ROUNDS;
 
   function autoAdvanceWorkflow(wf) {
     // Re-load to get latest state

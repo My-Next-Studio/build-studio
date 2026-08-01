@@ -92,3 +92,17 @@ test('saveLocalOverrides: shallow-merges per top-level key, preserves others', (
     assert.equal(yamlOnDisk, BASE_YAML);
   } finally { clean(root); }
 });
+
+test('the review cap has one source, so the loop and the UI cannot disagree', () => {
+  // Three call sites used to spell their own fallback (`|| 4`, `|| 4`, `|| 2`).
+  // A config that failed to supply the value would cap the loop at 2 while the
+  // UI displayed 4 — so the number lives in one place now.
+  const { DEFAULT_MAX_REVIEW_ROUNDS, DEFAULTS } = require('./config');
+  assert.equal(typeof DEFAULT_MAX_REVIEW_ROUNDS, 'number');
+  assert.equal(DEFAULTS.max_review_rounds, DEFAULT_MAX_REVIEW_ROUNDS);
+
+  const src = fs.readFileSync(path.join(__dirname, 'api', 'workflow.js'), 'utf8');
+  const hardcoded = src.match(/config\.max_review_rounds \|\| \d+/g) || [];
+  assert.deepEqual(hardcoded, [], `hardcoded review-cap fallbacks: ${hardcoded.join(', ')}`);
+  assert.ok((src.match(/config\.max_review_rounds \|\| DEFAULT_MAX_REVIEW_ROUNDS/g) || []).length >= 3);
+});

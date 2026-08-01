@@ -188,6 +188,16 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   Completion is now a single function that always marks the item, and no path
   reaches the end without passing through `companion_specs`.
 
+- **The review round cap is now 5, up from 4.** With strict auto-advance on —
+  where *any* finding, low severity included, sends the round back to PM —
+  reaching four rounds before the last LOWs are cleared is ordinary rather than
+  pathological, so the old cap was interrupting healthy runs. Projects that set
+  `max_review_rounds` in `config.yaml` keep their own value.
+
+  The number also had three spellings in code (`|| 4`, `|| 4`, `|| 2`), so a
+  config that failed to supply it would cap the loop at 2 while the UI showed
+  4. It now comes from one constant.
+
 - **Hitting the review round cap now stops and asks, instead of ending the
   run.** Reaching the cap says the loop ran as long as you allowed — not that
   the PRD is finished — so the engine no longer decides for you. The run halts
