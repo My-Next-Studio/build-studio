@@ -19,6 +19,8 @@ const {
 
 // ── fixtures ──
 
+// Shaped after a real payload: both windows are percentages, and the small
+// five-hour value is the case that used to be misread as a fraction.
 const CLAUDE_USAGE = {
   five_hour: { utilization: 0.42, resets_at: '2026-07-20T22:00:00.000Z' },
   seven_day: { utilization: 97.3, resets_at: '2026-07-24T00:00:00.000Z' },
@@ -79,13 +81,44 @@ function makeHome({ openrouterKey = null, codexAuth = null } = {}) {
 
 // ── Claude ──
 
-test('claude: parses windows, normalizes fraction and percent utilization', async () => {
+test('claude: utilization is read as a percentage, including small values', async () => {
   const r = await collectClaude(claudeDeps(makeFetch({ 'api/oauth/usage': { status: 200, body: CLAUDE_USAGE } })));
   assert.equal(r.status, 'ok');
-  assert.equal(r.data.fiveHour.utilizationPct, 42);       // 0.42 fraction → 42%
-  assert.equal(r.data.sevenDay.utilizationPct, 97.3);     // already percent
+  assert.equal(r.data.fiveHour.utilizationPct, 0.4);      // 0.42% is 0.42%, not 42%
+  assert.equal(r.data.sevenDay.utilizationPct, 97.3);
   assert.equal(r.data.fiveHour.resetsAt, '2026-07-20T22:00:00.000Z');
   assert.ok(r.data.extraUsage);
+});
+
+test('claude: 1% utilization does not render as a full bar', async () => {
+  // The regression. Values <= 1 used to be treated as fractions and multiplied
+  // by 100, so a barely-used account reported 100% — full, red, "out of
+  // budget". Observed 2026-08-01 with the real account at 1%, while the same
+  // payload's seven_day (49) was reported correctly, which is what made it
+  // look like only one window was broken.
+  const body = {
+    five_hour: { utilization: 1, resets_at: '2026-08-01T07:10:00.000Z' },
+    seven_day: { utilization: 49, resets_at: '2026-08-04T15:00:00.000Z' },
+  };
+  const r = await collectClaude(claudeDeps(makeFetch({ 'api/oauth/usage': { status: 200, body } })));
+  assert.equal(r.data.fiveHour.utilizationPct, 1);
+  assert.equal(r.data.sevenDay.utilizationPct, 49);
+});
+
+test('claude: 0 and 100 still mean empty and full', async () => {
+  const body = {
+    five_hour: { utilization: 0, resets_at: null },
+    seven_day: { utilization: 100, resets_at: null },
+  };
+  const r = await collectClaude(claudeDeps(makeFetch({ 'api/oauth/usage': { status: 200, body } })));
+  assert.equal(r.data.fiveHour.utilizationPct, 0);
+  assert.equal(r.data.sevenDay.utilizationPct, 100);
+});
+
+test('claude: an over-100 reading is clamped, since a bar cannot exceed full', async () => {
+  const body = { five_hour: { utilization: 137, resets_at: null } };
+  const r = await collectClaude(claudeDeps(makeFetch({ 'api/oauth/usage': { status: 200, body } })));
+  assert.equal(r.data.fiveHour.utilizationPct, 100);
 });
 
 test('claude: missing keychain entry → unavailable, no fetch', async () => {

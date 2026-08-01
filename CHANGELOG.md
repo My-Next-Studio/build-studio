@@ -127,6 +127,26 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
 
 ### Fixed
 
+- **The account-usage widget no longer reports 1% as 100%.** Any usage figure
+  at or below 1 was treated as a fraction and multiplied by 100, so a barely
+  used account showed a full red bar saying the budget was gone. It failed in
+  the worst direction and only on small values, which is why it looked
+  intermittent — and why the weekly window beside it stayed correct.
+
+  Every field involved is already named as a percentage (Anthropic
+  `utilization`, Codex `used_percent`), and one live payload settles it:
+  `five_hour: 2` next to `seven_day: 49`. As fractions those would be 200% and
+  4900%. Values are now taken as given and clamped to 100.
+
+- **A config change no longer stops propagating after the first one.** The
+  config watcher watched files, but every writer here saves atomically — write
+  a `.tmp`, then rename over the target. A rename replaces the inode, and a
+  file watcher follows the inode it opened, so it fired exactly once and was
+  then attached to a deleted file. Measured against three atomic writes: a file
+  watcher saw one, a directory watcher saw all three. It now watches the
+  containing directories and filters by name, which also picks up a
+  `local.json` that did not exist when the server started.
+
 - **A halted step is reported even with auto-advance off.** "Every agent died"
   was only ever recorded by the auto-advance tick, so the identical dead step
   produced no signal at all when auto-advance was off. It is now derived

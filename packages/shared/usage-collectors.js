@@ -29,11 +29,26 @@ const failure = (reason) => ({ status: 'error', reason });
 
 // Utilization arrives as a 0-1 fraction on some APIs and 0-100 on others —
 // normalize to percent (1dp).
+/**
+ * Normalize a provider's usage number to a percentage.
+ *
+ * This used to "helpfully" treat any value <= 1 as a fraction and multiply by
+ * 100. That is unresolvable ambiguity applied to a range that occurs in normal
+ * use, and it failed in the worst possible direction: a genuine **1%** was
+ * reported as **100%** — a full bar, in red, saying you are out of budget when
+ * you have barely started. Observed 2026-08-01, with the account at 1%.
+ *
+ * Every field routed through here is already named as a percentage
+ * (Anthropic `utilization`, Codex `used_percent`), and a live payload settles
+ * it: `five_hour: 2` next to `seven_day: 49`. Read as fractions those would be
+ * 200% and 4900%. There is no fraction source to accommodate.
+ *
+ * So: take the number as given, and clamp — a bar cannot be more than full.
+ */
 function toPct(v) {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0) return null;
-  const pct = n <= 1 ? n * 100 : n;
-  return Math.round(pct * 10) / 10;
+  return Math.round(Math.min(n, 100) * 10) / 10;
 }
 
 const num = (v) => {

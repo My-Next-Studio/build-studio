@@ -339,6 +339,49 @@ function reloadConfig(config) {
  *
  * Returns a function that stops the watcher.
  */
+/**
+ * Watch a set of FILES for changes, by watching their directories.
+ *
+ * Watching the files directly does not work here. Every writer in this codebase
+ * saves atomically — write `<file>.tmp`, then rename over the target (both
+ * saveHubConfig and saveLocalOverrides do). A rename replaces the inode, and
+ * fs.watch on a file follows the inode it opened, so a file watcher fires
+ * exactly once and is then permanently attached to a deleted inode. Measured
+ * against three atomic writes: a file watcher saw 1 event, a directory watcher
+ * saw all of them.
+ *
+ * Watching the directory also covers a file that does not exist yet, which the
+ * file form had to guard with a try/catch and silently skip.
+ *
+ * @param {string[]} paths  absolute file paths to watch
+ * @param {() => void} onChange  called (undebounced) on every relevant event
+ * @returns {() => void} stop function
+ */
+function watchPaths(paths, onChange) {
+  const byDir = new Map();
+  for (const p of paths) {
+    const dir = path.dirname(p);
+    if (!byDir.has(dir)) byDir.set(dir, new Set());
+    byDir.get(dir).add(path.basename(p));
+  }
+  const watchers = [];
+  for (const [dir, names] of byDir) {
+    try {
+      watchers.push(fs.watch(dir, { persistent: false }, (_event, filename) => {
+        // These directories also hold hot caches (usage, catalog, learnings
+        // stats) rewritten constantly — reacting to those would be pure waste.
+        // A null filename is possible on some platforms; fall through rather
+        // than miss a change, since callers debounce.
+        if (filename && !names.has(path.basename(filename))) return;
+        onChange();
+      }));
+    } catch (_) { /* directory does not exist — nothing to watch */ }
+  }
+  return () => {
+    for (const w of watchers) { try { w.close(); } catch (_) {} }
+  };
+}
+
 function watchConfig(config, onReload) {
   const configPath = path.join(config.projectRoot, '.build-studio', 'config.yaml');
   const localPath = path.join(config.projectRoot, '.build-studio', 'local.json');
@@ -361,28 +404,30 @@ function watchConfig(config, onReload) {
     }, 200);
   };
 
-  // Every file that feeds the effective config. fs.watch throws on a missing
-  // file, so each is guarded — a project may have no local.json yet, and a
-  // fresh install may have no global config.
+  // Watch the DIRECTORIES, not the files.
   //
-  // HUB_CONFIG_PATH is the one that used to be missing, and its absence was
+  // Every writer here saves atomically — write a `.tmp`, then rename over the
+  // target (saveHubConfig and saveLocalOverrides both do). A rename replaces
+  // the inode, and fs.watch on a *file* follows the inode it opened, so a
+  // file watcher fires exactly once and is then permanently attached to a
+  // deleted inode. Measured: the first global change propagated to a running
+  // server, the revert did not. Watching the directory and filtering by name
+  // survives replacement, and also covers a file that does not exist yet.
+  //
+  // The global file is the one that had no watcher at all, and its absence was
   // silent in the worst way: the hub's global Model tab writes it, but nothing
   // told a running project-server, so every server kept the CLI slots it
   // resolved at startup. Changing the global developer CLI and immediately
-  // starting a run launched agents on the OLD CLI, with the UI showing the new
-  // one — the setting was right, the running server's copy of it was stale
-  // (fazon FAZ-196, 2026-07-31: switched to claude at 20:47 to dodge a codex
-  // usage limit, started a run at 20:48, and it launched on codex anyway).
-  // Project-level edits never showed this because their PUT calls
+  // starting a run launched agents on the OLD CLI while the UI showed the new
+  // one (fazon FAZ-196, 2026-07-31: switched to claude at 20:47 to dodge a
+  // codex usage limit, started a run at 20:48, and it launched on codex
+  // anyway). Project-level edits never showed this because their PUT calls
   // reloadConfig() directly; only the global path had no route back.
-  const watchers = [];
-  for (const p of [configPath, localPath, HUB_CONFIG_PATH]) {
-    try { watchers.push(fs.watch(p, { persistent: false }, onChange)); } catch (_) {}
-  }
+  const stopWatching = watchPaths([configPath, localPath, HUB_CONFIG_PATH], onChange);
   return () => {
     if (debounceTimer) clearTimeout(debounceTimer);
-    for (const w of watchers) { try { w.close(); } catch (_) {} }
+    stopWatching();
   };
 }
 
-module.exports = { loadConfig, loadLocalOverrides, saveLocalOverrides, reloadConfig, getAllRoles, findRole, DEFAULTS, CLI_DEFAULTS, watchConfig };
+module.exports = { loadConfig, loadLocalOverrides, saveLocalOverrides, reloadConfig, getAllRoles, findRole, DEFAULTS, CLI_DEFAULTS, watchConfig, watchPaths };
