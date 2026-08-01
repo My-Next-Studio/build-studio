@@ -205,6 +205,19 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   offers both ways out: **another review round**, or **move on to companion
   specs**. Neither is preselected, and the run cannot finish from there.
 
+- **Agent cards no longer label every Claude model "Sonnet".** The badge
+  detected the model family with `model.startsWith('opus')`, which only ever
+  worked for the short aliases (`opus`, `opus[1m]`). Since the Model page began
+  writing full ids discovered from models.dev, `claude-opus-5[1m]` failed every
+  branch and fell through to the Sonnet default — so an Opus agent displayed
+  **Sonnet** while genuinely running Opus, and `claude-haiku-4-5` did too.
+
+  Display only: the launch flag, the workflow state and the CLI transcript all
+  carried the right model throughout. But it made a correct configuration look
+  broken, which is worse than an honest gap. Family is now matched anywhere in
+  the string, Fable is recognised, and an unfamiliar model shows its own name
+  instead of being labelled as whichever family sat last in the chain.
+
 - **The account-usage widget no longer reports 1% as 100%.** Any usage figure
   at or below 1 was treated as a fraction and multiplied by 100, so a barely
   used account showed a full red bar saying the budget was gone. It failed in

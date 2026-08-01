@@ -2896,8 +2896,17 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
           const m = String(agent.model).toLowerCase()
           const isCodex = (agent.cli === 'codex') || (!agent.cli && m.startsWith('codex'))
           const isOpencode = (agent.cli === 'opencode') || (!agent.cli && m.startsWith('opencode'))
-          const isOpus = m.startsWith('opus')
-          const isHaiku = m.startsWith('haiku')
+          // Family detection has to cope with BOTH spellings a model can arrive
+          // in: a short alias ('opus', 'opus[1m]') and a full catalog id
+          // ('claude-opus-5[1m]'). Testing the prefix only ever worked for the
+          // aliases — once the Model page started writing full ids discovered
+          // from models.dev, 'claude-opus-5[1m]' failed every branch and fell
+          // through to the Sonnet default, so an Opus agent displayed "Sonnet"
+          // while genuinely running Opus. Match anywhere in the string instead.
+          const isOpus = m.includes('opus')
+          const isHaiku = m.includes('haiku')
+          const isFable = m.includes('fable')
+          const isSonnet = m.includes('sonnet')
           // OpenCode: model is stored as 'opencode:<provider/model>' — show the
           // model part (sans provider) so e.g. kimi-k3 is identifiable. FU-1:
           // prefer the ACTUAL serving model (resolved from the session export)
@@ -2909,7 +2918,11 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
                   ? (String(agent.model).split(':')[1].split('/').pop() || '')
                   : '')
             : ''
-          const label = isCodex ? 'Codex' : isOpencode ? `OC ${ocModel || 'default'}` : isOpus ? 'Opus' : isHaiku ? 'Haiku' : 'Sonnet'
+          // An unrecognised model shows its own name rather than being labelled
+          // as whichever family happens to be last in the chain — guessing is
+          // what produced the "everything is Sonnet" bug.
+          const claudeFamily = isOpus ? 'Opus' : isHaiku ? 'Haiku' : isFable ? 'Fable' : isSonnet ? 'Sonnet' : String(agent.model)
+          const label = isCodex ? 'Codex' : isOpencode ? `OC ${ocModel || 'default'}` : claudeFamily
           const color = isCodex ? 'var(--green, #10a37f)' : isOpencode ? 'var(--orange, #f59e0b)' : isOpus ? 'var(--purple, #a78bfa)' : 'var(--text-dim)'
           const background = isCodex ? 'rgba(16,163,127,0.12)' : isOpencode ? 'rgba(245,158,11,0.12)' : isOpus ? 'rgba(167,139,250,0.1)' : 'var(--surface3)'
           return (
