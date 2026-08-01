@@ -125,16 +125,13 @@ function createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecuti
 
       const windowName = branch.replace(/^agent-/, '').replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 15);
       const logFile = path.join(logsPath, `${branch}.log`);
-      const target = `${sessionName}:${windowName}`;
       const keyUnset = unsetKey ? 'unset ANTHROPIC_API_KEY && ' : '';
 
       try {
-        if (!sessionCreated) {
-          tmuxOps.createSession(sessionName, windowName, projectRoot);
-          sessionCreated = true;
-        } else {
-          tmuxOps.createWindow(sessionName, windowName, projectRoot);
-        }
+        // ensureWindow also covers the session vanishing mid-launch (a reaped
+        // last window takes the tmux server with it).
+        const target = tmuxOps.ensureWindow(sessionName, windowName, projectRoot);
+        sessionCreated = true;
         tmuxOps.sendKeys(target, `cd '${wtPath}' && ${keyUnset}bash start.sh`, projectRoot);
         tmuxOps.pipePaneToLog(target, logFile, projectRoot);
       } catch (e) {

@@ -1765,7 +1765,6 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       if (mem) console.log(`[workflow] memory check: ${mem.availableMb} MB available (${mem.pct}%), need ~${verdict.neededMb} MB for ${agents.length} agent(s)`);
     }
 
-    let sessionCreated = tmuxOps.hasSession(wf.sessionName);
     const results = [];
     const dashboardPort = config.port;
     const { resolvePermissionMode, claudePermissionFlag } = require('../permission-mode');
@@ -2028,15 +2027,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       const keyUnset = unsetKey ? 'unset ANTHROPIC_API_KEY && ' : '';
 
       try {
-        let target;
-        if (!sessionCreated) {
-          tmuxOps.createSession(wf.sessionName, windowName, projectRoot);
-          sessionCreated = true;
-          target = `${wf.sessionName}:${windowName}`;
-        } else {
-          const idx = tmuxOps.createWindow(wf.sessionName, windowName, projectRoot);
-          target = `${wf.sessionName}:${idx}`;
-        }
+        // ensureWindow handles both cases AND the race between them: reaping a
+        // finished agent's window can end the session (and take the tmux server
+        // with it) part-way through a launch that already checked the session
+        // was alive.
+        const target = tmuxOps.ensureWindow(wf.sessionName, windowName, projectRoot);
         tmuxOps.sendKeys(target, `cd '${agentCwd}' && ${keyUnset}bash ${scriptName}`, projectRoot);
         tmuxOps.pipePaneToLog(target, logFile, projectRoot);
       } catch (e) {
@@ -2338,13 +2333,9 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       }
 
       try {
-        if (!sessionExists) {
-          tmuxOps.createSession(wf.sessionName, windowName, projectRoot);
-          sessionExists = true;
-        } else {
-          tmuxOps.createWindow(wf.sessionName, windowName, projectRoot);
-        }
-        tmuxOps.sendKeys(target, `cd '${cwd}' && ${cmd}`, projectRoot);
+        const devTarget = tmuxOps.ensureWindow(wf.sessionName, windowName, projectRoot);
+        sessionExists = true;
+        tmuxOps.sendKeys(devTarget, `cd '${cwd}' && ${cmd}`, projectRoot);
       } catch (e) {
         console.error(`[workflow] Failed to start dev server ${dev.name}: ${e.message}`);
       }

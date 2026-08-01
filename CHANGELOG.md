@@ -205,6 +205,18 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   offers both ways out: **another review round**, or **move on to companion
   specs**. Neither is preselected, and the run cannot finish from there.
 
+- **A step no longer fails to launch when the previous agent's window was the
+  last one.** Reaping a finished agent's window (new in this release) ends the
+  tmux session if nothing else is open, and tmux shuts the server down
+  asynchronously — so a step launched in the same request as the reap could see
+  the session alive and then hit `no server running` a moment later. The step
+  was left half-started: an errored agent, no process, and a `dead_step` halt.
+
+  Window creation now recovers by re-creating the session, and only when the
+  session has genuinely vanished — a failure with the session still standing
+  still surfaces. This was a regression introduced by the reaper in this same
+  release; if you are pulling both at once you will not have seen it.
+
 - **Agent cards no longer label every Claude model "Sonnet".** The badge
   detected the model family with `model.startsWith('opus')`, which only ever
   worked for the short aliases (`opus`, `opus[1m]`). Since the Model page began

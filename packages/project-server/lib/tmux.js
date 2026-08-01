@@ -22,6 +22,36 @@ function createTmuxOps(config) {
     execFileSync('tmux', ['new-session', '-d', '-s', sessionName, '-n', windowName, '-x', '220', '-y', '50'], { cwd });
   }
 
+  /**
+   * Put a window into a session, creating the session when it isn't there.
+   *
+   * The session can disappear BETWEEN the check and the call, so this cannot be
+   * a plain `hasSession() ? createWindow : createSession`. Reaping an agent's
+   * window when its feedback lands ends the session if it was the last window,
+   * and tmux tears the server down asynchronously — so a step launched in the
+   * same request as the reap can find the server gone a moment after seeing it
+   * alive. That is exactly what happened on launch-studio (2026-08-01): the fix
+   * planner reported, its window was reaped, and the fix_execution launch that
+   * followed died on `no server running`, leaving the step half-started.
+   *
+   * @returns {string} the tmux target for the new window
+   */
+  function ensureWindow(sessionName, windowName, cwd) {
+    if (!hasSession(sessionName)) {
+      createSession(sessionName, windowName, cwd);
+      return `${sessionName}:${windowName}`;
+    }
+    try {
+      return `${sessionName}:${createWindow(sessionName, windowName, cwd)}`;
+    } catch (e) {
+      // Only swallow the race — a failure with the session still standing is a
+      // real error and must surface.
+      if (hasSession(sessionName)) throw e;
+      createSession(sessionName, windowName, cwd);
+      return `${sessionName}:${windowName}`;
+    }
+  }
+
   function createWindow(sessionName, windowName, cwd) {
     // Defensive deduplication — tmux happily allows duplicate window names
     // in a single session, but `capture-pane -t session:name` then returns
@@ -213,6 +243,7 @@ function createTmuxOps(config) {
     hasSession,
     createSession,
     createWindow,
+    ensureWindow,
     sendKeys,
     pipePaneToLog,
     killSession,
