@@ -76,15 +76,23 @@ function deriveNeedsAttention(wf) {
     };
   }
 
-  // 2. The fix loop ran past its round cap. Continuing is a judgement call.
+  // 2. A loop ran past its round cap. Continuing is a judgement call, and the
+  //    two loops that can reach here offer different choices — a PRD review can
+  //    go round again or move on to companion specs, while an execution fix
+  //    loop resumes at the step it was called from.
   if (stepKey === 'review_cap_reached') {
     const rounds = (step && step.rounds) || wf.round;
+    const isPrdReview = (step && step.cap) === 'review';
     return {
       reason: 'review_cap_reached',
       step: stepKey,
-      title: 'Fix loop hit its round cap',
-      detail: `The ${(step && step.cap) || 'fix'} loop reached ${rounds} rounds. The engine stops here rather than looping indefinitely.`,
-      action: 'Review the outstanding findings, then approve, override, or cancel the run.',
+      title: isPrdReview ? 'PRD review hit its round cap' : 'Fix loop hit its round cap',
+      detail: isPrdReview
+        ? `The review of ${wf.input || 'this item'} reached ${rounds} rounds. Hitting the cap says the loop ran as long as you allowed — not that the PRD is finished or unfinished — so the run stops here rather than deciding for you.`
+        : `The ${(step && step.cap) || 'fix'} loop reached ${rounds} rounds. The engine stops here rather than looping indefinitely.`,
+      action: isPrdReview
+        ? 'Run another review round, or move on to companion specs — the run finishes after those.'
+        : 'Review the outstanding findings, then approve, override, or cancel the run.',
     };
   }
 

@@ -166,6 +166,35 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
 
 ### Fixed
 
+- **A finished PRD review no longer skips companion specs and leaves the item
+  Drafted.** A review had three ways to reach `completed`, and only one did the
+  whole job:
+
+  | Path | Companion specs | Item → Reviewed |
+  | --- | --- | --- |
+  | `companion_specs` approved | yes | yes |
+  | round cap exceeded | **no** | **no** |
+  | all reviewers approve cleanly in-round | **no** | yes |
+
+  The backlog transition lived *inside* the `companion_specs` handler, so any
+  path that skipped that step also skipped marking the item — the run reported
+  success having silently dropped two phases. Observed on a review that ran its
+  full four rounds: the item stayed `Drafted` and two of three **Required**
+  companion specs were never written, while the PRD's own gate says every
+  Required spec must exist before execution. The clean-approval path is the
+  more insidious one: it *does* mark the item Reviewed, so the item looks ready
+  while its preparation gate is unmet.
+
+  Completion is now a single function that always marks the item, and no path
+  reaches the end without passing through `companion_specs`.
+
+- **Hitting the review round cap now stops and asks, instead of ending the
+  run.** Reaching the cap says the loop ran as long as you allowed — not that
+  the PRD is finished — so the engine no longer decides for you. The run halts
+  on a blocked `review_cap_reached` step (auto-advance will not act on it) and
+  offers both ways out: **another review round**, or **move on to companion
+  specs**. Neither is preselected, and the run cannot finish from there.
+
 - **The account-usage widget no longer reports 1% as 100%.** Any usage figure
   at or below 1 was treated as a fraction and multiplied by 100, so a barely
   used account showed a full red bar saying the budget was gone. It failed in

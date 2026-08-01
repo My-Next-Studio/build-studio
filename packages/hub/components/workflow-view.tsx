@@ -1517,22 +1517,44 @@ function StepDetail({
       )}
 
       {/* Review cap — blocked, needs human decision to force-continue */}
-      {isCurrentStep && activeKey === 'review_cap_reached' && (
-        <ActionArea label={`Fix loop capped after ${(step as any).rounds ?? wf.round} rounds:`}>
-          <div style={{ marginBottom: 12, fontSize: 12, color: 'var(--text-dim)', fontFamily: 'var(--mono)', lineHeight: 1.5 }}>
-            The workflow has cycled through {(step as any).rounds ?? wf.round} fix rounds without fully resolving all issues.
-            You can force-continue (re-merge and re-review) or cancel the workflow.
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => onAdvance('approve')} className="wf-btn primary">
-              Force Continue →
-            </button>
-            <button onClick={() => onAdvance('cancel')} className="wf-btn secondary">
-              Cancel Workflow
-            </button>
-          </div>
-        </ActionArea>
-      )}
+      {isCurrentStep && activeKey === 'review_cap_reached' && (() => {
+        // Two loops reach this step and they offer different ways out. A PRD
+        // review can go round again or stop reviewing and write companion
+        // specs; an execution fix loop force-continues into the step it was
+        // called from. Hitting the cap is not a verdict either way — it only
+        // says the loop ran as long as it was allowed — so neither choice is
+        // preselected and the run never finishes from here.
+        const isPrdReview = (step as any).cap === 'review'
+        const rounds = (step as any).rounds ?? wf.round
+        return (
+          <ActionArea label={`${isPrdReview ? 'Review' : 'Fix loop'} capped after ${rounds} rounds:`}>
+            <div style={{ marginBottom: 12, fontSize: 12, color: 'var(--text-dim)', fontFamily: 'var(--mono)', lineHeight: 1.5 }}>
+              {isPrdReview
+                ? `The PRD has been through ${rounds} review rounds — the cap you set. That says the loop ran as long as you allowed, not that the PRD is done or undone. Either keep reviewing, or stop reviewing and move to companion specs; the run finishes after those.`
+                : `The workflow has cycled through ${rounds} fix rounds without fully resolving all issues. You can force-continue (re-merge and re-review) or cancel the workflow.`}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {isPrdReview ? (
+                <>
+                  <button onClick={() => onAdvance('another_round')} className="wf-btn secondary">
+                    ↻ Another review round
+                  </button>
+                  <button onClick={() => onAdvance('approve')} className="wf-btn primary">
+                    Move on to companion specs →
+                  </button>
+                </>
+              ) : (
+                <button onClick={() => onAdvance('approve')} className="wf-btn primary">
+                  Force Continue →
+                </button>
+              )}
+              <button onClick={() => onAdvance('cancel')} className="wf-btn secondary">
+                Cancel Workflow
+              </button>
+            </div>
+          </ActionArea>
+        )
+      })()}
 
       {/* Error state — show retry for merge steps */}
       {isCurrentStep && step.status === 'error' && (activeKey === 'merge_for_review' || activeKey === 'merge_to_main') && (

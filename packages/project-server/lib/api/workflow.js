@@ -442,6 +442,22 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   }
 
   /**
+   * Finish a review run: the ONE place a review reaches 'completed'.
+   *
+   * There used to be three, and only one of them did the whole job — which is
+   * how a finished review left its item at Drafted with its companion specs
+   * unwritten, and the owner with no signal that anything had been skipped
+   * (fazon FAZ-218, 2026-08-01). Marking the backlog item is the workflow's
+   * output; it must not depend on which branch happened to reach the end.
+   */
+  function completeReviewWorkflow(wf) {
+    wf.currentStep = 'completed';
+    advanceLinkedFeatures(wf.prdPath, 'Reviewed');
+    writeWorklog(wf);
+    commitWorkflowDocs(`docs(${String(wf.input || '').replace(/\s+/g, '-')}): mark Reviewed in backlog`);
+  }
+
+  /**
    * Set a backlog item's status (bugfix lifecycle: Backlog/Blocked → Fixing →
    * Done, or Fixing → Backlog on cancel) and re-render the BACKLOG section of
    * project-state.md so its marker line reflects the new status. `extraFields`
@@ -4741,13 +4757,15 @@ Fix only the issues raised. Commit your changes.`,
         return blockingCount === 0 && mediumCount === 0;
       });
       if (allCleanApproval) {
-        console.log(`[workflow] Auto-iterate: all reviewers approved with no blocking/medium in round ${wf.round}, completing workflow.`);
+        // A clean approval ends the REVIEW LOOP, not the workflow. Completing
+        // here skipped companion_specs entirely, so a PRD approved in round 1
+        // reached 'Reviewed' with its Required specs never written — the item
+        // looked ready for execution while its own preparation gate was unmet.
+        console.log(`[workflow] Auto-iterate: all reviewers approved with no blocking/medium in round ${wf.round} — moving to companion specs.`);
         wf.steps.reviewing.status = 'completed';
-        wf.currentStep = 'completed';
+        wf.currentStep = 'companion_specs';
+        if (!wf.steps.companion_specs) wf.steps.companion_specs = { status: 'pending', agents: [] };
         wf.autoIterateRemaining = 0;
-        advanceLinkedFeatures(wf.prdPath, 'Reviewed');
-        writeWorklog(wf);
-        commitWorkflowDocs(`docs(${wf.input.replace(/\s+/g, '-')}): mark Reviewed in backlog`);
         state.saveWorkflow(wf);
         return;
       }
@@ -5529,19 +5547,63 @@ Fix only the issues raised. Commit your changes.`,
       wf.steps.pm_fix.status = 'completed';
       wf.round++;
 
-      // Hard cap: if we've exceeded max rounds, complete instead of looping
+      // Hard cap: STOP and wait for a decision. Hitting the cap is not a
+      // verdict on the PRD — it only says the loop has run as long as the owner
+      // allowed — so the engine must not pick an outcome on its own. Two ways
+      // out, both the owner's call: one more round, or stop reviewing and move
+      // to companion specs.
+      //
+      // It used to jump straight to 'completed', which skipped companion_specs
+      // and (because the backlog transition lived inside that step's handler)
+      // left the item at Drafted — a run that reported success having silently
+      // dropped two phases (fazon FAZ-218, 2026-08-01: capped at round 5, item
+      // stayed Drafted, two of three Required specs never written).
+      //
+      // `status: 'blocked'` is load-bearing: the auto-advance tick refuses to
+      // act on a blocked step, so the halt survives auto-advance, and
+      // deriveNeedsAttention surfaces it as `review_cap_reached`.
       if (wf.round > MAX_REVIEW_ROUNDS) {
-        console.log(`[workflow] Review hard cap reached (${MAX_REVIEW_ROUNDS} rounds). Completing workflow — manual review recommended.`);
-        wf.currentStep = 'completed';
-        writeWorklog(wf);
+        console.log(`[workflow] Review capped at ${MAX_REVIEW_ROUNDS} rounds — halting for a decision (another round, or move on to companion specs).`);
+        wf.currentStep = 'review_cap_reached';
+        wf.steps.review_cap_reached = { status: 'blocked', cap: 'review', rounds: wf.round };
         state.saveWorkflow(wf);
-        return res.json({ workflow: wf, completed: true, warning: `Review capped at ${MAX_REVIEW_ROUNDS} rounds. PRD approved at last revision.` });
+        return res.json({
+          workflow: wf,
+          warning: `Review reached its ${MAX_REVIEW_ROUNDS}-round cap. Choose another round, or move on to companion specs.`,
+        });
       }
 
       wf.currentStep = 'reviewing';
       wf.steps.reviewing = { status: 'pending', agents: [] };
       state.saveWorkflow(wf);
       return res.json({ workflow: wf, needsAdvance: true });
+    }
+
+    // --- Review cap reached (review flow): the loop stopped, owner decides ---
+    //
+    // Deliberately has no default: the engine will not pick between "review it
+    // again" and "stop reviewing" on the owner's behalf, and it will not finish
+    // the run from here. Either choice leads somewhere real — another round, or
+    // companion specs — and both eventually reach the one completion path.
+    if (wf.currentStep === 'review_cap_reached') {
+      const rounds = (wf.steps.review_cap_reached && wf.steps.review_cap_reached.rounds) || wf.round;
+      if (action === 'another_round') {
+        wf.steps.review_cap_reached.status = 'skipped';
+        wf.currentStep = 'reviewing';
+        wf.steps.reviewing = { status: 'pending', agents: [] };
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf, needsAdvance: true });
+      }
+      if (action === 'approve' || action === 'skip') {
+        wf.steps.review_cap_reached.status = 'skipped';
+        wf.currentStep = 'companion_specs';
+        if (!wf.steps.companion_specs) wf.steps.companion_specs = { status: 'pending', agents: [] };
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf, needsAdvance: true });
+      }
+      return res.status(400).json({
+        error: `Review reached its round cap at round ${rounds}. Choose "Another round" to keep reviewing, or "Move on" to stop reviewing and write companion specs.`,
+      });
     }
 
     // --- Companion specs step (review flow) ---
@@ -5762,10 +5824,7 @@ Fix only the issues raised. Commit your changes.`,
         updateCompanionSpecsInPrd(path.join(projectRoot, wf.prdPath));
       }
 
-      wf.currentStep = 'completed';
-      advanceLinkedFeatures(wf.prdPath, 'Reviewed');
-      writeWorklog(wf);
-      commitWorkflowDocs(`docs(${wf.input.replace(/\s+/g, '-')}): mark Reviewed in backlog`);
+      completeReviewWorkflow(wf);
       state.saveWorkflow(wf);
       return res.json({ workflow: wf, completed: true });
     }
