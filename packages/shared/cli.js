@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const { BUILD_STUDIO_DIR } = require('./constants');
+const { GROUP_KEY_RE, groupForStep, normalizeStepGroups, DEFAULT_STEP_GROUPS } = require('./step-groups');
 
 // Claude model ALIASES — short config-facing names mapped to the CLI ids
 // passed to --model. This is no longer the picker list: the Agents/Model tab
@@ -156,29 +157,6 @@ function isReviewerRole(roleName) {
   return REVIEWER_ROLE_NAMES.has(roleName);
 }
 
-// Which CLI launches a given agent role in a given workflow run.
-//   developer role  → run's legacy developerCli (in-flight runs only),
-//                     then cli.developer_cli, then cli.default
-//   reviewer role   → run's legacy reviewerCli (execution runs only),
-//                     then cli.reviewer_cli, then cli.default
-//   everything else → cli.default
-// Per-run developerCli/reviewerCli pickers were removed (2026-07-21) in favor
-// of the per-role selectors on the Agents tab; legacy wf fields are still
-// honored so in-flight runs keep their assignment.
-function resolveCliForRole(roleName, wf, cliConfig) {
-  const cfg = cliConfig || {};
-  const projectDefault = cfg.default || 'claude';
-  if (isDeveloperRole(roleName)) return wf.developerCli || cfg.developer_cli || projectDefault;
-  if (isReviewerRole(roleName)) {
-    // The configured reviewer slot applies in every workflow type — a Code
-    // Reviewer in a bugfix run is still a reviewer. Only the LEGACY per-run
-    // knob stays execution-scoped: it was only ever set by the old execution
-    // launcher, so honoring it elsewhere would retro-change in-flight runs.
-    const legacy = wf.type === 'execution' ? wf.reviewerCli : null;
-    return legacy || cfg.reviewer_cli || projectDefault;
-  }
-  return projectDefault;
-}
 
 // Model strings are CLI-namespaced: opencode ids are provider-scoped
 // ('openrouter/moonshotai/kimi-k3' — always contain '/'), while claude short
@@ -191,24 +169,6 @@ function isModelCompatibleWithCli(cli, model) {
   return cli === 'opencode' ? model.includes('/') : !model.includes('/');
 }
 
-// The model for a role, from the project's cli block. The slot semantics are
-// CLI-agnostic (a row holds whatever model fits its selected CLI) and uniform
-// across slots: developer and reviewer each use their dedicated selector and
-// fall back to default when unset; every other role uses default. Returns null
-// when unset or incompatible with the resolved CLI — no model flag is passed
-// and the CLI uses its own default.
-//
-// The developer fallback used to be missing (an unset developer_model meant
-// "no flag" rather than "inherit default"), which silently diverged from the
-// reviewer slot and from how the CLI row itself falls back.
-function resolveModelForRole(cli, roleName, wf, cliConfig) {
-  if (!cliConfig) return null;
-  let v;
-  if (isDeveloperRole(roleName)) v = cliConfig.developer_model || cliConfig.default_model || null;
-  else if (isReviewerRole(roleName)) v = cliConfig.reviewer_model || cliConfig.default_model || null;
-  else v = cliConfig.default_model || null;
-  return isModelCompatibleWithCli(cli, v) ? v : null;
-}
 
 // Effort tokens go straight onto a shell command line (`opencode run --variant
 // <x>`) — accept only plain word characters (low, high, max, minimal, xhigh…).
@@ -225,57 +185,162 @@ function isValidEffortToken(v) {
 // Shape a raw cli block (any source) into the canonical 9-field form, nulls
 // for unset. `default: null` means "not configured globally" — callers merge
 // over their own fallback (CLI_DEFAULTS.claude at project level).
+/** One group's slot: whatever of {cli, model, effort} has been set. */
+function normalizeGroupSlot(raw) {
+  const s = raw && typeof raw === 'object' ? raw : {};
+  return {
+    cli: VALID_CLIS.includes(s.cli) ? s.cli : null,
+    model: typeof s.model === 'string' && s.model ? s.model : null,
+    effort: isValidEffortToken(s.effort) ? s.effort : null,
+  };
+}
+
+/**
+ * Rewrite the pre-groups role slots onto step groups.
+ *
+ * Configuration moved from per-ROLE (Default / Developer / Reviewer) to per
+ * STEP-GROUP. This keeps an existing setup running unchanged across that move,
+ * mapping each old slot to the group covering the steps it used to drive:
+ *
+ *   developer_*  →  build    (task_execution, fix_execution — its old scope)
+ *   reviewer_*   →  review   (code review, security, QA, final review)
+ *   default_*    →  stays the block-level fallback, which is what it was:
+ *                   every step neither slot claimed, i.e. the plan steps.
+ *
+ * Runs only when a block has no `groups` of its own, so it never overwrites a
+ * deliberate choice — and is idempotent, since the result carries `groups`.
+ */
+function migrateRoleSlotsToGroups(raw) {
+  const b = raw && typeof raw === 'object' ? raw : {};
+  if (b.groups && typeof b.groups === 'object') return b.groups;
+  const pick = (cli, model, effort) => {
+    const slot = normalizeGroupSlot({ cli: b[cli], model: b[model], effort: b[effort] });
+    return (slot.cli || slot.model || slot.effort) ? slot : null;
+  };
+  const groups = {};
+  const build = pick('developer_cli', 'developer_model', 'developer_effort');
+  const review = pick('reviewer_cli', 'reviewer_model', 'reviewer_effort');
+  if (build) groups.build = build;
+  if (review) groups.review = review;
+  return groups;
+}
+
 function normalizeCliBlock(raw) {
   const b = raw && typeof raw === 'object' ? raw : {};
+  const groupsRaw = migrateRoleSlotsToGroups(b);
+  const groups = {};
+  for (const [key, slot] of Object.entries(groupsRaw || {})) {
+    if (!GROUP_KEY_RE.test(String(key))) continue;
+    const s = normalizeGroupSlot(slot);
+    if (s.cli || s.model || s.effort) groups[key] = s;
+  }
   return {
     default: VALID_CLIS.includes(b.default) ? b.default : null,
-    developer_cli: VALID_CLIS.includes(b.developer_cli) ? b.developer_cli : null,
-    reviewer_cli: VALID_CLIS.includes(b.reviewer_cli) ? b.reviewer_cli : null,
     default_model: typeof b.default_model === 'string' ? b.default_model : null,
-    developer_model: typeof b.developer_model === 'string' ? b.developer_model : null,
-    reviewer_model: typeof b.reviewer_model === 'string' ? b.reviewer_model : null,
     default_effort: isValidEffortToken(b.default_effort) ? b.default_effort : null,
-    developer_effort: isValidEffortToken(b.developer_effort) ? b.developer_effort : null,
-    reviewer_effort: isValidEffortToken(b.reviewer_effort) ? b.reviewer_effort : null,
+    groups,
   };
+}
+
+/**
+ * Validate a cli-settings patch from either Model page.
+ *
+ * Shared by the project route and the installation-wide route on purpose:
+ * they accept the same shape, and two hand-written validators for one shape is
+ * how a value gets accepted in one place and rejected in the other.
+ *
+ * @returns {{patch: object}|{error: string}}
+ */
+function validateCliPatch(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const patch = {};
+
+  if (b.default !== undefined) {
+    if (!VALID_CLIS.includes(b.default)) return { error: `default must be one of ${VALID_CLIS.join(', ')}` };
+    patch.default = b.default;
+  }
+  if (b.use_global !== undefined) {
+    if (typeof b.use_global !== 'boolean') return { error: 'use_global must be a boolean' };
+    patch.use_global = b.use_global;
+  }
+  if (b.default_model !== undefined) {
+    if (b.default_model !== null && typeof b.default_model !== 'string') {
+      return { error: 'default_model must be a string (provider/model) or null' };
+    }
+    patch.default_model = b.default_model || null;
+  }
+  if (b.default_effort !== undefined) {
+    if (b.default_effort !== null && !isValidEffortToken(b.default_effort)) {
+      return { error: 'default_effort must be an effort token (e.g. low, high, max) or null' };
+    }
+    patch.default_effort = b.default_effort || null;
+  }
+
+  if (b.groups !== undefined) {
+    if (!b.groups || typeof b.groups !== 'object' || Array.isArray(b.groups)) {
+      return { error: 'groups must be an object keyed by group name' };
+    }
+    const groups = {};
+    for (const [key, slot] of Object.entries(b.groups)) {
+      if (!GROUP_KEY_RE.test(String(key))) return { error: `invalid group key: ${key}` };
+      if (slot === null) { groups[key] = { cli: null, model: null, effort: null }; continue; }
+      if (typeof slot !== 'object' || Array.isArray(slot)) {
+        return { error: `groups.${key} must be an object or null` };
+      }
+      if (slot.cli !== undefined && slot.cli !== null && !VALID_CLIS.includes(slot.cli)) {
+        return { error: `groups.${key}.cli must be one of ${VALID_CLIS.join(', ')} or null` };
+      }
+      if (slot.model !== undefined && slot.model !== null && typeof slot.model !== 'string') {
+        return { error: `groups.${key}.model must be a string (provider/model) or null` };
+      }
+      if (slot.effort !== undefined && slot.effort !== null && !isValidEffortToken(slot.effort)) {
+        return { error: `groups.${key}.effort must be an effort token (e.g. low, high, max) or null` };
+      }
+      groups[key] = { cli: slot.cli || null, model: slot.model || null, effort: slot.effort || null };
+    }
+    patch.groups = groups;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return { error: 'No cli settings in body — expected default / use_global / default_model / default_effort / groups' };
+  }
+  return { patch };
 }
 
 // Does a global cli block carry any configured value? An all-null block is
 // "not set" — projects in use_global mode then keep their own values.
 function hasGlobalCliDefaults(globalCli) {
   const b = normalizeCliBlock(globalCli);
-  return Object.values(b).some(v => v !== null);
+  // `groups` is an object, never null — testing it for non-null would make an
+  // entirely empty block look configured, and every project in use_global mode
+  // would then inherit nothing over its own values.
+  if (Object.keys(b.groups).length > 0) return true;
+  return b.default !== null || b.default_model !== null || b.default_effort !== null;
 }
 
 // Merge the global block OVER a base defaults object, skipping nulls so unset
 // global fields keep the base's value. Returns a fresh 7-field block.
 function mergeGlobalCli(base, globalCli) {
   const b = normalizeCliBlock(globalCli);
-  const out = { ...base };
-  for (const [k, v] of Object.entries(b)) if (v !== null) out[k] = v;
+  const out = { ...base, groups: { ...(base.groups || {}) } };
+  for (const [k, v] of Object.entries(b)) {
+    if (k === 'groups') continue;
+    if (v !== null) out[k] = v;
+  }
+  // Groups merge per key, not wholesale: a global that configures only `build`
+  // must not blank out a base that configures `review`.
+  for (const [key, slot] of Object.entries(b.groups || {})) out.groups[key] = slot;
   return out;
 }
 
-// The effort for a role, from the project's cli block — CLI-agnostic token
-// (claude --effort, opencode --variant, codex -c model_reasoning_effort=).
-// Mirrors resolveModelForRole's slot semantics. Returns null when
-// unset/invalid — no effort flag is passed and the CLI uses its own default.
-function resolveEffortForRole(roleName, wf, cliConfig) {
-  if (!cliConfig) return null;
-  let v;
-  if (isDeveloperRole(roleName)) v = cliConfig.developer_effort || cliConfig.default_effort || null;
-  else if (isReviewerRole(roleName)) v = cliConfig.reviewer_effort || cliConfig.default_effort || null;
-  else v = cliConfig.default_effort || null;
-  return isValidEffortToken(v) ? v : null;
-}
 
 // Canonical empty slot defaults (mirrors project-server CLI_DEFAULTS, without
 // use_global). Used by resolveEffectiveCliConfig + tests.
 const CLI_SLOT_DEFAULTS = {
   default: 'claude',
-  developer_cli: null, reviewer_cli: null,
-  default_model: null, developer_model: null, reviewer_model: null,
-  default_effort: null, developer_effort: null, reviewer_effort: null,
+  default_model: null,
+  default_effort: null,
+  groups: {},
 };
 
 /**
@@ -290,7 +355,19 @@ function resolveEffectiveCliConfig({ localCli, yamlCli, globalCli } = {}) {
   if (local.use_global === true && hasGlobalCliDefaults(globalCli)) {
     return { ...mergeGlobalCli(CLI_SLOT_DEFAULTS, globalCli), use_global: true };
   }
-  const merged = { ...CLI_SLOT_DEFAULTS, ...(yamlCli || {}), ...local };
+  // Normalize each layer before merging so a layer still written in the old
+  // role-slot shape (developer_* / reviewer_*) is migrated to groups on the
+  // way in, rather than sitting alongside them and being silently ignored.
+  const yamlBlock = normalizeCliBlock(yamlCli || {});
+  const localBlock = normalizeCliBlock(local);
+  const merged = { ...CLI_SLOT_DEFAULTS };
+  for (const layer of [yamlBlock, localBlock]) {
+    for (const [k, v] of Object.entries(layer)) {
+      if (k === 'groups' || v === null) continue;
+      merged[k] = v;
+    }
+  }
+  merged.groups = { ...yamlBlock.groups, ...localBlock.groups };
   if (!VALID_CLIS.includes(merged.default)) merged.default = 'claude';
   // Drop use_global from the effective shape when it's false/null so consumers
   // looking at use_global === true only treat global mode as active.
@@ -309,11 +386,13 @@ function resolveEffectiveCliConfig({ localCli, yamlCli, globalCli } = {}) {
 function providersFromCliConfig(cliConfig) {
   const cfg = cliConfig || {};
   const def = VALID_CLIS.includes(cfg.default) ? cfg.default : 'claude';
-  const slots = [
-    def,
-    VALID_CLIS.includes(cfg.developer_cli) ? cfg.developer_cli : def,
-    VALID_CLIS.includes(cfg.reviewer_cli) ? cfg.reviewer_cli : def,
-  ];
+  // Every CLI any group can launch on, plus the block default for groups that
+  // set none. Group keys are user-definable, so this reads whatever is there
+  // rather than a fixed developer/reviewer pair.
+  const slots = [def];
+  for (const slot of Object.values(cfg.groups || {})) {
+    slots.push(VALID_CLIS.includes(slot && slot.cli) ? slot.cli : def);
+  }
   const out = [];
   const seen = new Set();
   for (const cli of slots) {
@@ -326,20 +405,46 @@ function providersFromCliConfig(cliConfig) {
   return out;
 }
 
+
 /**
- * Pure resolution of {cli, model, effort} + the flag fragments the launch
- * path attaches to each CLI's command line (step_models / step_efforts are
- * deliberately NOT applied here — those are step-level overrides layered by
- * the launcher on top of this result for claude).
+ * What a STEP launches with — the replacement for the per-role resolution
+ * above, now that configuration is grouped by step rather than by job title.
  *
- * This is the function to unit-test whenever a "which settings does a new
- * tmux agent actually get?" checklist comes up.
+ * Every agent in a step resolves identically, which is the point: the six
+ * agents of a `reviewing` round are doing the same kind of work on the same
+ * PRD, and used to be split across two slots purely because one of them was
+ * named Security.
+ *
+ *   group slot  >  block default  >  nothing (the CLI's own default)
+ *
+ * A step in no group falls through to the block default, so a step added by a
+ * newer Build Studio still runs before anyone has grouped it.
+ *
+ * The legacy per-run pins (`wf.developerCli` / `wf.reviewerCli`) still win for
+ * the groups they used to cover, so a run started before this change finishes
+ * on the CLI it began with.
+ *
+ * @param {string} stepKey
+ * @param {object} wf         workflow state (for legacy per-run pins)
+ * @param {object} cliConfig  effective cli block, with `groups`
+ * @param {object[]} groups   normalized step-group definitions
  */
-function resolveAgentLaunchSettings(roleName, wf, cliConfig) {
-  const cli = resolveCliForRole(roleName, wf || {}, cliConfig);
-  const model = resolveModelForRole(cli, roleName, wf || {}, cliConfig);
-  const effort = resolveEffortForRole(roleName, wf || {}, cliConfig);
-  return { cli, ...buildCliFlags(cli, model, effort) };
+function resolveStepLaunchSettings(stepKey, wf, cliConfig, groups) {
+  const cfg = cliConfig || {};
+  const w = wf || {};
+  const groupKey = groupForStep(stepKey, groups);
+  const slot = normalizeGroupSlot((cfg.groups || {})[groupKey]);
+
+  const legacyCli = groupKey === 'build'
+    ? w.developerCli
+    : groupKey === 'review' && w.type === 'execution' ? w.reviewerCli : null;
+
+  const cli = legacyCli || slot.cli || cfg.default || 'claude';
+  const rawModel = slot.model || cfg.default_model || null;
+  const model = isModelCompatibleWithCli(cli, rawModel) ? rawModel : null;
+  const rawEffort = slot.effort || cfg.default_effort || null;
+  const effort = isValidEffortToken(rawEffort) ? rawEffort : null;
+  return { cli, model, effort, group: groupKey, ...buildCliFlags(cli, model, effort) };
 }
 
 /**
@@ -441,12 +546,8 @@ module.exports = {
   REVIEWER_ROLE_NAMES,
   isDeveloperRole,
   isReviewerRole,
-  resolveCliForRole,
-  resolveModelForRole,
   isModelCompatibleWithCli,
-  resolveEffortForRole,
   resolveEffectiveCliConfig,
-  resolveAgentLaunchSettings,
   buildCliFlags,
   resolveStepModelForCli,
   resolveStepEffortForCli,
@@ -457,4 +558,12 @@ module.exports = {
   hasGlobalCliDefaults,
   mergeGlobalCli,
   resolveAutoReviewerCli,
+  // Step-group configuration (replaces the per-role slots)
+  DEFAULT_STEP_GROUPS,
+  normalizeStepGroups,
+  groupForStep,
+  normalizeGroupSlot,
+  migrateRoleSlotsToGroups,
+  resolveStepLaunchSettings,
+  validateCliPatch,
 };

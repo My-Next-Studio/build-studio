@@ -63,6 +63,45 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
 
 ### Changed
 
+- **Agents are configured per STEP GROUP, not per role.** The Model page had a
+  Default / Developer / Reviewer slot, which cut across the grain of the actual
+  decision: what you want from a model depends on what the *step* is doing, not
+  on the job title of the agent doing it. The `reviewing` step ran Security on
+  the Reviewer slot and Brand on the Default slot purely because of their role
+  names, though both were reviewing the same PRD.
+
+  The page now shows one row per group, plus a Default row that a group
+  inherits from when it sets nothing:
+
+  | Group | Steps |
+  | --- | --- |
+  | **Plan & specify** | `ceo_synthesis` `pm_scoping` `pm_draft` `pm_revision` `pm_fix` `pm_synthesis` `discovery` `architect_backfill` `companion_specs` `planning` `fix_plan` |
+  | **Build** | `task_execution` `fix_execution` `qa_tests` `devops_init` `devops_detect` |
+  | **Review & verify** | `reviewing` `team_review` `code_review` `security_audit` `qa_validation` `ac_verification` `coverage_matrix` `final_review` `capture_learnings` |
+
+  Steps that launch no agent are deliberately absent — the human gates
+  (`owner_consultations`, `owner_signoff`, `demo_review`, `device_testing`) and
+  the mechanical git steps (`merge_for_review`, `merge_to_main`). They have no
+  model to pick, so offering one would have been a lie.
+
+  **The grouping is not hardcoded.** It lives in config as `step_groups`, at
+  the installation level (`~/.build-studio/config.json`) or per project, so you
+  can split the expensive backstop out of Review, add a cheap bucket for
+  mechanical steps, or regroup entirely — without touching code:
+
+  ```yaml
+  # .build-studio/config.yaml — optional; omit to use the shipped grouping
+  step_groups:
+    plan:   { label: Plan & specify, steps: [pm_draft, planning, fix_plan] }
+    build:  { label: Build,          steps: [task_execution, fix_execution] }
+    review: { label: Review,         steps: [code_review, qa_validation] }
+    gate:   { label: Final gate,     steps: [final_review] }   # e.g. keep the backstop expensive
+  ```
+
+  A step listed in two groups belongs to the first. A step in no group runs on
+  the Default row, so a step added by a newer Build Studio still works before
+  anyone has grouped it.
+
 - **What the Model page shows is now what runs.** Precedence is reversed so the
   UI outranks `config.yaml`:
 
@@ -203,6 +242,33 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
 the project-servers — the reaper, the memory guard and the stale-session sweep
 are all server-side.
 
+**Your existing agent settings migrate themselves — nothing to type.** The old
+role slots are rewritten onto groups the first time a config is read:
+
+```
+developer_cli / developer_model / developer_effort   →  Build group
+reviewer_cli  / reviewer_model  / reviewer_effort    →  Review group
+default_*                                            →  unchanged; still the
+                                                        fallback every group
+                                                        inherits from
+```
+
+That mapping is exact for the steps each slot used to drive, so most steps run
+on precisely what they ran on before. **Three shift**, because grouping unifies
+steps the old slots split apart — all three move from the Default slot's values
+to the group's:
+
+| Step | Was | Now |
+| --- | --- | --- |
+| `reviewing` (Brand, Marketing, UX, Architect) | Default slot | Review slot — Security already used it |
+| `capture_learnings` | Default slot | Review slot |
+| `qa_tests` | Default slot | Build slot |
+
+If your Default and Review slots differ, check `reviewing` and
+`capture_learnings`; if Default and Build differ, check `qa_tests`. Anything you
+dislike is one edit on the Model page, or a `step_groups` block moving the step
+elsewhere.
+
 **In each managed project** — **check any project that sets `step_models` or
 `step_efforts` in `config.yaml`.** Those entries no longer outrank the Model
 page, so a per-step model or effort you rely on will be replaced by the role
@@ -247,6 +313,24 @@ memory_guard:
 - **The memory guard fails open by design.** A guard that blocks work because it
   could not take a measurement is worse than no guard. If you extend it, keep
   unreadable input returning "allow".
+
+- **The step grouping is data, not code.** `packages/shared/step-groups.js`
+  supplies only the DEFAULT; the live mapping comes from config. If you add a
+  workflow step, add it to a group there — or leave it, and it runs on the
+  Default row rather than failing.
+
+- **The per-role resolvers are gone.** `resolveCliForRole`,
+  `resolveModelForRole`, `resolveEffortForRole` and `resolveAgentLaunchSettings`
+  were removed from `shared/cli.js`; `resolveStepLaunchSettings(stepKey, wf,
+  cliConfig, groups)` replaces all four. `isDeveloperRole` / `isReviewerRole`
+  remain — the auto-reviewer rule still uses them. A fork calling the old
+  functions should switch to the step-based one rather than reinstate them,
+  since role-based resolution no longer matches what the UI shows.
+
+- **One validator for both Model pages.** `validateCliPatch` in `shared/cli.js`
+  is used by the project route and the installation-wide route. Two
+  hand-written validators for one shape is how a value comes to be accepted in
+  one place and rejected in the other.
 
 ## 2026-07-29 — Say why a run is stopped, and stop overruling the model picker
 

@@ -28,7 +28,7 @@ interface WorkflowAgent {
   /** Which layer chose `model`: 'step' (project config.yaml / per-run override),
    *  'role' (Agents-tab slot), 'preset' (shipped default), 'default'
    *  (agent_defaults). Absent on runs launched before this was recorded. */
-  modelSource?: 'run' | 'role' | 'step' | 'preset' | 'default'
+  modelSource?: 'run' | 'group' | 'step' | 'preset' | 'default'
   /** Which CLI this agent launched on (server-set; absent in pre-multi-CLI runs — derive from model then). */
   cli?: AgentCli
   /** OpenCode only (FU-1): the ACTUAL serving model resolved from the session export
@@ -282,7 +282,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // usage meter above Start Workflow.
   const [usageProviders, setUsageProviders] = useState<UsageProvider[] | undefined>(undefined)
   useEffect(() => {
-    api.get('/config/cli').then((d: { cli?: { default?: string; developer_cli?: string | null; reviewer_cli?: string | null } }) => {
+    api.get('/config/cli').then((d: { cli?: { default?: string; groups?: Record<string, { cli?: string | null }> | null } }) => {
       if (d.cli) setUsageProviders(providersFromCliConfig(d.cli))
     }).catch(() => {})
   }, [api])
@@ -2897,8 +2897,8 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
                 // Which layer chose it. Without this a preset or project step
                 // model reads as the Agents-tab picker being broken.
                 agent.modelSource === 'run' ? 'overridden for this run only'
-                  : agent.modelSource === 'role' ? 'set by the role slot on the Model page'
-                    : agent.modelSource === 'step' ? 'fallback: step_models in this project\u2019s config.yaml (no role slot is set)'
+                  : agent.modelSource === 'group' ? 'set by this step\u2019s group on the Model page'
+                    : agent.modelSource === 'step' ? 'fallback: step_models in this project\u2019s config.yaml (this group sets no model)'
                       : agent.modelSource === 'preset' ? 'fallback: the workflow preset (nothing more specific is set)'
                         : agent.modelSource === 'default' ? 'agent_defaults fallback \u2014 nothing more specific was set'
                           : null,

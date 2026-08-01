@@ -2,13 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import { CliRoleSelectors } from './cli-role-selectors'
-import type { CliCatalog } from './cli-role-selectors'
+import type { CliCatalog, StepGroup } from './cli-role-selectors'
 import type { CliBlock } from './cli-settings-card'
 
 const EMPTY_BLOCK: CliBlock = {
-  default: 'claude', developer_cli: null, reviewer_cli: null,
-  default_model: null, developer_model: null, reviewer_model: null,
-  default_effort: null, developer_effort: null, reviewer_effort: null,
+  default: 'claude', default_model: null, default_effort: null, groups: {},
 }
 
 // Global (installation-wide) agent-CLI defaults, edited on the hub's Model
@@ -16,6 +14,7 @@ const EMPTY_BLOCK: CliBlock = {
 // applies to every project whose Agents tab has "Use default" checked.
 export function GlobalCliCard() {
   const [cli, setCli] = useState<CliBlock | null>(null)
+  const [groups, setGroups] = useState<StepGroup[]>([])
   const [catalog, setCatalog] = useState<CliCatalog | null>(null)
   const [catalogNote, setCatalogNote] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -23,7 +22,10 @@ export function GlobalCliCard() {
 
   useEffect(() => {
     fetch('/api/cli-defaults').then(r => r.json())
-      .then((d: { cli?: CliBlock | null }) => setCli(d.cli || EMPTY_BLOCK))
+      .then((d: { cli?: CliBlock | null; step_groups?: StepGroup[] }) => {
+        setCli(d.cli || EMPTY_BLOCK)
+        setGroups(d.step_groups || [])
+      })
       .catch(() => setCli(EMPTY_BLOCK))
     fetch('/api/cli-catalog').then(r => r.json())
       .then((d: CliCatalog & { stale?: boolean }) => {
@@ -73,7 +75,7 @@ export function GlobalCliCard() {
         borderRadius: 8, padding: '16px 20px',
         display: 'flex', flexDirection: 'column', gap: 14,
       }}>
-        <CliRoleSelectors value={cli} catalog={catalog} onChange={save} />
+        <CliRoleSelectors value={cli} groups={groups} catalog={catalog} onChange={save} />
         <div style={{ fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--muted)' }}>
           {catalog
             ? `${catalog.opencode.models.length + catalog.codex.models.length + catalog.claude.models.length} models across the three CLIs${catalogNote ? ` — ${catalogNote}` : ''}`

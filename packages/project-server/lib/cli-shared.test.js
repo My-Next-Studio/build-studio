@@ -3,12 +3,13 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  resolveCliForRole,
-  resolveModelForRole,
   isModelCompatibleWithCli,
-  resolveEffortForRole,
   resolveEffectiveCliConfig,
-  resolveAgentLaunchSettings,
+  resolveStepLaunchSettings,
+  normalizeStepGroups,
+  groupForStep,
+  migrateRoleSlotsToGroups,
+  validateCliPatch,
   buildCliFlags,
   resolveStepModelForCli,
   resolveStepEffortForCli,
@@ -21,181 +22,6 @@ const {
   MODEL_IDS,
   providersFromCliConfig,
 } = require('@build-studio/shared/cli');
-
-// ─── resolveCliForRole ──────────────────────────────────────────────────────
-
-test('resolver: developer role follows legacy wf.developerCli (in-flight runs)', () => {
-  for (const cli of VALID_CLIS) {
-    const wf = { type: 'execution', developerCli: cli, reviewerCli: 'claude' };
-    assert.equal(resolveCliForRole('Fullstack Dev', wf, null), cli);
-    assert.equal(resolveCliForRole('iOS Dev', wf, null), cli);
-  }
-});
-
-test('resolver: per-role config slots — developer_cli / reviewer_cli beat default', () => {
-  const cfg = { default: 'claude', developer_cli: 'opencode', reviewer_cli: 'codex' };
-  const exec = { type: 'execution' };
-  assert.equal(resolveCliForRole('Frontend Dev', exec, cfg), 'opencode');
-  assert.equal(resolveCliForRole('Backend Dev', exec, cfg), 'opencode');
-  assert.equal(resolveCliForRole('Code Reviewer', exec, cfg), 'codex');
-  assert.equal(resolveCliForRole('Security', exec, cfg), 'codex');
-  assert.equal(resolveCliForRole('Final Reviewer', exec, cfg), 'codex');
-  assert.equal(resolveCliForRole('QA', exec, cfg), 'claude');
-  // The configured reviewer slot applies in EVERY workflow type, not just execution
-  for (const type of ['review', 'bugfix', 'kickoff', 'demo_review', 'onboarding']) {
-    assert.equal(resolveCliForRole('Code Reviewer', { type }, cfg), 'codex', type);
-    assert.equal(resolveCliForRole('Security', { type }, cfg), 'codex', type);
-  }
-  // Slots unset → default
-  assert.equal(resolveCliForRole('Frontend Dev', exec, { default: 'opencode' }), 'opencode');
-  assert.equal(resolveCliForRole('Code Reviewer', exec, { default: 'opencode' }), 'opencode');
-});
-
-test('resolver: legacy wf fields win over config slots (in-flight runs unchanged)', () => {
-  const cfg = { default: 'claude', developer_cli: 'codex', reviewer_cli: 'codex' };
-  const wf = { type: 'execution', developerCli: 'opencode', reviewerCli: 'claude' };
-  assert.equal(resolveCliForRole('Frontend Dev', wf, cfg), 'opencode');
-  assert.equal(resolveCliForRole('Code Reviewer', wf, cfg), 'claude');
-});
-
-test('resolver: reviewer follows legacy wf.reviewerCli in execution runs only', () => {
-  const exec = { type: 'execution', developerCli: 'claude', reviewerCli: 'opencode' };
-  assert.equal(resolveCliForRole('Code Reviewer', exec, null), 'opencode');
-  assert.equal(resolveCliForRole('Security', exec, null), 'opencode');
-
-  // Same reviewerCli set, but review/kickoff/bugfix runs ignore it → default.
-  const review = { type: 'review', developerCli: 'claude', reviewerCli: 'opencode' };
-  assert.equal(resolveCliForRole('Code Reviewer', review, null), 'claude');
-  const kickoff = { type: 'kickoff', developerCli: 'claude', reviewerCli: 'opencode' };
-  assert.equal(resolveCliForRole('Code Reviewer', kickoff, null), 'claude');
-  const bugfix = { type: 'bugfix', developerCli: 'opencode', reviewerCli: 'opencode' };
-  assert.equal(resolveCliForRole('Code Reviewer', bugfix, null), 'claude');
-});
-
-test('resolver: every other role uses the project default CLI', () => {
-  const cfg = { default: 'opencode' };
-  const wf = { type: 'kickoff', developerCli: 'claude', reviewerCli: 'claude' };
-  for (const role of ['PM', 'CEO', 'QA', 'Architect', 'Planner', 'Fix Planner', 'DevOps', 'Surveyor', 'Brand']) {
-    assert.equal(resolveCliForRole(role, wf, cfg), 'opencode', role);
-  }
-  // …in every workflow type
-  for (const type of ['kickoff', 'onboarding', 'review', 'execution', 'bugfix']) {
-    assert.equal(resolveCliForRole('PM', { type, developerCli: 'claude' }, cfg), 'opencode', type);
-  }
-});
-
-test('resolver: missing cli config falls back to claude everywhere', () => {
-  const wf = { type: 'execution' };
-  assert.equal(resolveCliForRole('Fullstack Dev', wf, null), 'claude');
-  assert.equal(resolveCliForRole('Code Reviewer', wf, null), 'claude');
-  assert.equal(resolveCliForRole('PM', wf, null), 'claude');
-  assert.equal(resolveCliForRole('PM', wf, {}), 'claude');
-});
-
-// ─── resolveModelForRole ────────────────────────────────────────────────────
-
-test('model: per-role selectors, default fallback, null when unset', () => {
-  const cfg = { default: 'opencode', default_model: 'openrouter/a/a', developer_model: 'openrouter/b/b', reviewer_model: 'openrouter/c/c' };
-  const exec = { type: 'execution', developerCli: 'opencode', reviewerCli: 'opencode' };
-  assert.equal(resolveModelForRole('opencode', 'Fullstack Dev', exec, cfg), 'openrouter/b/b');
-  assert.equal(resolveModelForRole('opencode', 'Code Reviewer', exec, cfg), 'openrouter/c/c');
-  assert.equal(resolveModelForRole('opencode', 'PM', exec, cfg), 'openrouter/a/a');
-
-  // Either dedicated slot, left unset, falls back to the default model.
-  const cfgNoRev = { ...cfg, reviewer_model: null };
-  assert.equal(resolveModelForRole('opencode', 'Security', exec, cfgNoRev), 'openrouter/a/a');
-  const cfgNoDev = { ...cfg, developer_model: null };
-  assert.equal(resolveModelForRole('opencode', 'Fullstack Dev', exec, cfgNoDev), 'openrouter/a/a');
-
-  // Nothing set anywhere → null (the CLI runs its own configured default).
-  assert.equal(resolveModelForRole('opencode', 'Fullstack Dev', exec, { default: 'opencode' }), null);
-  assert.equal(resolveModelForRole('PM', exec, null), null);
-});
-
-test('model: CLI-incompatible values are dropped, never passed as flags', () => {
-  const exec = { type: 'execution' };
-  // opencode ids are provider-scoped (contain '/'); claude/codex take bare names.
-  assert.equal(resolveModelForRole('claude', 'PM', exec, { default_model: 'opus' }), 'opus');
-  assert.equal(resolveModelForRole('codex', 'PM', exec, { default_model: 'gpt-5.2-codex' }), 'gpt-5.2-codex');
-  assert.equal(resolveModelForRole('claude', 'PM', exec, { default_model: 'openrouter/a/a' }), null);
-  assert.equal(resolveModelForRole('codex', 'PM', exec, { default_model: 'openrouter/a/a' }), null);
-  assert.equal(resolveModelForRole('opencode', 'PM', exec, { default_model: 'opus' }), null);
-  assert.equal(isModelCompatibleWithCli('opencode', null), true);
-  assert.equal(isModelCompatibleWithCli('claude', 'sonnet5'), true);
-  assert.equal(isModelCompatibleWithCli('claude', 5), false);
-});
-
-// ─── resolveEffortForRole ───────────────────────────────────────────────────
-
-test('effort: per-role selectors mirror the model slots', () => {
-  const cfg = { default: 'opencode', default_effort: 'low', developer_effort: 'high', reviewer_effort: 'max' };
-  const exec = { type: 'execution', developerCli: 'opencode', reviewerCli: 'opencode' };
-  assert.equal(resolveEffortForRole('Fullstack Dev', exec, cfg), 'high');
-  assert.equal(resolveEffortForRole('Code Reviewer', exec, cfg), 'max');
-  assert.equal(resolveEffortForRole('PM', exec, cfg), 'low');
-
-  // Either slot, left unset, falls back to default (same as the model slots).
-  assert.equal(resolveEffortForRole('Security', exec, { ...cfg, reviewer_effort: null }), 'low');
-  assert.equal(resolveEffortForRole('Fullstack Dev', exec, { ...cfg, developer_effort: null }), 'low');
-  // Nothing set → null (no effort flag).
-  assert.equal(resolveEffortForRole('PM', exec, { default: 'opencode' }), null);
-  assert.equal(resolveEffortForRole('PM', exec, null), null);
-});
-
-test('effort: invalid tokens never reach the command line', () => {
-  const exec = { type: 'execution' };
-  assert.equal(resolveEffortForRole('PM', exec, { default_effort: 'high; rm -rf ~' }), null);
-  assert.equal(resolveEffortForRole('PM', exec, { default_effort: '$(whoami)' }), null);
-  assert.equal(resolveEffortForRole('PM', exec, { default_effort: 5 }), null);
-  assert.equal(isValidEffortToken('xhigh'), true);
-  assert.equal(isValidEffortToken('minimal'), true);
-  assert.equal(isValidEffortToken('high max'), false);
-  assert.equal(isValidEffortToken(''), false);
-  assert.equal(isValidEffortToken(null), false);
-});
-
-// ─── global CLI defaults: normalize / has / merge ───────────────────────────
-
-test('normalizeCliBlock: canonical 9-field shape, junk dropped', () => {
-  assert.deepEqual(normalizeCliBlock(null), {
-    default: null, developer_cli: null, reviewer_cli: null,
-    default_model: null, developer_model: null, reviewer_model: null,
-    default_effort: null, developer_effort: null, reviewer_effort: null,
-  });
-  const n = normalizeCliBlock({
-    default: 'opencode', developer_cli: 'codex', reviewer_cli: 'not-a-cli',
-    default_model: 'openrouter/a/b', default_effort: 'high',
-    developer_effort: 'bad; token', extra: 'ignored',
-  });
-  assert.equal(n.default, 'opencode');
-  assert.equal(n.developer_cli, 'codex');
-  assert.equal(n.reviewer_cli, null); // invalid CLI → dropped
-  assert.equal(n.default_model, 'openrouter/a/b');
-  assert.equal(n.default_effort, 'high');
-  assert.equal(n.developer_effort, null); // shell-unsafe → dropped
-  assert.equal(n.reviewer_model, null);
-  assert.equal('extra' in n, false);
-});
-
-test('hasGlobalCliDefaults: false for empty/unset, true for any real value', () => {
-  assert.equal(hasGlobalCliDefaults(null), false);
-  assert.equal(hasGlobalCliDefaults({}), false);
-  assert.equal(hasGlobalCliDefaults({ default: 'not-a-cli' }), false);
-  assert.equal(hasGlobalCliDefaults({ default: 'opencode' }), true);
-  assert.equal(hasGlobalCliDefaults({ reviewer_effort: 'max' }), true);
-});
-
-test('mergeGlobalCli: global non-null wins, nulls keep the base', () => {
-  const base = { default: 'claude', default_model: null, developer_model: null, reviewer_model: null, default_effort: null, developer_effort: null, reviewer_effort: null };
-  const merged = mergeGlobalCli(base, { default: 'opencode', default_model: 'openrouter/m/k', reviewer_effort: 'low' });
-  assert.equal(merged.default, 'opencode');
-  assert.equal(merged.default_model, 'openrouter/m/k');
-  assert.equal(merged.reviewer_effort, 'low');
-  assert.equal(merged.developer_model, null); // untouched by global null
-  assert.equal(merged.default_effort, null);
-});
-
-// ─── resolveAutoReviewerCli ─────────────────────────────────────────────────
 
 test('auto reviewer: always a DIFFERENT CLI than the developer, deterministic', () => {
   const all = ['claude', 'codex', 'opencode'];
@@ -237,160 +63,6 @@ test('start-time reviewer resolution: auto flips, explicit wins, omitted mirrors
 
 const EXEC = { type: 'execution' };
 const KICKOFF = { type: 'kickoff' };
-
-test('effective config: project-specific when use_global is false/unset', () => {
-  const local = {
-    default: 'claude', developer_cli: 'opencode', reviewer_cli: 'opencode',
-    default_model: 'opus', developer_model: 'openrouter/moonshotai/kimi-k3',
-    developer_effort: 'high', use_global: false,
-  };
-  const global = { default: 'codex', default_model: 'gpt-5.2-codex', default_effort: 'low' };
-  const eff = resolveEffectiveCliConfig({ localCli: local, globalCli: global });
-  assert.equal(eff.default, 'claude');
-  assert.equal(eff.developer_cli, 'opencode');
-  assert.equal(eff.developer_model, 'openrouter/moonshotai/kimi-k3');
-  assert.equal(eff.developer_effort, 'high');
-  assert.notEqual(eff.default, 'codex'); // global ignored
-});
-
-test('effective config: Use default → global wholesale (project values stay out)', () => {
-  const local = {
-    default: 'claude', developer_cli: 'opencode', developer_model: 'openrouter/a/a',
-    use_global: true,
-  };
-  const global = {
-    default: 'codex', developer_cli: 'claude', reviewer_cli: 'claude',
-    default_model: 'gpt-5.2-codex', default_effort: 'medium',
-    developer_model: 'opus', developer_effort: 'high',
-  };
-  const eff = resolveEffectiveCliConfig({ localCli: local, globalCli: global });
-  assert.equal(eff.use_global, true);
-  assert.equal(eff.default, 'codex');
-  assert.equal(eff.developer_cli, 'claude');
-  assert.equal(eff.developer_model, 'opus');
-  assert.equal(eff.developer_effort, 'high');
-  // Project's opencode developer setting must NOT leak through
-  assert.notEqual(eff.developer_cli, 'opencode');
-});
-
-test('effective config: use_global with empty global falls back to project values', () => {
-  const local = { default: 'opencode', developer_model: 'openrouter/a/a', use_global: true };
-  const eff = resolveEffectiveCliConfig({ localCli: local, globalCli: {} });
-  assert.equal(eff.default, 'opencode');
-  assert.equal(eff.developer_model, 'openrouter/a/a');
-});
-
-test('launch settings: Default / Developer / Reviewer slots + flag fragments', () => {
-  const cfg = {
-    default: 'claude', developer_cli: 'opencode', reviewer_cli: 'codex',
-    default_model: 'opus4.7[1m]', default_effort: 'highlog',
-    developer_model: 'openrouter/moonshotai/kimi-k3', developer_effort: 'max',
-    reviewer_model: 'gpt-5.2-codex', reviewer_effort: 'medium',
-  };
-  // Fix intentional typo highlog, would be filtered by isValidEffortToken - use high
-  cfg.default_effort = 'high';
-
-  // Default role (QA) — claude + opus4.7[1m] + high
-  const qa = resolveAgentLaunchSettings('QA', EXEC, cfg);
-  assert.equal(qa.cli, 'claude');
-  assert.equal(qa.model, 'opus4.7[1m]');
-  assert.equal(qa.effort, 'high');
-  assert.equal(qa.modelFlag, ` --model ${MODEL_IDS['opus4.7[1m]']}`);
-  assert.equal(qa.effortFlag, ' --effort high');
-
-  // Developer — opencode + kimi + max
-  const dev = resolveAgentLaunchSettings('Frontend Dev', EXEC, cfg);
-  assert.equal(dev.cli, 'opencode');
-  assert.equal(dev.model, 'openrouter/moonshotai/kimi-k3');
-  assert.equal(dev.effort, 'max');
-  assert.equal(dev.modelFlag, ' -m openrouter/moonshotai/kimi-k3');
-  assert.equal(dev.effortFlag, ' --variant max');
-
-  // Reviewer (execution) — codex + gpt-5.2-codex + medium
-  const rev = resolveAgentLaunchSettings('Code Reviewer', EXEC, cfg);
-  assert.equal(rev.cli, 'codex');
-  assert.equal(rev.model, 'gpt-5.2-codex');
-  assert.equal(rev.effort, 'medium');
-  assert.equal(rev.modelFlag, ' --model gpt-5.2-codex');
-  assert.equal(rev.effortFlag, ' -c model_reasoning_effort=medium');
-
-  // Reviewer role outside execution → still the Reviewer slot. Reviewing is
-  // reviewing whatever workflow it happens in; only the legacy per-run
-  // wf.reviewerCli knob stays execution-scoped.
-  const revKick = resolveAgentLaunchSettings('Code Reviewer', KICKOFF, cfg);
-  assert.equal(revKick.cli, 'codex');
-  assert.equal(revKick.model, 'gpt-5.2-codex');
-  assert.equal(revKick.effort, 'medium');
-});
-
-test('launch settings: Use-default path (global) drives every role', () => {
-  const global = {
-    default: 'opencode', developer_cli: 'claude', reviewer_cli: 'claude',
-    default_model: 'openrouter/moonshotai/kimi-k3', default_effort: 'low',
-    developer_model: 'sonnet5', developer_effort: 'high',
-    reviewer_model: 'opus', reviewer_effort: 'max',
-  };
-  const local = { use_global: true, default: 'codex' }; // project values must not leak
-  const eff = resolveEffectiveCliConfig({ localCli: local, globalCli: global });
-
-  const dev = resolveAgentLaunchSettings('Backend Dev', EXEC, eff);
-  assert.equal(dev.cli, 'claude');
-  assert.equal(dev.model, 'sonnet5');
-  assert.equal(dev.effort, 'high');
-  assert.equal(dev.modelFlag, ` --model ${MODEL_IDS.sonnet5}`);
-  assert.equal(dev.effortFlag, ' --effort high');
-
-  const qa = resolveAgentLaunchSettings('QA', EXEC, eff);
-  assert.equal(qa.cli, 'opencode');
-  assert.equal(qa.model, 'openrouter/moonshotai/kimi-k3');
-  assert.equal(qa.effort, 'low');
-  assert.equal(qa.modelFlag, ' -m openrouter/moonshotai/kimi-k3');
-  assert.equal(qa.effortFlag, ' --variant low');
-
-  const sec = resolveAgentLaunchSettings('Security', EXEC, eff);
-  assert.equal(sec.cli, 'claude');
-  assert.equal(sec.model, 'opus');
-  assert.equal(sec.effort, 'max');
-});
-
-test('launch settings: both developer and reviewer model/effort fall back to the default slot', () => {
-  const cfg = {
-    default: 'opencode',
-    default_model: 'openrouter/a/a', default_effort: 'low',
-    developer_cli: 'opencode', // no developer_model / effort → inherit default_
-    reviewer_cli: 'opencode', // no reviewer_model / effort → inherit default_
-  };
-  const dev = resolveAgentLaunchSettings('iOS Dev', EXEC, cfg);
-  assert.equal(dev.model, 'openrouter/a/a');
-  assert.equal(dev.effort, 'low');
-  assert.equal(dev.modelFlag, ' -m openrouter/a/a');
-  assert.equal(dev.effortFlag, ' --variant low');
-
-  const rev = resolveAgentLaunchSettings('Code Reviewer', EXEC, cfg);
-  assert.equal(rev.model, 'openrouter/a/a');
-  assert.equal(rev.effort, 'low');
-  assert.equal(rev.modelFlag, ' -m openrouter/a/a');
-  assert.equal(rev.effortFlag, ' --variant low');
-});
-
-test('launch settings: Final Reviewer uses the reviewer slot, in non-execution runs too', () => {
-  const cfg = {
-    default: 'claude', default_model: 'sonnet5', default_effort: 'low',
-    reviewer_cli: 'codex', reviewer_model: 'gpt-5.2-codex', reviewer_effort: 'high',
-  };
-  for (const wf of [EXEC, { type: 'bugfix' }, { type: 'review' }]) {
-    const fin = resolveAgentLaunchSettings('Final Reviewer', wf, cfg);
-    assert.equal(fin.cli, 'codex', `${wf.type} cli`);
-    assert.equal(fin.model, 'gpt-5.2-codex', `${wf.type} model`);
-    assert.equal(fin.effort, 'high', `${wf.type} effort`);
-  }
-  // …while a non-reviewer role in the same runs still uses the default slot.
-  const pm = resolveAgentLaunchSettings('PM', { type: 'bugfix' }, cfg);
-  assert.equal(pm.cli, 'claude');
-  assert.equal(pm.model, 'sonnet5');
-});
-
-// ─── per-step overrides across CLIs ─────────────────────────────────────────
 
 test('step efforts: a bare token applies to every CLI, not just claude', () => {
   // This is the gap: step_efforts used to be read only on the claude path, so
@@ -445,38 +117,233 @@ test('buildCliFlags: per-CLI spelling, with incompatible values dropped', () => 
     { model: null, effort: null, modelFlag: '', effortFlag: '' });
 });
 
-test('launch settings: incompatible model for the slot CLI is dropped (no flag)', () => {
-  // claude row with an opencode-shaped model string
-  const cfg = { default: 'claude', default_model: 'openrouter/moonshotai/kimi-k3', default_effort: 'high' };
-  const qa = resolveAgentLaunchSettings('PM', EXEC, cfg);
-  assert.equal(qa.cli, 'claude');
-  assert.equal(qa.model, null);
-  assert.equal(qa.modelFlag, '');
-  assert.equal(qa.effort, 'high'); // effort is CLI-agnostic, still applies
-  assert.equal(qa.effortFlag, ' --effort high');
+
+// ─── Step groups: shape, migration, resolution ──────────────────────────────
+//
+// Agent settings moved from per-ROLE slots (Default / Developer / Reviewer) to
+// per-STEP-GROUP, with the grouping itself living in config. These pin the
+// migration (nobody's setup changes on pull) and the resolution order.
+
+const GROUPS = normalizeStepGroups(null); // the shipped default grouping
+
+test('normalizeCliBlock: canonical shape, junk dropped', () => {
+  assert.deepEqual(normalizeCliBlock(null), {
+    default: null, default_model: null, default_effort: null, groups: {},
+  });
+  const n = normalizeCliBlock({
+    default: 'opencode', default_model: 'openrouter/a/b', default_effort: 'high',
+    groups: {
+      build: { cli: 'codex', model: 'gpt-5.2-codex', effort: 'high' },
+      review: { cli: 'not-a-cli', effort: 'bad; token' },
+      'Bad Key': { cli: 'claude' },
+      empty: { cli: null, model: null, effort: null },
+    },
+    extra: 'ignored',
+  });
+  assert.equal(n.default, 'opencode');
+  assert.deepEqual(n.groups.build, { cli: 'codex', model: 'gpt-5.2-codex', effort: 'high' });
+  // review's only values were an invalid CLI and a shell-unsafe effort; with
+  // both dropped nothing is left, so the group is not stored at all.
+  assert.equal('review' in n.groups, false);
+  assert.equal('Bad Key' in n.groups, false);   // invalid key
+  assert.equal('empty' in n.groups, false);     // nothing set → not stored
+  assert.equal('extra' in n, false);
 });
 
-// ─── providersFromCliConfig (usage meter filter) ────────────────────────────
+test('migration: the old role slots become groups, so a pull changes nothing', () => {
+  // developer_* drove task_execution/fix_execution → the build group.
+  // reviewer_* drove code review / security / final review → the review group.
+  // default_* stays the block fallback, which is what it always was.
+  const legacy = {
+    default: 'claude', default_model: 'claude-opus-5[1m]', default_effort: 'medium',
+    developer_cli: 'codex', developer_model: 'gpt-5.6-sol', developer_effort: 'high',
+    reviewer_cli: 'claude', reviewer_model: 'sonnet5', reviewer_effort: 'high',
+  };
+  const g = migrateRoleSlotsToGroups(legacy);
+  assert.deepEqual(g.build, { cli: 'codex', model: 'gpt-5.6-sol', effort: 'high' });
+  assert.deepEqual(g.review, { cli: 'claude', model: 'sonnet5', effort: 'high' });
+  assert.equal('plan' in g, false); // plan steps used default_*, which survives as-is
+});
 
-test('providersFromCliConfig: only the CLIs in use across the three slots', () => {
+test('migration is idempotent and never overwrites a real grouping', () => {
+  const already = { groups: { build: { cli: 'claude', model: null, effort: null } }, developer_cli: 'codex' };
+  assert.deepEqual(migrateRoleSlotsToGroups(already), already.groups);
+  assert.equal(migrateRoleSlotsToGroups({}).build, undefined);
+});
+
+test('a legacy block resolves through the launcher unchanged after migration', () => {
+  const legacy = {
+    default: 'claude', default_model: 'claude-opus-5[1m]', default_effort: 'medium',
+    developer_cli: 'codex', developer_model: 'gpt-5.6-sol', developer_effort: 'high',
+    reviewer_cli: 'claude', reviewer_model: 'sonnet5', reviewer_effort: 'high',
+  };
+  const eff = resolveEffectiveCliConfig({ localCli: legacy });
+  const exec = { type: 'execution' };
+  const build = resolveStepLaunchSettings('task_execution', exec, eff, GROUPS);
+  assert.deepEqual([build.cli, build.model, build.effort], ['codex', 'gpt-5.6-sol', 'high']);
+  const review = resolveStepLaunchSettings('code_review', exec, eff, GROUPS);
+  assert.deepEqual([review.cli, review.model, review.effort], ['claude', 'sonnet5', 'high']);
+  // Plan steps were never covered by either slot — they used default_*.
+  const plan = resolveStepLaunchSettings('planning', exec, eff, GROUPS);
+  assert.deepEqual([plan.cli, plan.model, plan.effort], ['claude', 'claude-opus-5[1m]', 'medium']);
+});
+
+test('every agent in a step resolves identically, whatever its role', () => {
+  // The reason for the move: `reviewing` ran Security on the reviewer slot and
+  // Brand on the default slot purely because of their role names.
+  const eff = resolveEffectiveCliConfig({
+    localCli: { default: 'claude', groups: { review: { cli: 'codex', model: 'gpt-5.2-codex', effort: 'high' } } },
+  });
+  const a = resolveStepLaunchSettings('reviewing', { type: 'review' }, eff, GROUPS);
+  assert.deepEqual([a.cli, a.model, a.effort], ['codex', 'gpt-5.2-codex', 'high']);
+});
+
+test('an unset group inherits the block default', () => {
+  const eff = resolveEffectiveCliConfig({
+    localCli: { default: 'opencode', default_model: 'openrouter/a/b', default_effort: 'high' },
+  });
+  const r = resolveStepLaunchSettings('task_execution', {}, eff, GROUPS);
+  assert.deepEqual([r.cli, r.model, r.effort], ['opencode', 'openrouter/a/b', 'high']);
+});
+
+test('a step in no group still runs, on the block default', () => {
+  // A step added by a newer Build Studio, before anyone has grouped it.
+  const eff = resolveEffectiveCliConfig({ localCli: { default: 'claude', default_model: 'opus' } });
+  const r = resolveStepLaunchSettings('a_brand_new_step', {}, eff, GROUPS);
+  assert.equal(r.group, null);
+  assert.equal(r.cli, 'claude');
+  assert.equal(r.model, 'opus');
+});
+
+test('a model incompatible with the group CLI is dropped, never flagged', () => {
+  const eff = resolveEffectiveCliConfig({
+    localCli: { default: 'claude', groups: { build: { cli: 'claude', model: 'openrouter/a/b', effort: null } } },
+  });
+  const r = resolveStepLaunchSettings('task_execution', {}, eff, GROUPS);
+  assert.equal(r.model, null);
+  assert.equal(r.modelFlag, '');
+});
+
+test('legacy per-run pins still steer in-flight runs', () => {
+  const eff = resolveEffectiveCliConfig({ localCli: { default: 'claude' } });
+  const wf = { type: 'execution', developerCli: 'codex', reviewerCli: 'opencode' };
+  assert.equal(resolveStepLaunchSettings('task_execution', wf, eff, GROUPS).cli, 'codex');
+  assert.equal(resolveStepLaunchSettings('code_review', wf, eff, GROUPS).cli, 'opencode');
+  // The reviewer pin was always execution-scoped.
+  assert.equal(resolveStepLaunchSettings('code_review', { type: 'bugfix', reviewerCli: 'opencode' }, eff, GROUPS).cli, 'claude');
+});
+
+test('groupForStep: first match wins, unknown steps are null', () => {
+  assert.equal(groupForStep('task_execution', GROUPS), 'build');
+  assert.equal(groupForStep('capture_learnings', GROUPS), 'review');
+  assert.equal(groupForStep('planning', GROUPS), 'plan');
+  assert.equal(groupForStep('nope', GROUPS), null);
+  assert.equal(groupForStep(null, GROUPS), null);
+});
+
+test('a project can define its own grouping', () => {
+  // The whole point of putting the mapping in config: split the expensive
+  // backstop out of Review without touching code.
+  const custom = normalizeStepGroups([
+    { key: 'gate', label: 'Final gate', steps: ['final_review'] },
+    { key: 'review', label: 'Review', steps: ['final_review', 'code_review'] },
+  ]);
+  assert.equal(groupForStep('final_review', custom), 'gate'); // first wins
+  assert.equal(groupForStep('code_review', custom), 'review');
+});
+
+test('a malformed grouping falls back to the shipped default', () => {
+  for (const bad of [null, undefined, 'nope', 42, [], [{ key: '' }], [{ key: 'Bad Key' }]]) {
+    const g = normalizeStepGroups(bad);
+    assert.ok(g.length >= 3, JSON.stringify(bad));
+    assert.equal(groupForStep('task_execution', g), 'build');
+  }
+});
+
+test('hasGlobalCliDefaults: an empty block is not "configured"', () => {
+  // `groups` is an object and never null — testing it for non-null would make
+  // every empty block look configured, and use_global projects would inherit
+  // nothing over their own values.
+  assert.equal(hasGlobalCliDefaults(null), false);
+  assert.equal(hasGlobalCliDefaults({}), false);
+  assert.equal(hasGlobalCliDefaults({ groups: {} }), false);
+  assert.equal(hasGlobalCliDefaults({ default: 'not-a-cli' }), false);
+  assert.equal(hasGlobalCliDefaults({ default: 'opencode' }), true);
+  assert.equal(hasGlobalCliDefaults({ groups: { build: { cli: 'codex' } } }), true);
+});
+
+test('mergeGlobalCli: groups merge per key rather than wholesale', () => {
+  const base = { default: 'claude', default_model: null, default_effort: null, groups: { review: { cli: 'claude', model: null, effort: null } } };
+  const merged = mergeGlobalCli(base, { default: 'opencode', groups: { build: { cli: 'codex' } } });
+  assert.equal(merged.default, 'opencode');
+  assert.equal(merged.groups.build.cli, 'codex');
+  assert.equal(merged.groups.review.cli, 'claude'); // a global that sets only build must not blank review
+});
+
+test('effective config: project values apply when use_global is off', () => {
+  const local = { default: 'claude', groups: { build: { cli: 'opencode', model: 'openrouter/m/k', effort: 'high' } }, use_global: false };
+  const global = { default: 'codex', default_model: 'gpt-5.2-codex' };
+  const eff = resolveEffectiveCliConfig({ localCli: local, globalCli: global });
+  assert.equal(eff.default, 'claude');
+  assert.equal(eff.groups.build.cli, 'opencode');
+});
+
+test('effective config: Use default takes the global wholesale', () => {
+  const local = { default: 'claude', groups: { build: { cli: 'opencode' } }, use_global: true };
+  const global = { default: 'codex', groups: { build: { cli: 'claude', model: 'opus', effort: 'high' } } };
+  const eff = resolveEffectiveCliConfig({ localCli: local, globalCli: global });
+  assert.equal(eff.use_global, true);
+  assert.equal(eff.default, 'codex');
+  assert.equal(eff.groups.build.cli, 'claude'); // the project's opencode must not leak through
+});
+
+test('effective config: use_global with an empty global keeps project values', () => {
+  const local = { default: 'opencode', groups: { build: { cli: 'codex' } }, use_global: true };
+  const eff = resolveEffectiveCliConfig({ localCli: local, globalCli: {} });
+  assert.equal(eff.default, 'opencode');
+  assert.equal(eff.groups.build.cli, 'codex');
+});
+
+test('effective config: local groups layer over yaml groups', () => {
+  const eff = resolveEffectiveCliConfig({
+    yamlCli: { default: 'claude', groups: { build: { cli: 'codex' }, review: { cli: 'codex' } } },
+    localCli: { groups: { build: { cli: 'opencode', model: 'openrouter/a/b', effort: null } } },
+  });
+  assert.equal(eff.groups.build.cli, 'opencode'); // local wins
+  assert.equal(eff.groups.review.cli, 'codex');   // yaml survives
+});
+
+test('providersFromCliConfig: every CLI any group can launch on', () => {
+  assert.deepEqual(providersFromCliConfig({ default: 'claude' }), ['claude']);
   assert.deepEqual(
-    providersFromCliConfig({ default: 'codex' }),
-    ['codex'],
+    providersFromCliConfig({ default: 'claude', groups: { build: { cli: 'codex' }, review: { cli: 'opencode' } } }),
+    ['claude', 'codex', 'openrouter'],
   );
-  assert.deepEqual(
-    providersFromCliConfig({ default: 'opencode', developer_cli: 'claude', reviewer_cli: 'codex' }),
-    ['openrouter', 'claude', 'codex'],
-  );
-  assert.deepEqual(
-    providersFromCliConfig({ default: 'claude', developer_cli: null, reviewer_cli: null }),
-    ['claude'],
-  );
-  // unset developer/reviewer fall back to default → single provider
-  assert.deepEqual(
-    providersFromCliConfig({ default: 'opencode', developer_cli: 'opencode', reviewer_cli: null }),
-    ['openrouter'],
-  );
+  // A group with no CLI of its own contributes the default, not a duplicate.
+  assert.deepEqual(providersFromCliConfig({ default: 'codex', groups: { build: {}, review: {} } }), ['codex']);
   assert.deepEqual(providersFromCliConfig(null), ['claude']);
 });
 
+// ─── validateCliPatch (shared by both Model pages) ──────────────────────────
 
+test('validateCliPatch: accepts a group patch, rejects junk', () => {
+  assert.equal(validateCliPatch({ groups: { build: { cli: 'codex', model: 'gpt-5.2-codex', effort: 'high' } } }).error, undefined);
+  assert.match(validateCliPatch({ groups: { build: { cli: 'nope' } } }).error, /must be one of/);
+  assert.match(validateCliPatch({ groups: { build: { effort: 'bad; rm -rf /' } } }).error, /effort token/);
+  assert.match(validateCliPatch({ groups: { 'Bad Key': {} } }).error, /invalid group key/);
+  assert.match(validateCliPatch({ groups: [] }).error, /object keyed by group/);
+  assert.match(validateCliPatch({}).error, /No cli settings/);
+});
+
+test('validateCliPatch: a null group slot clears it', () => {
+  const { patch } = validateCliPatch({ groups: { build: null } });
+  assert.deepEqual(patch.groups.build, { cli: null, model: null, effort: null });
+});
+
+test('validateCliPatch: block-level fields and use_global still validate', () => {
+  assert.equal(validateCliPatch({ default: 'claude' }).error, undefined);
+  assert.match(validateCliPatch({ default: 'nope' }).error, /default must be one of/);
+  assert.equal(validateCliPatch({ use_global: true }).error, undefined);
+  assert.match(validateCliPatch({ use_global: 'yes' }).error, /boolean/);
+  assert.match(validateCliPatch({ default_effort: 'bad token' }).error, /effort token/);
+});

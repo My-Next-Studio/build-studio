@@ -20,8 +20,8 @@ const express = require('express');
 const path = require('path');
 const { loadLocalOverrides, saveLocalOverrides, reloadConfig } = require('../config');
 const {
-  VALID_CLIS, resolveEnabledClis, detectClis, isValidEffortToken,
-  loadHubConfig, hasGlobalCliDefaults, normalizeCliBlock,
+  VALID_CLIS, resolveEnabledClis, detectClis,
+  loadHubConfig, hasGlobalCliDefaults, normalizeCliBlock, validateCliPatch,
 } = require('@build-studio/shared/cli');
 const { getCatalog } = require('@build-studio/shared/opencode-catalog');
 
@@ -62,53 +62,19 @@ function createCliConfigRouter(config) {
       valid_clis: VALID_CLIS,
       enabled_clis: resolveEnabledClis(),
       detected_clis: Object.fromEntries(Object.entries(detected).map(([k, v]) => [k, !!v])),
+      // The Model page renders one row per group, in this order. Sent by the
+      // server because the grouping is configuration, not a UI constant — a
+      // project that regroups its steps gets different rows without a rebuild.
+      step_groups: config.step_groups,
     });
   });
 
   router.put('/config/cli', (req, res) => {
-    const body = req.body || {};
-    const patch = {};
-    if (body.default !== undefined) {
-      if (!VALID_CLIS.includes(body.default)) {
-        return res.status(400).json({ error: `default must be one of ${VALID_CLIS.join(', ')}` });
-      }
-      patch.default = body.default;
-    }
-    for (const key of ['developer_cli', 'reviewer_cli']) {
-      if (body[key] !== undefined) {
-        if (body[key] !== null && !VALID_CLIS.includes(body[key])) {
-          return res.status(400).json({ error: `${key} must be one of ${VALID_CLIS.join(', ')} or null` });
-        }
-        patch[key] = body[key] || null;
-      }
-    }
-    if (body.use_global !== undefined) {
-      if (typeof body.use_global !== 'boolean') {
-        return res.status(400).json({ error: 'use_global must be a boolean' });
-      }
-      patch.use_global = body.use_global;
-    }
-    for (const key of ['default_model', 'developer_model', 'reviewer_model']) {
-      if (body[key] !== undefined) {
-        if (body[key] !== null && typeof body[key] !== 'string') {
-          return res.status(400).json({ error: `${key} must be a string (provider/model) or null` });
-        }
-        patch[key] = body[key] || null;
-      }
-    }
-    for (const key of ['default_effort', 'developer_effort', 'reviewer_effort']) {
-      if (body[key] !== undefined) {
-        // null clears; otherwise must be a shell-safe effort token (it lands on
-        // the opencode command line as --variant <value>)
-        if (body[key] !== null && !isValidEffortToken(body[key])) {
-          return res.status(400).json({ error: `${key} must be an effort token (e.g. low, high, max) or null` });
-        }
-        patch[key] = body[key] || null;
-      }
-    }
-    if (Object.keys(patch).length === 0) {
-      return res.status(400).json({ error: 'No cli settings in body — expected default / use_global / developer_cli / reviewer_cli / default_model / developer_model / reviewer_model / default_effort / developer_effort / reviewer_effort' });
-    }
+    // Validation is shared with the installation-wide route in the hub — one
+    // shape, one validator, so a value cannot be accepted here and rejected
+    // there.
+    const { patch, error } = validateCliPatch(req.body);
+    if (error) return res.status(400).json({ error });
     saveLocalOverrides(projectRoot, { cli: patch });
     try {
       reloadConfig(config);

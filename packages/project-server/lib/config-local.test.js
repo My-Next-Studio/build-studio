@@ -33,27 +33,27 @@ test('cli defaults: no cli block anywhere → claude, null models', () => {
 });
 
 test('cli from config.yaml is honored', () => {
-  const root = makeProject(BASE_YAML + 'cli:\n  default: codex\n  developer_model: openrouter/a/b\n');
+  const root = makeProject(BASE_YAML + 'cli:\n  default: codex\n  groups:\n    build:\n      model: openrouter/a/b\n');
   try {
     const cfg = loadConfig(root);
     assert.equal(cfg.cli.default, 'codex');
-    assert.equal(cfg.cli.developer_model, 'openrouter/a/b');
-    assert.equal(cfg.cli.reviewer_model, null);
+    assert.equal(cfg.cli.groups.build.model, 'openrouter/a/b');
+    assert.deepEqual(cfg.cli.groups.review, undefined);
   } finally { clean(root); }
 });
 
 test('local.json overrides config.yaml for cli (hub writes win)', () => {
   const root = makeProject(
-    BASE_YAML + 'cli:\n  default: claude\n  developer_model: openrouter/a/b\n',
-    JSON.stringify({ cli: { default: 'opencode', reviewer_model: 'openrouter/c/d' } })
+    BASE_YAML + 'cli:\n  default: claude\n  groups:\n    build:\n      model: openrouter/a/b\n',
+    JSON.stringify({ cli: { default: 'opencode', groups: { review: { model: 'openrouter/c/d' } } } })
   );
   try {
     const cfg = loadConfig(root);
     // local.json wins where set…
     assert.equal(cfg.cli.default, 'opencode');
-    assert.equal(cfg.cli.reviewer_model, 'openrouter/c/d');
+    assert.equal(cfg.cli.groups.review.model, 'openrouter/c/d');
     // …yaml value survives where local.json is silent.
-    assert.equal(cfg.cli.developer_model, 'openrouter/a/b');
+    assert.equal(cfg.cli.groups.build.model, 'openrouter/a/b');
   } finally { clean(root); }
 });
 
@@ -78,14 +78,14 @@ test('saveLocalOverrides: shallow-merges per top-level key, preserves others', (
   const root = makeProject(BASE_YAML);
   try {
     saveLocalOverrides(root, { cli: { default: 'opencode' } });
-    saveLocalOverrides(root, { cli: { developer_model: 'openrouter/x/y' } });
+    saveLocalOverrides(root, { cli: { groups: { build: { cli: null, model: 'openrouter/x/y', effort: null } } } });
     const local = loadLocalOverrides(root);
-    assert.deepEqual(local.cli, { default: 'opencode', developer_model: 'openrouter/x/y' });
+    assert.deepEqual(local.cli, { default: 'opencode', groups: { build: { cli: null, model: 'openrouter/x/y', effort: null } } });
 
     // null clears a field; unrelated keys preserved
-    saveLocalOverrides(root, { cli: { developer_model: null } });
+    saveLocalOverrides(root, { cli: { groups: null } });
     const local2 = loadLocalOverrides(root);
-    assert.deepEqual(local2.cli, { default: 'opencode', developer_model: null });
+    assert.deepEqual(local2.cli, { default: 'opencode', groups: null });
 
     // config.yaml on disk was never touched by saves
     const yamlOnDisk = fs.readFileSync(path.join(root, '.build-studio', 'config.yaml'), 'utf8');

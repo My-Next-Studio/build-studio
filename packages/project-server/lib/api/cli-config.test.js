@@ -1,7 +1,7 @@
 'use strict';
 
 // Tests for the cli-config API:
-//  - PUT /api/config/cli: default_effort / developer_effort / reviewer_effort
+//  - PUT /api/config/cli: block defaults + per-step-group slots
 //    validation (shell-safety — the value lands on the opencode command line)
 // The models.dev parsing this file used to cover now lives in — and is tested
 // with — @build-studio/shared/opencode-catalog, which owns the catalog cache.
@@ -48,40 +48,47 @@ async function put(app, body) {
 
 test('PUT accepts effort tokens and persists them to local.json', async () => {
   const { app, projectRoot } = makeApp();
-  const r = await put(app, { default_effort: 'high', developer_effort: 'max', reviewer_effort: null });
+  const r = await put(app, { default_effort: 'high', groups: { build: { effort: 'max' }, review: { effort: null } } });
   assert.equal(r.status, 200);
   const local = JSON.parse(fs.readFileSync(path.join(projectRoot, '.build-studio', 'local.json'), 'utf8'));
   assert.equal(local.cli.default_effort, 'high');
-  assert.equal(local.cli.developer_effort, 'max');
-  assert.equal(local.cli.reviewer_effort, null);
+  assert.equal(local.cli.groups.build.effort, 'max');
+  assert.equal(local.cli.groups.review.effort, null);
 });
 
 test('PUT rejects shell-unsafe effort values (would land on the command line)', async () => {
   const { app, projectRoot } = makeApp();
   for (const bad of ['high; rm -rf ~', '$(whoami)', 'high max', '`id`', 'a'.repeat(64)]) {
-    const r = await put(app, { developer_effort: bad });
+    const r = await put(app, { groups: { build: { effort: bad } } });
     assert.equal(r.status, 400, bad);
-    assert.match(r.body.error, /developer_effort/);
+    assert.match(r.body.error, /effort token/);
   }
   assert.equal(fs.existsSync(path.join(projectRoot, '.build-studio', 'local.json')), false);
 });
 
-test('PUT accepts developer_cli / reviewer_cli slots, rejects invalid CLIs', async () => {
+test('PUT accepts per-group CLI slots, rejects invalid CLIs', async () => {
   const { app, projectRoot } = makeApp();
-  const r = await put(app, { developer_cli: 'opencode', reviewer_cli: 'claude' });
+  const r = await put(app, { groups: { build: { cli: 'opencode' }, review: { cli: 'claude' } } });
   assert.equal(r.status, 200);
   const local = JSON.parse(fs.readFileSync(path.join(projectRoot, '.build-studio', 'local.json'), 'utf8'));
-  assert.equal(local.cli.developer_cli, 'opencode');
-  assert.equal(local.cli.reviewer_cli, 'claude');
+  assert.equal(local.cli.groups.build.cli, 'opencode');
+  assert.equal(local.cli.groups.review.cli, 'claude');
 
-  const bad = await put(app, { reviewer_cli: 'chatgpt' });
+  const bad = await put(app, { groups: { review: { cli: 'chatgpt' } } });
   assert.equal(bad.status, 400);
-  assert.match(bad.body.error, /reviewer_cli/);
-  // null clears the slot (falls back to default at resolution)
-  const cleared = await put(app, { developer_cli: null });
+  assert.match(bad.body.error, /groups\.review\.cli/);
+
+  // An unknown group key is refused rather than silently stored, so a typo
+  // does not look saved while configuring nothing.
+  const typo = await put(app, { groups: { 'Build Group': { cli: 'claude' } } });
+  assert.equal(typo.status, 400);
+  assert.match(typo.body.error, /invalid group key/);
+
+  // A null slot clears the group (it then inherits the block default).
+  const cleared = await put(app, { groups: { build: null } });
   assert.equal(cleared.status, 200);
   const local2 = JSON.parse(fs.readFileSync(path.join(projectRoot, '.build-studio', 'local.json'), 'utf8'));
-  assert.equal(local2.cli.developer_cli, null);
+  assert.deepEqual(local2.cli.groups.build, { cli: null, model: null, effort: null });
 });
 
 test('PUT still rejects a body with no recognized keys', async () => {

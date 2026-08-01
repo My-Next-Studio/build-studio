@@ -84,12 +84,7 @@ const COMMIT_ON_CURRENT_BRANCH = 'Commit on the currently checked-out branch —
 const {
   VALID_CLIS,
   resolveEnabledClis,
-  isDeveloperRole,
-  isReviewerRole,
-  resolveCliForRole,
-  resolveModelForRole,
-  resolveEffortForRole,
-  resolveAgentLaunchSettings,
+  resolveStepLaunchSettings,
   resolveAutoReviewerCli,
   buildCliFlags,
   resolveStepModelForCli,
@@ -100,9 +95,9 @@ const {
 // The LEGACY per-run reviewerCli knob (cross-model review) applies ONLY to
 // execution workflows. In a PRD review it adds no value (reviewing a doc, not
 // code) and just risks a second-CLI auth/availability failure (the codex-token
-// stall, 2026-06-05). The CONFIGURED reviewer slot (config.cli.reviewer_cli) is
-// separate and applies in every workflow type — a Code Reviewer is a reviewer
-// whatever run it appears in. See resolveCliForRole in shared/cli.
+// stall, 2026-06-05). It survives only so a run started before step groups
+// existed finishes on the CLI it began with; new runs leave it unset and take
+// their CLI from the step's group. See resolveStepLaunchSettings in shared/cli.
 
 // Normalize role names for lookup so the API accepts every reasonable form an
 // agent might reconstruct from its skill filename or memory after compaction
@@ -116,7 +111,7 @@ function normalizeRole(s) {
 // developer's (deterministic first-enabled-≠-developer — cross-model review
 // diversity is enforced here, not just in the hub); omitted → the developer
 // CLI (conservative same-CLI default — cross-model review remains opt-in).
-// The flip only takes effect in execution workflows (see resolveCliForRole).
+// The flip only takes effect in execution workflows (legacy per-run pin).
 function resolveReviewerCliAtStart(startReviewerCli, developerCli, enabledClis) {
   if (startReviewerCli === 'auto') return resolveAutoReviewerCli(developerCli, enabledClis);
   return startReviewerCli || developerCli;
@@ -1658,6 +1653,9 @@ ${EFFICIENCY_INSTRUCTIONS}`,
   }
 
   function launchWorkflowAgents(wf, agents, { useWorktrees = false, allowAll = true, cwd = projectRoot, stepKey = null } = {}) {
+    // Needed before the CLI probe below, which now checks the one CLI this
+    // step resolves to rather than one per agent role.
+    const resolvedStep = stepKey || wf.currentStep;
     // No model in this line on purpose: each agent resolves its own CLI, model
     // and effort in the loop below (a step's agents can differ), and each is
     // logged with its provenance there. A single step-level model here was an
@@ -1702,15 +1700,16 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     }
 
     // Determine which CLI binaries this batch actually needs. Each agent's CLI
-    // resolves from its role via resolveCliForRole: developers → legacy
+    // resolves from the step's group via resolveStepLaunchSettings.
     // wf.developerCli then cli.developer_cli, reviewers (execution only) →
-    // legacy wf.reviewerCli then cli.reviewer_cli, everything else → cli.default.
+    // resolved from the step's group (see resolveStepLaunchSettings).
     const INSTALL_HINTS = {
       claude: 'Install with `npm i -g @anthropic-ai/claude-code` or verify `which claude` from a normal shell.',
       codex: 'Install with `npm i -g @openai/codex` or verify `which codex` from a normal shell.',
       opencode: 'Install with `brew install anomalyco/tap/opencode` (or see opencode.ai) and verify `which opencode` from a normal shell.',
     };
-    const neededClis = new Set(agents.map(a => resolveCliForRole(a.role, wf, config.cli)));
+    // One CLI per step now, not one per role — probe that.
+    const neededClis = new Set([resolveStepLaunchSettings(resolvedStep, wf, config.cli, config.step_groups).cli]);
 
     let cliError = null;
     for (const cli of neededClis) {
@@ -1755,7 +1754,6 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     const { resolvePermissionMode, claudePermissionFlag } = require('../permission-mode');
     const permissionMode = resolvePermissionMode(config.agent_defaults);
     const unsetKey = config.agent_defaults.unset_api_key;
-    const resolvedStep = stepKey || wf.currentStep;
     // Per-step model/effort, split by PROVENANCE. Owner-specified order
     // (2026-07-31) — what the UI shows is what runs:
     //
@@ -1829,7 +1827,11 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       // Which CLI / model / effort this agent launches with — shared pure
       // resolver (also unit-tested), with the per-step overrides layered on
       // top for EVERY CLI, not just claude.
-      const launch = resolveAgentLaunchSettings(agent.role, wf, config.cli);
+      // Resolved from the STEP, not the agent's role: every agent in a step
+      // does the same kind of work and now shares one setting. (Under the old
+      // per-role slots the six agents of a `reviewing` round were split across
+      // two slots purely because one of them was named Security.)
+      const launch = resolveStepLaunchSettings(resolvedStep, wf, config.cli, config.step_groups);
       const agentCli = launch.cli;
       const runModel = resolveStepModelForCli(runModelEntry, agentCli);
       const runEffort = resolveStepEffortForCli(runEffortEntry, agentCli);
@@ -1837,7 +1839,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       const stepEffort = resolveStepEffortForCli(stepEffortEntry, agentCli);
       const presetModel = resolveStepModelForCli(presetModelEntry, agentCli);
       const presetEffort = resolveStepEffortForCli(presetEffortEntry, agentCli);
-      // Model chain: per-run override > UI role slot > project config.yaml >
+      // Model chain: per-run override > UI group slot > project config.yaml >
       // preset > agent_defaults. The agent_defaults tail is claude-only — its
       // `model` holds a claude short name, so it can't stand in for a codex
       // slug or an opencode id.
@@ -1847,8 +1849,8 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       const effortLevel = runEffort || launch.effort || stepEffort || presetEffort
         || (config.agent_defaults && config.agent_defaults.effort) || null;
       // Which layer decided, so the card can say so instead of showing a value
-      // with no explanation of why the Agents-tab pick didn't apply.
-      const modelSource = runModel ? 'run' : launch.model ? 'role' : stepModel ? 'step' : presetModel ? 'preset' : 'default';
+      // with no explanation of why the Model-page pick didn't apply.
+      const modelSource = runModel ? 'run' : launch.model ? 'group' : stepModel ? 'step' : presetModel ? 'preset' : 'default';
       // One builder for all three CLIs — drops a model that doesn't fit the CLI
       // and an effort that isn't a plain token, so a mistyped step_models entry
       // can never reach a shell command line.
@@ -3341,7 +3343,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       reviewMode: startReviewMode || config.review_mode || 'parallel',
       autoIterateRemaining: startAutoIterate || 0,
       // Legacy per-run CLI knobs: stored ONLY when an explicit value arrives
-      // (old hub/API callers). New runs leave them unset so resolveCliForRole
+      // (old hub/API callers). New runs leave them unset so the step group
       // uses the project's per-role selectors (cli.developer_cli/reviewer_cli).
       ...(startDeveloperCli ? { developerCli: startDeveloperCli } : {}),
       ...(startReviewerCli
@@ -4310,7 +4312,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     // builder actually runs on claude (codex and opencode have no equivalent).
     const useGoalHarness = (config.builder_strategy || 'role') === 'goal'
       && wf.taskPlan && wf.taskPlan.monolithic
-      && resolveCliForRole(role.role, wf, config.cli) === 'claude';
+      && resolveStepLaunchSettings('task_execution', wf, config.cli, config.step_groups).cli === 'claude';
     const goalCondition = useGoalHarness
       ? `Every acceptance criterion of the PRD at ${prdPath} is implemented; the COMPLETE test suite (including the pre-implementation tests committed before this session started) has been run and passes; all work is committed on the current branch; and the feedback POST from the prompt file has been sent successfully, including a per-AC evidence table.`
       : null;

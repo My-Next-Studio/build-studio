@@ -3,20 +3,23 @@
 import { useEffect, useState } from 'react'
 import { useProjectApi } from '@/lib/use-project-api'
 import { CliRoleSelectors } from './cli-role-selectors'
-import type { CliCatalog } from './cli-role-selectors'
+import type { CliCatalog, StepGroup } from './cli-role-selectors'
 
 export type Cli = 'claude' | 'codex' | 'opencode'
 
+/** One step group's setting. Any field left null inherits the block default. */
+export interface CliGroupSlot {
+  cli: Cli | null
+  model: string | null
+  effort: string | null
+}
+
 export interface CliBlock {
   default: Cli
-  developer_cli: Cli | null
-  reviewer_cli: Cli | null
   default_model: string | null
-  developer_model: string | null
-  reviewer_model: string | null
   default_effort: string | null
-  developer_effort: string | null
-  reviewer_effort: string | null
+  /** Keyed by step-group key — the groups themselves come from config. */
+  groups: Record<string, CliGroupSlot>
   use_global?: boolean
 }
 
@@ -27,6 +30,7 @@ interface CliConfigResponse {
   valid_clis: Cli[]
   enabled_clis: Cli[]
   detected_clis: Record<string, boolean>
+  step_groups: StepGroup[]
 }
 
 const CLI_LABELS: Record<Cli, string> = {
@@ -127,7 +131,7 @@ export function CliSettingsCard() {
       )}
 
       <fieldset disabled={useGlobal} style={{ border: 'none', margin: 0, padding: 0, opacity: useGlobal ? 0.55 : 1 }}>
-        <CliRoleSelectors value={cli} catalog={catalog} onChange={save} disabled={useGlobal} />
+        <CliRoleSelectors value={cli} groups={cfg.step_groups || []} catalog={catalog} onChange={save} disabled={useGlobal} />
       </fieldset>
 
       {!useGlobal && (

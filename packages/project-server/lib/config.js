@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const yaml = require('js-yaml');
 const { resolvePreset, PRESETS } = require('./presets');
-const { VALID_CLIS, HUB_CONFIG_PATH, loadHubConfig, resolveEffectiveCliConfig } = require('@build-studio/shared/cli');
+const { VALID_CLIS, HUB_CONFIG_PATH, loadHubConfig, resolveEffectiveCliConfig, normalizeStepGroups } = require('@build-studio/shared/cli');
 
 // Per-project agent-CLI defaults. `default` applies to every role NOT covered
 // by the per-run developerCli/reviewerCli knobs (kickoff, onboarding, review
@@ -12,10 +12,14 @@ const { VALID_CLIS, HUB_CONFIG_PATH, loadHubConfig, resolveEffectiveCliConfig } 
 // config.yaml (`cli:`) and overridable from the hub — hub writes go to
 // .build-studio/local.json (machine-managed, gitignored), never to config.yaml,
 // so hand-maintained comments in config.yaml survive hub edits.
+// Mirrors CLI_SLOT_DEFAULTS in shared/cli.js. Per-step-group slots live under
+// `groups`; the three block-level fields are the fallback a group inherits
+// when it sets nothing of its own.
 const CLI_DEFAULTS = {
-  default: 'claude', developer_cli: null, reviewer_cli: null,
-  default_model: null, developer_model: null, reviewer_model: null,
-  default_effort: null, developer_effort: null, reviewer_effort: null,
+  default: 'claude',
+  default_model: null,
+  default_effort: null,
+  groups: {},
 };
 
 const DEFAULTS = {
@@ -217,6 +221,13 @@ function loadConfig(projectRoot) {
     // defaults when local.cli.use_global is true (shared/cli
     // resolveEffectiveCliConfig is the single source of truth — also unit-tested).
     cli: resolveEffectiveCliConfig({ localCli: local.cli, yamlCli: raw.cli, globalCli: loadHubConfig().cli }),
+    // Which steps share a model/effort setting. Project overrides the
+    // installation-wide grouping, which overrides the shipped default — so a
+    // project with an unusual pipeline can regroup without forcing that
+    // grouping on everything else.
+    step_groups: normalizeStepGroups(
+      local.step_groups || raw.step_groups || loadHubConfig().step_groups || null,
+    ),
     deployment: { ...DEFAULTS.deployment, ...(raw.deployment || {}) },
     functions: { ...DEFAULTS.functions, ...(raw.functions || {}) },
     bugfix: { ...DEFAULTS.bugfix, ...(raw.bugfix || {}) },

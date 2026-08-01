@@ -5,19 +5,23 @@ export type UsageProvider = 'claude' | 'codex' | 'openrouter'
 
 const VALID = new Set(['claude', 'codex', 'opencode'])
 
-/** Which account-usage providers the effective project cli block will hit. */
+/**
+ * Which account-usage providers the effective project cli block will hit.
+ *
+ * Reads the step-group slots rather than a fixed developer/reviewer pair —
+ * group keys are user-definable, so the set is whatever config declares, plus
+ * the block default for any group that sets no CLI of its own.
+ */
 export function providersFromCliConfig(cliConfig: {
   default?: string | null
-  developer_cli?: string | null
-  reviewer_cli?: string | null
+  groups?: Record<string, { cli?: string | null }> | null
 } | null | undefined): UsageProvider[] {
   const cfg = cliConfig || {}
   const def = cfg.default && VALID.has(cfg.default) ? cfg.default : 'claude'
-  const slots = [
-    def,
-    cfg.developer_cli && VALID.has(cfg.developer_cli) ? cfg.developer_cli : def,
-    cfg.reviewer_cli && VALID.has(cfg.reviewer_cli) ? cfg.reviewer_cli : def,
-  ]
+  const slots = [def]
+  for (const slot of Object.values(cfg.groups || {})) {
+    slots.push(slot?.cli && VALID.has(slot.cli) ? slot.cli : def)
+  }
   const out: UsageProvider[] = []
   const seen = new Set<string>()
   for (const cli of slots) {
