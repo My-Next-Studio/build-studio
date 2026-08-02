@@ -2434,6 +2434,23 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
   // Returns { violations: string[] } — caller decides how to surface.
   // Used by both the qa_tests approval gate and the merge_for_review gate so
   // task-execution tests can't bypass the check that only ran pre-implementation.
+  /**
+   * Endpoints a test must never reach: billed per call, and reachable with a
+   * key that is already on the machine.
+   *
+   * `openrouter.ai` was missing until 2026-08-02, which mattered because it is
+   * a *gateway* — one key fronts every model behind it, so a test calling it
+   * bills exactly like a direct provider call while naming none of the
+   * providers this list knew about. It was found by a file that named both
+   * OpenRouter and Anthropic: the scan flagged the Anthropic line and walked
+   * past the OpenRouter one directly above it.
+   *
+   * Add a host here rather than at a call site — the gate runs from two places
+   * (the qa_tests approval and the merge), and a second copy of this list is
+   * how one of them comes to allow what the other blocks.
+   */
+  const PAID_LLM_ENDPOINTS = /api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com|openrouter\.ai/i;
+
   function scanTestFilesForLlmViolations(cwd, baseBranch = 'main') {
     const violations = [];
     try {
@@ -2459,7 +2476,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         // the forbidden value; no network call occurs. The tag is a visible,
         // reviewable waiver — reviewers should verify the file truly never
         // reaches the network (same trust model as the @real-llm tag below).
-        if (/api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com/i.test(content)) {
+        if (PAID_LLM_ENDPOINTS.test(content)) {
           if (/@llm-url-fixture/.test(content)) {
             console.log(`[workflow] llm-gate: ${relPath} contains a real LLM URL but is tagged @llm-url-fixture (URL asserted as rejected, not called) — allowed`);
           } else {

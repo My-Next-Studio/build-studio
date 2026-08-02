@@ -205,6 +205,14 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   offers both ways out: **another review round**, or **move on to companion
   specs**. Neither is preselected, and the run cannot finish from there.
 
+- **The paid-LLM test gate now blocks `openrouter.ai`.** It matched the three
+  first-party endpoints but not the gateway, which mattered more than the
+  omission suggests: one OpenRouter key fronts every model behind it, so a test
+  calling it bills exactly like a direct provider call while naming none of the
+  hosts the gate knew about. Found on a file that named both OpenRouter and
+  Anthropic — the scan flagged the Anthropic line and walked past the OpenRouter
+  one directly above it.
+
 - **A step no longer fails to launch when the previous agent's window was the
   last one.** Reaping a finished agent's window (new in this release) ends the
   tmux session if nothing else is open, and tmux shuts the server down

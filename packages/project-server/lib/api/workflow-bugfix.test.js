@@ -309,6 +309,29 @@ test('bugfix merge: LLM scan blocks a regression test with a real LLM API URL', 
   }
 });
 
+test('bugfix merge: LLM scan blocks an OpenRouter call', async () => {
+  // OpenRouter is a GATEWAY: one key fronts every model behind it, so a test
+  // calling it bills exactly like a direct provider call while naming none of
+  // the providers the list originally knew about. Missing until 2026-08-02,
+  // found on a file that named both OpenRouter and Anthropic — the scan
+  // flagged the Anthropic line and walked past the OpenRouter one above it.
+  const fx = makeFixtureRepo();
+  const srv = await mountRouter(fx.root);
+  try {
+    stageBugfixAtMerge(fx, srv, 'src/regression/ls-001.test.js',
+      `test('lists models', async () => {\n  const r = await fetch('https://openrouter.ai/api/v1/models');\n  expect(r.ok).toBe(true);\n});\n`);
+    const mainBefore = gitRev(fx.root, 'main');
+
+    const res = await srv.post('/api/workflow/advance', {});
+    assert.equal(res.status, 400, JSON.stringify(res.body));
+    assert.ok((res.body.violations || []).some(v => /ls-001\.test\.js/.test(v)), JSON.stringify(res.body));
+    assert.equal(gitRev(fx.root, 'main'), mainBefore);
+  } finally {
+    await srv.close();
+    fx.clean();
+  }
+});
+
 test('bugfix merge: @llm-url-fixture waiver passes the scan and the merge proceeds', async () => {
   const fx = makeFixtureRepo();
   const srv = await mountRouter(fx.root);
