@@ -596,7 +596,26 @@ function startServer(projectRoot, opts = {}) {
 
           if (idleMs > AGENT_IDLE_TIMEOUT_MS) {
             agent.status = 'error';
-            agent.error = `Stalled — no log activity for ${Math.round(idleMs / 60000)} minutes (total elapsed ${Math.round(elapsed / 60000)}m). Agent may be stuck (waiting for input, crashed, or context exhausted). Cancel and re-launch.`;
+            // Say which of the two it is. An agent on a CLI with no resumable
+            // session (codex, opencode) is downgraded from 'dead' to 'alive'
+            // above — deliberately, because the shell-pane heuristic false-fired
+            // on a healthy opencode agent at the 2-minute mark. But that
+            // downgrade only means "not confident enough to auto-resume"; it
+            // does not mean the agent is alive, and reporting the result as
+            // "may be stuck, waiting for input, or context exhausted" sends you
+            // hunting for a live process that exited cleanly a quarter of an
+            // hour ago (launch-studio, 2026-08-03: a codex QA agent that had
+            // committed 557 lines of tests and quit).
+            //
+            // By the time the 15-minute timeout fires, the shell-pane signal is
+            // far more trustworthy than it was at 2 minutes, so it is worth
+            // reading again to name the outcome correctly.
+            const exited = agentRecovery.isShellCommand(tmuxOps.paneCommand(target));
+            agent.error = exited
+              ? `Process exited ${Math.round(idleMs / 60000)} minutes ago (pane is back at a shell prompt) after ${Math.round(elapsed / 60000)}m of work`
+                + `${agent.cliSessionId ? '' : ` — ${agent.cli || 'this CLI'} has no resumable session, so it cannot be continued in place`}. `
+                + 'Check whether it committed its work before relaunching — if it did, recover that instead of redoing it.'
+              : `Stalled — no log activity for ${Math.round(idleMs / 60000)} minutes (total elapsed ${Math.round(elapsed / 60000)}m). Agent may be stuck (waiting for input, crashed, or context exhausted). Cancel and re-launch.`;
             changed = true;
             console.log(`[workflow] Agent ${agent.role} stalled — log idle for ${Math.round(idleMs / 60000)}m in step ${activeWf.currentStep}`);
           }

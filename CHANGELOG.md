@@ -205,6 +205,31 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   offers both ways out: **another review round**, or **move on to companion
   specs**. Neither is preselected, and the run cannot finish from there.
 
+- **An agent that exits after committing is no longer reported as "stalled",
+  and its work can be recovered.** Two gaps, both hit by the same run.
+
+  The idle watchdog reported every silent agent as *"Stalled — may be stuck,
+  waiting for input, or context exhausted"*. For a CLI with no resumable session
+  (codex, opencode) that is systematically wrong: the dead-process check is
+  deliberately downgraded for those, because the shell-pane heuristic false-fired
+  on a healthy agent at two minutes — but the downgrade only means "not
+  confident enough to auto-resume", not "alive". Observed on an agent that had
+  committed 557 lines of tests and quit a quarter of an hour earlier. At the
+  15-minute mark the pane is re-read, and an exited process is now named as one.
+
+  Recovery previously required a Claude transcript, so those same CLIs had no
+  route back at all. Where no transcript exists, Build Studio now reconstructs a
+  report **from the commits** — and is careful about the difference. It is
+  labelled `RECONSTRUCTED, not agent-authored`, states that it describes what is
+  on disk rather than a conclusion the agent reached, raises any uncommitted
+  leftovers as a caveat that the agent may have stopped mid-task, and closes by
+  naming what it does *not* assert: correctness, completeness, or whether
+  anything passes. The step's own gate still does the real validating.
+
+  The agent's own words are always preferred when they survive; the git
+  reconstruction is the weaker fallback and the UI says which one you are about
+  to file.
+
 - **A failing watchdog tick no longer kills the project-server.** The 30-second
   agent watchdog ran with no error handling, so any throw inside it became an
   uncaught exception and exited the process — the project simply disappeared

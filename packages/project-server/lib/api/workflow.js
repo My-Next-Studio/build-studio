@@ -12,6 +12,7 @@ const agentRecovery = require('../agent-recovery');
 const limitBlock = require('../limit-block');
 const memoryGuard = require('../memory-guard');
 const transcriptRecovery = require('../transcript-recovery');
+const exitRecovery = require('../exit-recovery');
 
 // Common instruction fragments injected into all agent prompts.
 // Placeholders {{CONTEXT_BUDGET}} and {{SOFT_THRESHOLD}} are replaced
@@ -3738,20 +3739,81 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
   // memory pressure the process stops accepting input at all — so read the
   // report out of the CLI transcript instead.
 
+  /**
+   * What an agent left in git — the evidence that survives when a CLI writes no
+   * transcript. Read-only; every failure degrades to "no evidence" rather than
+   * throwing, because this runs inside a listing endpoint.
+   */
+  function gitWorkFacts(wf, agent) {
+    const { execFileSync } = require('child_process');
+    const cwd = (agent.agentCwd && fs.existsSync(agent.agentCwd)) ? agent.agentCwd : projectRoot;
+    const base = wf.defaultBranch || 'main';
+    const git = (args) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    try {
+      const log = git(['log', '--format=%h\x1f%s', `${base}..HEAD`, '--max-count=20']);
+      const commits = log ? log.split('\n').filter(Boolean).map((l) => {
+        const [sha, subject] = l.split('\x1f');
+        return { sha, subject: subject || '' };
+      }) : [];
+      if (!commits.length) return { commits: [], dirty: [] };
+
+      let filesChanged; let insertions; let deletions;
+      try {
+        const stat = git(['diff', '--shortstat', `${base}...HEAD`]);
+        const f = /(\d+) files? changed/.exec(stat);
+        const i = /(\d+) insertions?/.exec(stat);
+        const d = /(\d+) deletions?/.exec(stat);
+        if (f) filesChanged = Number(f[1]);
+        if (i) insertions = Number(i[1]);
+        if (d) deletions = Number(d[1]);
+      } catch (_) { /* churn is a nicety */ }
+
+      let dirty = [];
+      try {
+        dirty = git(['status', '--porcelain']).split('\n').filter(Boolean).map((l) => l.slice(3));
+      } catch (_) { /* leave empty */ }
+
+      return { commits, filesChanged, insertions, deletions, dirty, base, cwd };
+    } catch (_) {
+      return { commits: [], dirty: [] };
+    }
+  }
+
   router.get('/workflow/recoverable', (req, res) => {
     const wf = state.loadWorkflow();
     if (!wf) return res.json({ recoverable: [] });
     const recoverable = [];
     for (const agent of agentsOfCurrentStep(wf)) {
       if (agent.feedback) continue;
+      // Prefer the agent's OWN words when they survive. The git reconstruction
+      // is a weaker substitute — it says what landed, not what the agent
+      // concluded — so it is only offered when no transcript exists.
       const found = transcriptRecovery.recoverAgentOutput(agent);
-      if (!found) continue;
+      if (found) {
+        recoverable.push({
+          role: agent.role,
+          window: agent.window,
+          status: agent.status,
+          source: 'transcript',
+          chars: found.chars,
+          preview: found.text.slice(0, 400),
+        });
+        continue;
+      }
+      const facts = gitWorkFacts(wf, agent);
+      if (!exitRecovery.hasRecoverableWork(facts)) continue;
+      const summary = exitRecovery.buildWorkSummary({
+        role: agent.role, cli: agent.cli, step: wf.currentStep, ...facts,
+      });
       recoverable.push({
         role: agent.role,
         window: agent.window,
         status: agent.status,
-        chars: found.chars,
-        preview: found.text.slice(0, 400),
+        source: 'commits',
+        commits: facts.commits.length,
+        dirty: facts.dirty.length,
+        chars: summary.length,
+        preview: summary.slice(0, 400),
       });
     }
     res.json({ recoverable });
@@ -3767,18 +3829,35 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     if (!agent) return res.status(404).json({ error: `agent ${role} not found on ${wf.currentStep}` });
     if (agent.feedback) return res.status(400).json({ error: `${role} has already reported` });
 
+    // The agent's own words first; the git reconstruction only when no
+    // transcript exists (codex and opencode write none).
     const found = transcriptRecovery.recoverAgentOutput(agent);
-    if (!found) {
-      return res.status(404).json({ error: `nothing to recover for ${role} — no final report in its transcript` });
+    let text = found ? found.text : null;
+    let origin = found ? found.transcript : null;
+    let source = found ? 'transcript' : null;
+    if (!text) {
+      const facts = gitWorkFacts(wf, agent);
+      if (!exitRecovery.hasRecoverableWork(facts)) {
+        return res.status(404).json({
+          error: `nothing to recover for ${role} — no final report in its transcript and no commits on this branch. `
+            + 'There is no evidence it produced anything; relaunch the step instead.',
+        });
+      }
+      text = exitRecovery.buildWorkSummary({
+        role: agent.role, cli: agent.cli, step: wf.currentStep, ...facts,
+      });
+      origin = `${facts.commits.length} commit(s) in ${facts.cwd}`;
+      source = 'commits';
     }
 
     // Deliver it exactly as the agent should have: through the feedback
     // endpoint, so the format gates, telemetry capture, window reaping and
     // auto-advance chain all run unchanged. Recovery must not become a second,
-    // weaker way into workflow state.
-    console.log(`[recover] delivering ${found.chars} chars for ${agent.role} from ${found.transcript}`);
+    // weaker way into workflow state — which matters most for the git
+    // reconstruction, since that is the weaker evidence of the two.
+    console.log(`[recover] delivering ${text.length} chars for ${agent.role} from ${origin} (${source})`);
     const http = require('http');
-    const body = JSON.stringify({ role: agent.role, feedback: found.text });
+    const body = JSON.stringify({ role: agent.role, step: wf.currentStep, feedback: text });
     const fwd = http.request({
       hostname: 'localhost',
       port: config.port,
@@ -3794,10 +3873,10 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         if (r.statusCode >= 400) {
           return res.status(r.statusCode).json({
             error: parsed.error || `feedback rejected (HTTP ${r.statusCode})`,
-            recovered: found.chars,
+            recovered: text.length,
           });
         }
-        res.json({ ok: true, role: agent.role, chars: found.chars, transcript: found.transcript });
+        res.json({ ok: true, role: agent.role, chars: text.length, source, origin });
       });
     });
     fwd.on('error', (e) => res.status(502).json({ error: `could not deliver recovered feedback: ${e.message}` }));

@@ -62,6 +62,10 @@ interface RecoverableAgent {
   role: string
   window?: string
   status?: string
+  /** Where the recovered text comes from — the two are not equally strong. */
+  source?: 'transcript' | 'commits'
+  commits?: number
+  dirty?: number
   chars: number
   preview: string
 }
@@ -1202,8 +1206,17 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                 <span style={{ display: 'block', marginTop: 8 }}>
                   <span style={{ color: 'var(--text)' }}>
                     {recoverable.length === 1
-                      ? `${recoverable[0].role} finished but never reported — its ${recoverable[0].chars.toLocaleString()}-character report is in its transcript.`
-                      : `${recoverable.length} agents finished but never reported — their output is in their transcripts.`}
+                      ? (recoverable[0].source === 'commits'
+                        // A git reconstruction is weaker evidence than the agent's own
+                        // words, and saying so is the difference between recovering a
+                        // report and inventing one.
+                        ? `${recoverable[0].role} exited without reporting, but committed its work `
+                          + `(${recoverable[0].commits} commit${recoverable[0].commits === 1 ? '' : 's'}`
+                          + `${recoverable[0].dirty ? `, ${recoverable[0].dirty} file(s) left uncommitted` : ''}). `
+                          + 'Its own account is gone — this CLI keeps no transcript — so what would be filed is a '
+                          + 'reconstruction from the commits, labelled as such.'
+                        : `${recoverable[0].role} finished but never reported — its ${recoverable[0].chars.toLocaleString()}-character report is in its transcript.`)
+                      : `${recoverable.length} agents finished but never reported — their work can be recovered.`}
                   </span>
                   <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
                     {recoverable.map(r => (
@@ -1224,7 +1237,11 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                         }}
                         className="wf-btn primary"
                       >
-                        {recovering === r.role ? 'Recovering…' : `↩ Recover ${r.role}'s report`}
+                        {recovering === r.role
+                          ? 'Recovering…'
+                          : r.source === 'commits'
+                            ? `↩ Recover ${r.role}'s work from git`
+                            : `↩ Recover ${r.role}'s report`}
                       </button>
                     ))}
                   </span>
