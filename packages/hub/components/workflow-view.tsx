@@ -49,6 +49,15 @@ interface NeedsAttention {
 }
 
 /** An agent whose final report is sitting in its CLI transcript, unreported. */
+/** An agent parked on a provider usage limit, waiting for the reset. */
+interface LimitBlockedAgent {
+  role: string
+  step: string | null
+  resetsAt: string | null
+  resumeCount: number
+  detail: string
+}
+
 interface RecoverableAgent {
   role: string
   window?: string
@@ -219,6 +228,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // (dead step, blocked guardrail, human gate, round cap, finished-but-open).
   const [needsAttention, setNeedsAttention] = useState<NeedsAttention | null>(null)
   const [recoverable, setRecoverable] = useState<RecoverableAgent[]>([])
+  const [limitBlocked, setLimitBlocked] = useState<LimitBlockedAgent[]>([])
   const [recovering, setRecovering] = useState<string | null>(null)
   const [findings, setFindings] = useState<Finding[]>([])
   const [findingOverrides, setFindingOverrides] = useState<Record<string, Finding['status']>>({})
@@ -292,6 +302,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     setWf(data.workflow || null)
     setPathologySignals(data.pathologySignals || null)
     setNeedsAttention(data.needsAttention || null)
+    setLimitBlocked(Array.isArray(data.limitBlocked) ? data.limitBlocked : [])
     // An agent can finish its work and end its turn without ever POSTing its
     // report — the workflow then waits on output that already exists in the
     // CLI transcript on disk. Ask whether any of that is sitting there, so the
@@ -1129,6 +1140,40 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             }}>dismiss</button>
           </div>
         )}
+        {/* Parked on a provider usage limit — waiting on the clock, not on you.
+            Rendered in its own register, calm rather than alarming: the halt
+            banner below means "go do something", and this one means the exact
+            opposite. Before this existed the idle watchdog called it "Stalled —
+            no log activity for 15 minutes", which sent you hunting for a dead
+            process while the agents sat alive at their prompts. */}
+        {limitBlocked.length > 0 && (
+          <div style={{
+            marginBottom: 12, padding: '10px 14px', borderRadius: 4,
+            background: 'color-mix(in srgb, var(--accent) 9%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--accent) 45%, transparent)',
+            fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text-dim)',
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+          }}>
+            <span style={{ flexShrink: 0 }}>⏳</span>
+            <span style={{ flex: 1 }}>
+              <b style={{ color: 'var(--text)' }}>
+                {limitBlocked.length === 1
+                  ? `${limitBlocked[0].role} is waiting on the usage limit`
+                  : `${limitBlocked.length} agents are waiting on the usage limit`}
+              </b>
+              <br />
+              {limitBlocked[0].detail}
+              {limitBlocked.length > 1 && (
+                <span style={{ color: 'var(--muted)' }}> — {limitBlocked.map(a => a.role).join(', ')}</span>
+              )}
+              <br />
+              <span style={{ color: 'var(--muted)' }}>
+                No action needed. They resume by themselves; the live terminal is there if you would rather push them along.
+              </span>
+            </span>
+          </div>
+        )}
+
         {/* The run is stopped and will stay stopped until someone acts. Covers every
             halt the engine can reach — a dead step, a blocked guardrail, a human
             gate, the round cap, or a finished run still holding the slot — because

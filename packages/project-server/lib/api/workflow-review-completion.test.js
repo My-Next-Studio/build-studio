@@ -99,3 +99,55 @@ test('the backlog transition lives only in the completion helper', () => {
   const hits = (SRC.match(/advanceLinkedFeatures\(wf\.prdPath, 'Reviewed'\)/g) || []).length;
   assert.equal(hits, 1, `expected exactly one Reviewed transition, found ${hits}`);
 });
+
+// ─── Silence is not consent (2026-08-03) ────────────────────────────────────
+//
+// A reviewer that errored WITHOUT reporting has not said "no objection" — it
+// has said nothing. Treating `error` as a terminal state let one returning
+// reviewer carry a whole round forward on its own verdict while five others
+// were silent, and the run completed as approved with five reviews missing.
+
+test('an errored reviewer that never reported blocks the approve', () => {
+  const region = reviewRegion();
+  const i = region.indexOf('rvSilent');
+  assert.ok(i > 0, 'the silent-reviewer guard is missing');
+  const guard = region.slice(i - 400, i + 1200);
+  // Silence is defined as errored AND no feedback — an errored agent that DID
+  // report still counts, since its verdict is known.
+  assert.match(guard, /status === 'error' && !a\.feedback/);
+  assert.match(guard, /res\.status\(409\)/);
+  // And it must be escapable, or a genuinely dead reviewer deadlocks the run.
+  assert.match(guard, /override !== true/);
+});
+
+test('the running-vs-silent distinction is kept separate', () => {
+  // "Still running" and "errored without reporting" need different messages:
+  // one resolves by waiting, the other never does.
+  const region = reviewRegion();
+  assert.match(region, /rvRunning/);
+  assert.match(region, /still running/);
+  assert.match(region, /failed without reporting/);
+});
+
+// ─── Feedback cannot land in a step it was not meant for ────────────────────
+
+test('feedback naming a closed step is refused, not misfiled', () => {
+  // Four PRD reviews were recorded as companion-spec deliverables because the
+  // handler matches by role within whatever step is current — marking that step
+  // done without a single spec being written.
+  const i = SRC.indexOf('claimedStep');
+  assert.ok(i > 0, 'the step stamp is missing from the feedback handler');
+  const guard = SRC.slice(i, i + 1400);
+  assert.match(guard, /claimedStep !== wf\.currentStep/);
+  assert.match(guard, /res\.status\(409\)/);
+  assert.match(guard, /NOT recorded/);
+});
+
+test('the generated feedback curl carries the step it belongs to', () => {
+  // The guard only works if agents actually send it.
+  const curls = SRC.match(/api\/workflow\/feedback[^`]*?feedback":"<[^`]*?'/g) || [];
+  assert.ok(curls.length >= 4, `expected every agent feedback curl, found ${curls.length}`);
+  for (const c of curls) {
+    assert.match(c, /"step":"\$\{(resolvedStep|wf\.currentStep)\}"/, `curl without a step stamp: ${c.slice(0, 120)}`);
+  }
+});

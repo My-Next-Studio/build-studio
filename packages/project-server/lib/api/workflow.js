@@ -8,6 +8,8 @@ const opencodeTelemetry = require('../opencode-telemetry');
 const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
 const { deriveNeedsAttention } = require('../needs-attention');
 const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
+const agentRecovery = require('../agent-recovery');
+const limitBlock = require('../limit-block');
 const memoryGuard = require('../memory-guard');
 const transcriptRecovery = require('../transcript-recovery');
 
@@ -1827,8 +1829,8 @@ ${EFFICIENCY_INSTRUCTIONS}`,
         : `the feedback field must contain your FULL task plan output — either the complete \`\`\`json code block OR the full markdown task list with ### Role headers and numbered tasks. Do NOT summarise — paste the actual plan`;
       const feedbackCurl = agent.reportFeedback
         ? isPlanner
-          ? `\n\nWhen you are done, report your feedback by running (${plannerFeedbackHint}):\ncurl -s -X POST http://localhost:${dashboardPort}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"${agent.role}"${taskIndexParam},"feedback":"<paste full plan here>"}'`
-          : `\n\nWhen you are done, report your feedback by running:\ncurl -s -X POST http://localhost:${dashboardPort}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"${agent.role}"${taskIndexParam},"feedback":"<your structured feedback here>"}'`
+          ? `\n\nWhen you are done, report your feedback by running (${plannerFeedbackHint}):\ncurl -s -X POST http://localhost:${dashboardPort}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"${agent.role}","step":"${resolvedStep}"${taskIndexParam},"feedback":"<paste full plan here>"}'`
+          : `\n\nWhen you are done, report your feedback by running:\ncurl -s -X POST http://localhost:${dashboardPort}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"${agent.role}","step":"${resolvedStep}"${taskIndexParam},"feedback":"<your structured feedback here>"}'`
         : '';
 
       // Build feedback history from previous rounds
@@ -2197,10 +2199,10 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     const companionScopeNote = `\n\n## SCOPE NOTE — pass this to every subagent/perspective\n\nCompanion-spec files (UX-XXX, ADRs, copy specs, anything in docs/ux/, docs/brand/, docs/adrs/, etc.) are written and refined in the dedicated \`companion_specs\` step that runs AFTER this PRD review approves. Reviewers must NOT raise BLOCKING findings about missing or incomplete content inside companion-spec files — those gaps will be closed by the spec owner in the next step. Surface them as NON-BLOCKING action items targeted at the \`companion_specs\` step.`;
     let instruction;
     if (mode === 'orchestrator') {
-      instruction = `You are a review orchestrator. ${docRef}\n\nLaunch parallel subagents (using the Agent tool) for each reviewer role below. Each subagent should read its role command file, review the document, and write structured feedback to its feedback file.\n\nRoles:\n${roleList}${companionScopeNote}\n\nAfter all subagents complete, report a summary of all feedback via curl:\ncurl -s -X POST http://localhost:${config.port}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"Orchestrator","feedback":"<combined summary of all role feedback>"}'`;
+      instruction = `You are a review orchestrator. ${docRef}\n\nLaunch parallel subagents (using the Agent tool) for each reviewer role below. Each subagent should read its role command file, review the document, and write structured feedback to its feedback file.\n\nRoles:\n${roleList}${companionScopeNote}\n\nAfter all subagents complete, report a summary of all feedback via curl:\ncurl -s -X POST http://localhost:${config.port}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"Orchestrator","step":"${wf.currentStep}","feedback":"<combined summary of all role feedback>"}'`;
     } else {
       // Sequential mode
-      instruction = `You are reviewing a document from multiple perspectives. ${docRef}\n\nFor EACH role below, in order:\n1. Read the role command file at .claude/commands/<command>\n2. Review the document from that role's perspective\n3. Write structured feedback to the specified file\n\nRoles:\n${roleList}${companionScopeNote}\n\nAfter completing all reviews, report a combined summary via curl:\ncurl -s -X POST http://localhost:${config.port}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"Reviewer","feedback":"<combined summary of all role feedback>"}'`;
+      instruction = `You are reviewing a document from multiple perspectives. ${docRef}\n\nFor EACH role below, in order:\n1. Read the role command file at .claude/commands/<command>\n2. Review the document from that role's perspective\n3. Write structured feedback to the specified file\n\nRoles:\n${roleList}${companionScopeNote}\n\nAfter completing all reviews, report a combined summary via curl:\ncurl -s -X POST http://localhost:${config.port}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"Reviewer","step":"${wf.currentStep}","feedback":"<combined summary of all role feedback>"}'`;
     }
 
     const agent = [{
@@ -2875,7 +2877,24 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     // (lib/needs-attention.js) instead of every consumer reassembling it from a
     // different subset of autoAdvanceError / blocked / gate / cap / completed.
     const needsAttention = deriveNeedsAttention(wf);
-    res.json({ workflow: wf, projectWorkflowSteps, preset: config.preset, pathologySignals, findings, needsAttention, maxReviewRounds: config.max_review_rounds || DEFAULT_MAX_REVIEW_ROUNDS });
+    // Agents parked on a provider usage limit. Deliberately NOT a
+    // needsAttention reason: that list is defined as things waiting on a
+    // PERSON, and nothing here resolves itself with time. This one does — so it
+    // is reported separately, as information rather than a demand.
+    const limitBlocked = agentRecovery.allAgentsOf(wf)
+      .filter(a => a && a.blockedOnLimit)
+      .map(a => ({
+        role: a.role,
+        step: a.step || null,
+        resetsAt: a.blockedOnLimit.resetsAt || null,
+        resumeCount: a.blockedOnLimit.resumeCount || 0,
+        detail: limitBlock.describeBlock(a.blockedOnLimit),
+      }));
+    res.json({
+      workflow: wf, projectWorkflowSteps, preset: config.preset, pathologySignals, findings, needsAttention,
+      limitBlocked: limitBlocked.length ? limitBlocked : null,
+      maxReviewRounds: config.max_review_rounds || DEFAULT_MAX_REVIEW_ROUNDS,
+    });
   });
 
   // PRD-001 pathology signals — pure function, derives "is this run healthy?"
@@ -3388,10 +3407,29 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
   });
 
   router.post('/workflow/feedback', (req, res) => {
-    const { role, feedback, taskIndex } = req.body;
+    const { role, feedback, taskIndex, step: claimedStep } = req.body;
     if (!role || !feedback) return res.status(400).json({ error: 'role and feedback required' });
     const wf = state.loadWorkflow();
     if (!wf) return res.status(404).json({ error: 'no active workflow' });
+
+    // Feedback is matched to an agent by ROLE within the CURRENT step, so a
+    // report that arrives after the run has moved on lands wherever a
+    // same-named agent now sits. Four PRD reviews were recorded as
+    // companion-spec deliverables that way, marking that step done without a
+    // single spec being written (fazon FAZ-222, 2026-08-03).
+    //
+    // Agents now stamp the step they were launched for into the curl. A
+    // mismatch is refused rather than misfiled: the content is still in the
+    // agent's transcript, and the recovery path can deliver it deliberately.
+    if (claimedStep && claimedStep !== wf.currentStep) {
+      console.warn(`[workflow] feedback from ${role} for step=${claimedStep} rejected — run is now on ${wf.currentStep}`);
+      return res.status(409).json({
+        error: `This run has moved on to "${wf.currentStep}"; your feedback was for "${claimedStep}" and was NOT recorded. `
+          + 'Do not re-post it against the current step — it belongs to a step that has closed.',
+        currentStep: wf.currentStep,
+        claimedStep,
+      });
+    }
 
     // Route per-task feedback during wave-based task_execution.
     // Recovery: if the agent forgot `taskIndex` (common after context
@@ -4151,7 +4189,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
 
       // --- Review workflow transitions ---
       if (wf.type === 'review') {
-        return handleReviewAdvance(wf, effectiveAction, notes, res);
+        return handleReviewAdvance(wf, effectiveAction, notes, res, req.body || {});
       }
 
       // --- Execution + bugfix workflow transitions ---
@@ -5426,7 +5464,7 @@ Fix only the issues raised. Commit your changes.`,
   }
 
   // --- Review workflow ---
-  function handleReviewAdvance(wf, action, notes, res) {
+  function handleReviewAdvance(wf, action, notes, res, body = {}) {
     const reviewStep = wf.steps.reviewing;
     const reviewStuck = reviewStep && reviewStep.status === 'running' &&
       reviewStep.agents && reviewStep.agents.length > 0 &&
@@ -5480,13 +5518,29 @@ Fix only the issues raised. Commit your changes.`,
       // finds nothing to bounce on running/empty agents. Require ≥1 agent and all
       // completed before this step can advance.
       const rvAgents = wf.steps.reviewing.agents || [];
-      const rvNotReady = rvAgents.length === 0 || rvAgents.some(a => a.status !== 'done' && a.status !== 'error');
-      if (rvNotReady) {
+      const rvRunning = rvAgents.filter(a => a.status !== 'done' && a.status !== 'error');
+      // An agent that errored WITHOUT reporting has not said "no objection" —
+      // it has said nothing, and we do not know what it would have said.
+      // Counting `error` as a terminal state let one returning reviewer carry
+      // the whole round forward on its own verdict while five others were
+      // silent, and the run completed as approved (fazon FAZ-222, 2026-08-03).
+      // Silence is not consent; require an explicit override to proceed past it.
+      const rvSilent = rvAgents.filter(a => a.status === 'error' && !a.feedback);
+      if (rvAgents.length === 0 || rvRunning.length > 0) {
         return res.status(409).json({
           workflow: wf,
           error: rvAgents.length === 0
             ? 'Reviewing round has not been launched yet — launch reviewers before approving.'
-            : `Reviewing round still running (${rvAgents.filter(a => a.status !== 'done' && a.status !== 'error').length}/${rvAgents.length} reviewers not finished) — wait for them before approving, so the re-review isn't skipped.`,
+            : `Reviewing round still running (${rvRunning.length}/${rvAgents.length} reviewers not finished) — wait for them before approving, so the re-review isn't skipped.`,
+        });
+      }
+      if (rvSilent.length > 0 && body.override !== true) {
+        return res.status(409).json({
+          workflow: wf,
+          error: `${rvSilent.length} of ${rvAgents.length} reviewers failed without reporting (${rvSilent.map(a => a.role).join(', ')}). `
+            + 'Their verdict is unknown, so the round cannot be approved on the remaining reviews alone. '
+            + 'Recover or relaunch them, or advance with an explicit override.',
+          silentReviewers: rvSilent.map(a => a.role),
         });
       }
       // Safety: only redirect approve → send_to_pm if a reviewer explicitly said

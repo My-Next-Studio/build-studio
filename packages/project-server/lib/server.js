@@ -379,6 +379,11 @@ function startServer(projectRoot, opts = {}) {
   const AGENT_RESUME_GRACE_MS = 3 * 60 * 1000;  // after firing a resume, let the CLI boot before re-judging
   const AGENT_MAX_AUTO_RESUMES = 2;             // then fall through to the loud halt
   const agentRecovery = require('./agent-recovery');
+  // Provider usage limits (see lib/limit-block.js). Capped so a limit that keeps
+  // re-blocking surfaces instead of being hammered the instant each reset lands.
+  const limitBlock = require('./limit-block');
+  const LIMIT_MAX_AUTO_RESUMES = 3;
+  const LIMIT_RESUME_MESSAGE = 'The usage limit that interrupted you has reset. Continue your assigned task from where you left off — your original instructions still apply in full, including reporting your structured feedback via the curl POST at the end of your prompt.';
 
   // Periodic stale session + timeout check (every 30s)
   setInterval(() => {
@@ -490,6 +495,54 @@ function startServer(projectRoot, opts = {}) {
               console.log(`[agent-recovery] ${agent.role} ${cls} in ${activeWf.currentStep} — halted (${agent.error})`);
             }
             continue;
+          }
+
+          // Waiting on a provider usage limit looks exactly like a stall to an
+          // idle-timeout — no output for fifteen minutes either way — but it
+          // needs the opposite handling: nothing, until the reset lands.
+          //
+          // Read the PANE, not the log tail. The notice scrolls far back in the
+          // log because an idle TUI keeps repainting: measured 140 KB of redraw
+          // after the notice in a real agent log, so any fixed tail misses it.
+          // The pane still shows it, because nothing has happened since.
+          const limit = limitBlock.parseLimitNotice(tmuxOps.capturePane(target, 200), new Date(now));
+          if (limit) {
+            if (!agent.blockedOnLimit) {
+              agent.blockedOnLimit = {
+                raw: limit.raw,
+                resetsAt: limit.resetsAt ? limit.resetsAt.toISOString() : null,
+                detectedAt: new Date(now).toISOString(),
+                resumeCount: 0,
+              };
+              changed = true;
+              console.log(`[limit] ${agent.role} blocked in ${activeWf.currentStep} — ${limitBlock.describeBlock(agent.blockedOnLimit, new Date(now))}`);
+            }
+            // Deliberately NOT marked 'error'. An errored agent is treated as a
+            // terminal state by the review-advance guard, which is how one
+            // returning agent came to carry a whole step forward while five
+            // others had said nothing (2026-08-03). It is still running; it is
+            // just waiting.
+            const verdict = limitBlock.isResumeDue(agent.blockedOnLimit, new Date(now), {
+              maxResumes: LIMIT_MAX_AUTO_RESUMES,
+            });
+            if (verdict.due) {
+              try {
+                tmuxOps.sendMessage(target, LIMIT_RESUME_MESSAGE);
+                agent.blockedOnLimit.resumeCount = (agent.blockedOnLimit.resumeCount || 0) + 1;
+                agent.blockedOnLimit.lastResumeAt = new Date(now).toISOString();
+                changed = true;
+                console.log(`[limit] ${agent.role} auto-resumed (attempt ${agent.blockedOnLimit.resumeCount}/${LIMIT_MAX_AUTO_RESUMES}) — ${verdict.reason}`);
+              } catch (e) {
+                console.warn(`[limit] ${agent.role} auto-resume failed: ${e.message}`);
+              }
+            }
+            continue; // never fall through to the stall timeout while blocked
+          }
+          // Output resumed after a block — the agent is working again.
+          if (agent.blockedOnLimit) {
+            console.log(`[limit] ${agent.role} resumed — clearing the block`);
+            agent.blockedOnLimit = undefined;
+            changed = true;
           }
 
           if (idleMs > AGENT_IDLE_TIMEOUT_MS) {

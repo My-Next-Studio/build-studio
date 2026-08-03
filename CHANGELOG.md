@@ -205,6 +205,50 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   offers both ways out: **another review round**, or **move on to companion
   specs**. Neither is preselected, and the run cannot finish from there.
 
+- **A usage-limit block is now recognised as waiting, and resumes itself.** An
+  agent parked on a provider usage limit looks exactly like a stalled one to an
+  idle timeout — no output either way — and was reported as *"Stalled — no log
+  activity for 15 minutes … may be stuck, crashed, or context exhausted"*. It
+  was neither stuck nor crashed: the processes sat alive at their prompts, and
+  the notice they printed says precisely when they resolve:
+
+  ```
+  You've hit your session limit · resets 10am (Europe/Stockholm)
+  ```
+
+  That notice is now read, the agent is marked **blocked** rather than errored,
+  the Workflow tab shows *"N agents are waiting on the usage limit — resuming
+  automatically at 10:00"*, and the run resumes on its own once the reset lands.
+  Capped at three attempts per block, so a limit that keeps re-blocking surfaces
+  instead of being hammered the moment each reset arrives. Nothing to click; the
+  live terminal still works if you would rather push them along.
+
+  The detection reads the **pane**, not the log tail: an idle TUI keeps
+  repainting, so the notice ends up far back in the file — measured 140 KB of
+  redraw after it in a real agent log, which any fixed tail would miss.
+
+  Not marking these agents `error` is the load-bearing half, and it is what the
+  next two entries are about.
+
+- **Silence from a reviewer is no longer read as consent.** A reviewer that
+  errored *without reporting* has not said "no objection" — it has said nothing.
+  `error` counted as a terminal state, so when one reviewer returned and
+  approved while five others were blocked, the round advanced on that single
+  verdict, ran companion specs, and completed the run with five reviews missing.
+  An approve now refuses while any reviewer failed without reporting, naming
+  them, and takes an explicit `override` for the case where one is genuinely
+  never coming back.
+
+- **Feedback can no longer be filed against a step it was not written for.**
+  Reports are matched to an agent by role *within the current step*, so a review
+  arriving after the run moved on landed on whatever same-named agent now sat
+  there. Four PRD reviews were recorded as companion-spec deliverables that way,
+  marking that step complete without a single spec being written — the item
+  reached `Reviewed` with all four Required specs missing from disk. Agents now
+  stamp the step they were launched for into their feedback call, and a mismatch
+  is refused with an explanation rather than misfiled. The content stays in the
+  agent's transcript, where the recovery path can deliver it deliberately.
+
 - **The paid-LLM test gate now blocks `openrouter.ai`.** It matched the three
   first-party endpoints but not the gateway, which mattered more than the
   omission suggests: one OpenRouter key fronts every model behind it, so a test
