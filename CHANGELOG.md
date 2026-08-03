@@ -205,6 +205,14 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   offers both ways out: **another review round**, or **move on to companion
   specs**. Neither is preselected, and the run cannot finish from there.
 
+- **A failing watchdog tick no longer kills the project-server.** The 30-second
+  agent watchdog ran with no error handling, so any throw inside it became an
+  uncaught exception and exited the process — the project simply disappeared
+  from the hub, offering "Start server" with no indication why, while its agents
+  carried on in tmux. The watchdog is advisory; it decides whether to nudge a
+  stalled agent, and it must never be able to take down the server it watches.
+  A failing tick is now logged and skipped.
+
 - **A usage-limit block is now recognised as waiting, and resumes itself.** An
   agent parked on a provider usage limit looks exactly like a stalled one to an
   idle timeout — no output either way — and was reported as *"Stalled — no log

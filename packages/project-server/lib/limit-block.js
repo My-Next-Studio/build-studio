@@ -23,6 +23,25 @@
 /** The notice, in the shapes the CLI prints it. */
 const LIMIT_RE = /(?:hit|reached)\s+your\s+(?:session|usage|weekly)\s+limit/i;
 
+/**
+ * The CLI's interactive limit dialog:
+ *
+ *     What do you want to do?
+ *     ❯ 1. Stop and wait for limit to reset
+ *       2. Upgrade your plan
+ *       3. Switch to Team plan
+ *     Enter to confirm · Esc to cancel
+ *
+ * A SECOND, distinct blocked state, and the one a nudge must not be pasted
+ * into: option 1 is already selected, so the agent needs a bare Enter, not a
+ * sentence. Pasting prose into a chooser types into nothing and then confirms
+ * whatever happened to be highlighted.
+ *
+ * It is also why detection cannot rely on the notice alone — this dialog can be
+ * on screen with the notice already scrolled out of the pane entirely.
+ */
+const CHOOSER_RE = /stop and wait for (?:the )?limit to reset/i;
+
 /** `resets 10am`, `resets 10:30 pm`, `resets at 3 PM` — the trailing zone is the machine's own. */
 const RESET_RE = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
 
@@ -65,7 +84,8 @@ function parseLimitNotice(text, now = new Date()) {
  * Returns null when no time is announced — the caller decides what to do with
  * an unknown reset rather than this guessing one.
  */
-function parseResetTime(raw, now = new Date()) {
+function parseResetTime(raw, seenAt = new Date()) {
+  const now = seenAt;
   const m = RESET_RE.exec(raw || '');
   if (!m) return null;
   let hour = Number(m[1]);
@@ -138,4 +158,47 @@ function stripAnsi(s) {
   return String(s).replace(/\[[0-9;?]*[ -/]*[@-~]/g, '');
 }
 
-module.exports = { parseLimitNotice, parseResetTime, isResumeDue, describeBlock, LIMIT_RE };
+/**
+ * Is this agent blocked on a usage limit, and what does it need?
+ *
+ * Two sources, because neither alone is sufficient:
+ *
+ *  - the PANE says what state the agent is in RIGHT NOW (waiting at a prompt,
+ *    or sitting on the chooser). The log cannot say this: an idle TUI repaints
+ *    endlessly, so the log's tail is redraw noise.
+ *  - the LOG holds the reset time, which the pane may have scrolled away.
+ *    Measured on a real blocked agent: the pane showed only the chooser, while
+ *    `resets 3pm` was still in the log.
+ *
+ * @param {{pane?:string, log?:string}} sources
+ * @param {Date} now
+ * @returns {null|{raw:string, resetsAt:Date|null, needsConfirm:boolean}}
+ */
+function detectLimitState({ pane = '', log = '', seenAt } = {}, now = new Date()) {
+  // Anchor the reset arithmetic to when the notice was PRINTED — callers pass
+  // the log's mtime. Anchoring on `now` instead computes the NEXT occurrence of
+  // the announced clock time, so a notice printed at 14:11 saying "resets 3pm",
+  // read at 15:16, resolves to tomorrow and parks the agent for ~24 hours over
+  // a reset that already happened. Measured exactly that way on a live agent.
+  const anchor = seenAt ? new Date(seenAt) : now;
+  const paneClean = stripAnsi(String(pane)).replace(/\r/g, '\n');
+  const fromPane = parseLimitNotice(pane, anchor);
+  const needsConfirm = CHOOSER_RE.test(paneClean);
+
+  // The CURRENT state has to come from the pane. A limit notice sitting in the
+  // log proves only that the agent was blocked at some point — it may have
+  // resumed and moved on since.
+  if (!fromPane && !needsConfirm) return null;
+
+  const fromLog = fromPane && fromPane.resetsAt ? null : parseLimitNotice(log, anchor);
+  const resetsAt = (fromPane && fromPane.resetsAt) || (fromLog && fromLog.resetsAt) || null;
+  const raw = (fromPane && fromPane.raw)
+    || (fromLog && fromLog.raw)
+    || 'Waiting at the usage-limit prompt';
+  return { raw, resetsAt, needsConfirm };
+}
+
+module.exports = {
+  parseLimitNotice, parseResetTime, isResumeDue, describeBlock, detectLimitState,
+  LIMIT_RE, CHOOSER_RE,
+};

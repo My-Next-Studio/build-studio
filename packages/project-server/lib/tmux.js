@@ -227,6 +227,17 @@ function createTmuxOps(config) {
     } catch (_) { return false; }
   }
 
+  /**
+   * Send bare key names (Enter, Escape, Down…) with no text.
+   *
+   * Distinct from sendKeys, which sends a COMMAND and appends Enter — right for
+   * a shell prompt, wrong for a TUI chooser, where the text lands nowhere and
+   * the appended Enter confirms whatever was highlighted.
+   */
+  function sendKeysRaw(target, ...keys) {
+    execFileSync('tmux', ['send-keys', '-t', target, ...keys]);
+  }
+
   function sendMessage(target, message) {
     execFileSync('tmux', ['set-buffer', '-b', 'agent-msg', message]);
     execFileSync('tmux', ['paste-buffer', '-t', target, '-b', 'agent-msg']);
@@ -245,6 +256,7 @@ function createTmuxOps(config) {
     createWindow,
     ensureWindow,
     sendKeys,
+    sendKeysRaw,
     pipePaneToLog,
     killSession,
     killWindowAndChildren,

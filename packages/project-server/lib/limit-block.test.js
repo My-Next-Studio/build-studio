@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseLimitNotice, parseResetTime, isResumeDue, describeBlock } = require('./limit-block');
+const { parseLimitNotice, parseResetTime, isResumeDue, describeBlock, detectLimitState } = require('./limit-block');
 
 // The real notice, as the CLI prints it (2026-08-03).
 const NOTICE = "You've hit your session limit · resets 10am (Europe/Stockholm)";
@@ -100,4 +100,64 @@ test('the description says what is happening and when it clears', () => {
   const e = describeBlock({ resetsAt, resumeCount: 3 }, new Date('2026-08-03T11:00:00'));
   assert.match(e, /gave up/);
   assert.match(e, /live terminal/);
+});
+
+// --- The CLI's interactive chooser (2026-08-03) -----------------------------
+//
+// A second blocked state, found on a live agent: the notice had scrolled out of
+// the pane entirely and only the dialog remained. Detecting the notice alone
+// would have missed it, and a pasted nudge would have typed into a chooser.
+
+const CHOOSER = [
+  '   What do you want to do?',
+  '',
+  '   ❯ 1. Stop and wait for limit to reset',
+  '     2. Upgrade your plan',
+  '     3. Switch to Team plan',
+  '',
+  '   Enter to confirm · Esc to cancel',
+].join('\n');
+
+test('the chooser alone counts as blocked, and asks for a confirm', () => {
+  const s = detectLimitState({ pane: CHOOSER }, NOW);
+  assert.ok(s, 'the dialog must register as blocked');
+  assert.equal(s.needsConfirm, true);
+});
+
+test('the reset time is recovered from the log when the pane has lost it', () => {
+  // Measured: pane showed only the dialog while `resets 3pm` was still in the
+  // log, because an idle TUI repaints the notice out of the visible region.
+  const log = "You've hit your session limit · resets 3pm (Europe/Stockholm)";
+  const seenAt = new Date('2026-08-03T14:11:00');
+  const s = detectLimitState({ pane: CHOOSER, log, seenAt }, new Date('2026-08-03T15:16:00'));
+  assert.equal(s.needsConfirm, true);
+  assert.equal(s.resetsAt.getHours(), 15);
+  assert.equal(s.resetsAt.getDate(), 3, 'must be TODAY — the notice was printed before 3pm');
+});
+
+test('the reset anchors to when the notice was printed, not to now', () => {
+  // The bug this exists for: a notice printed at 14:11 saying "resets 3pm",
+  // read at 15:16, resolved to TOMORROW — parking the agent ~24h over a reset
+  // that had already passed sixteen minutes earlier.
+  const log = 'hit your session limit · resets 3pm';
+  const printed = new Date('2026-08-03T14:11:00');
+  const readAt = new Date('2026-08-03T15:16:00');
+  const anchored = detectLimitState({ pane: CHOOSER, log, seenAt: printed }, readAt);
+  assert.equal(anchored.resetsAt.getDate(), printed.getDate());
+  assert.equal(isResumeDue({ resetsAt: anchored.resetsAt }, readAt).due, true);
+  // Without the anchor it lands a day late.
+  const naive = detectLimitState({ pane: CHOOSER, log }, readAt);
+  assert.equal(naive.resetsAt.getDate(), printed.getDate() + 1);
+});
+
+test('a limit notice in the LOG alone is not a current block', () => {
+  // It only proves the agent was blocked at some point; it may have resumed.
+  // The pane is what says where it is now.
+  const log = "You've hit your session limit · resets 3pm";
+  assert.equal(detectLimitState({ pane: 'thinking about the PRD…', log }, NOW), null);
+});
+
+test('a working agent is not blocked', () => {
+  assert.equal(detectLimitState({ pane: '⏺ Reading the PRD…', log: '' }, NOW), null);
+  assert.equal(detectLimitState({}, NOW), null);
 });
