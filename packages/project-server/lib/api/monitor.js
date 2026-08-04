@@ -37,6 +37,20 @@ function createMonitorRouter(config, monitor) {
     res.json({ project: config.name, ...monitor.getSummary() });
   });
 
+  // POST /api/monitor/enable-alerts — turn on Dependabot alerts for this repo.
+  //
+  // The one write path in Monitor, and deliberately narrow: it enables a
+  // read-only analysis feature on a repository the user already owns. It is
+  // never called automatically — only from an explicit button.
+  router.post('/monitor/enable-alerts', async (req, res) => {
+    try {
+      const out = await monitor.enableAlerts();
+      res.json({ ok: true, ...out });
+    } catch (e) {
+      res.status(500).json({ error: e.message || 'failed to enable dependency alerts' });
+    }
+  });
+
   return router;
 }
 

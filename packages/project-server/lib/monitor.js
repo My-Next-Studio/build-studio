@@ -222,7 +222,34 @@ function createMonitor(config, deps = {}) {
     alertsCache.refresh();
   }
 
-  return { getCi, getAlerts, getSummary, prime };
+  /**
+   * Turn on Dependabot alerts for this repository.
+   *
+   * The Monitor tab used to link to the GitHub settings page for this, which
+   * fails badly on a PRIVATE repo: GitHub answers an unauthenticated request
+   * with 404 rather than a sign-in prompt (it will not confirm the repo
+   * exists), so a browser session without a GitHub login is indistinguishable
+   * from a dead link. Doing it here removes the browser — and the question of
+   * which browser profile answered — from the loop entirely, using the same
+   * credential that already reads alerts.
+   *
+   * Refreshes the alert cache on success so the "not enabled" row clears on the
+   * next poll instead of lingering for the rest of the 15-minute TTL.
+   */
+  async function enableAlerts() {
+    const r = repo();
+    if (!r) throw new Error('deployment.repo not set');
+    try {
+      await exec('gh', ['api', '-X', 'PUT', `/repos/${r}/vulnerability-alerts`], { encoding: 'utf8' });
+    } catch (e) {
+      const detail = String(e.stderr || e.message || '').trim().slice(0, 300);
+      throw new Error(detail || 'gh call failed');
+    }
+    await alertsCache.refresh();
+    return { repo: r };
+  }
+
+  return { getCi, getAlerts, getSummary, prime, enableAlerts };
 }
 
 module.exports = { createMonitor, TTL_RUN_IN_FLIGHT, TTL_RUN_IDLE, TTL_ALERTS };

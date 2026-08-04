@@ -196,6 +196,12 @@ function classifyAlertsError(stderr) {
  * Rendered as information rather than as a failure, because it is actionable in
  * a way an outage is not: it tells you the tab's most valuable source is silent
  * for this project, and exactly what to do about it.
+ *
+ * The `url` is a manual fallback only — the tab's actual action is a button
+ * that enables the feature through the `gh` credential. Linking to GitHub's
+ * settings page is a trap on a PRIVATE repo: GitHub answers an unauthenticated
+ * request with 404 rather than a sign-in prompt, so a browser session that is
+ * not logged in is indistinguishable from a broken link.
  */
 function notEnabledAlert(project, repo) {
   return {

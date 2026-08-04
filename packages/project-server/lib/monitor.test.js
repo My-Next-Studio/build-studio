@@ -167,6 +167,52 @@ test('losing the per-job detail keeps the run itself', async () => {
   assert.deepEqual(ci.jobs, []);
 });
 
+test('enabling alerts calls the write endpoint and clears the not-enabled row', async () => {
+  let enabled = false;
+  const calls = [];
+  const exec = async (bin, args) => {
+    calls.push(args.join(' '));
+    if (args[0] === 'run' && args[1] === 'list') return { stdout: JSON.stringify(RUNS) };
+    if (args[0] === 'run' && args[1] === 'view') return { stdout: JSON.stringify({ jobs: [] }) };
+    if (args[0] === 'api' && args[1] === '-X' && args[2] === 'PUT') { enabled = true; return { stdout: '' }; }
+    if (args[0] === 'api') {
+      if (!enabled) { const e = new Error('x'); e.stderr = 'Dependabot alerts are disabled for this repository.'; throw e; }
+      return { stdout: JSON.stringify(ALERTS) };
+    }
+    throw new Error(`unexpected gh ${args.join(' ')}`);
+  };
+
+  const m = createMonitor(CONFIG, { execFileAsync: exec });
+  m.prime();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(m.getAlerts().alerts.some((a) => a.kind === 'not-enabled'));
+
+  await m.enableAlerts();
+
+  // The row must be gone immediately, not after the 15-minute TTL — enableAlerts
+  // refreshes the cache before returning.
+  const after = m.getAlerts();
+  assert.ok(!after.alerts.some((a) => a.kind === 'not-enabled'));
+  assert.ok(after.alerts.some((a) => a.source === 'dependabot' && a.kind === 'advisory'));
+  assert.ok(calls.some((c) => c.includes('PUT /repos/o/r/vulnerability-alerts')));
+});
+
+test('a failed enable surfaces gh\'s reason rather than a bare failure', async () => {
+  const exec = async (bin, args) => {
+    if (args[0] === 'run') return { stdout: '[]' };
+    if (args[0] === 'api' && args[2] === 'PUT') { const e = new Error('x'); e.stderr = 'gh: Must have admin rights to Repository. (HTTP 403)'; throw e; }
+    return { stdout: '[]' };
+  };
+  const m = createMonitor(CONFIG, { execFileAsync: exec });
+  await assert.rejects(() => m.enableAlerts(), /admin rights/);
+});
+
+test('enabling without deployment.repo is rejected, not silently ignored', async () => {
+  const { exec } = fakeGh();
+  const m = createMonitor({ name: 'p' }, { execFileAsync: exec });
+  await assert.rejects(() => m.enableAlerts(), /deployment.repo not set/);
+});
+
 test('the summary is the compact shape the cross-project poll folds in', async () => {
   const { exec } = fakeGh();
   const m = createMonitor(CONFIG, { execFileAsync: exec });

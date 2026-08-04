@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 // The Monitor tab (Home): things that have rotted while nobody was looking.
 //
@@ -62,30 +62,50 @@ export function MonitorTab() {
   const [projects, setProjects] = useState<ProjectState[]>([])
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [enabling, setEnabling] = useState<Record<string, 'busy' | string>>({})
+
+  const poll = useCallback(async () => {
+    try {
+      const res = await fetch('/api/monitor')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setAlerts(Array.isArray(data.alerts) ? data.alerts : [])
+      setProjects(Array.isArray(data.projects) ? data.projects : [])
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoaded(true)
+    }
+  }, [])
 
   useEffect(() => {
-    let cancelled = false
-    const poll = async () => {
-      try {
-        const res = await fetch('/api/monitor')
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        if (cancelled) return
-        setAlerts(Array.isArray(data.alerts) ? data.alerts : [])
-        setProjects(Array.isArray(data.projects) ? data.projects : [])
-        setError(null)
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
-      } finally {
-        if (!cancelled) setLoaded(true)
-      }
-    }
     poll()
     // 30s is generous: the project-servers serve these from cache and only talk
     // to GitHub on their own backoff, so the tab's cadence costs nothing.
     const interval = setInterval(poll, 30000)
-    return () => { cancelled = true; clearInterval(interval) }
-  }, [])
+    return () => clearInterval(interval)
+  }, [poll])
+
+  const enableAlerts = useCallback(async (project: string) => {
+    setEnabling((s) => ({ ...s, [project]: 'busy' }))
+    try {
+      const res = await fetch('/api/monitor/enable-alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`)
+      // The project-server refreshed its own cache before answering, so the row
+      // is already gone server-side — re-poll rather than hiding it locally, so
+      // what you see is the real state and not an optimistic guess.
+      setEnabling((s) => { const n = { ...s }; delete n[project]; return n })
+      await poll()
+    } catch (e) {
+      setEnabling((s) => ({ ...s, [project]: e instanceof Error ? e.message : String(e) }))
+    }
+  }, [poll])
 
   const actionable = alerts.filter((a) => a.severity !== 'info')
   const notRunning = projects.filter((p) => !p.running)
@@ -138,7 +158,13 @@ export function MonitorTab() {
               {style.label} · {group.length}
             </div>
             {group.map((a) => (
-              <AlertRow key={`${a.project}:${a.id}`} alert={a} color={style.color} />
+              <AlertRow
+                key={`${a.project}:${a.id}`}
+                alert={a}
+                color={style.color}
+                enableState={enabling[a.project]}
+                onEnable={() => enableAlerts(a.project)}
+              />
             ))}
           </div>
         )
@@ -153,11 +179,17 @@ export function MonitorTab() {
   )
 }
 
-function AlertRow({ alert, color }: { alert: Alert; color: string }) {
+function AlertRow({ alert, color, enableState, onEnable }: {
+  alert: Alert; color: string
+  enableState?: 'busy' | string
+  onEnable?: () => void
+}) {
   // "Not enabled" is information about a blind spot, not a fault — it gets the
   // muted treatment and an action that fixes the blind spot rather than a link
   // to a problem that does not exist.
   const isNotEnabled = alert.kind === 'not-enabled'
+  const busy = enableState === 'busy'
+  const enableError = enableState && enableState !== 'busy' ? enableState : null
   const age = since(alert.since)
   return (
     <div style={{
@@ -174,8 +206,31 @@ function AlertRow({ alert, color }: { alert: Alert; color: string }) {
           {alert.detail}
           {age ? `${alert.detail ? ' · ' : ''}${age}` : ''}
         </div>
+        {enableError && (
+          <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>
+            Could not enable: {enableError}
+          </div>
+        )}
       </div>
-      {alert.url && (
+
+      {/* Enabling happens server-side through the gh credential rather than by
+          linking to GitHub's settings page — on a private repo that link 404s
+          for any browser session that is not signed in, which is impossible to
+          tell apart from a dead link. */}
+      {isNotEnabled ? (
+        <button
+          onClick={onEnable}
+          disabled={busy}
+          style={{
+            flexShrink: 0, fontSize: 11, color: 'var(--text-dim)',
+            border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px',
+            fontFamily: 'var(--mono)', background: 'transparent',
+            cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
+          }}
+        >
+          {busy ? 'enabling…' : 'enable'}
+        </button>
+      ) : alert.url ? (
         <a
           href={alert.url}
           target="_blank"
@@ -186,9 +241,9 @@ function AlertRow({ alert, color }: { alert: Alert; color: string }) {
             fontFamily: 'var(--mono)',
           }}
         >
-          {isNotEnabled ? 'enable ↗' : 'open ↗'}
+          open ↗
         </a>
-      )}
+      ) : null}
     </div>
   )
 }

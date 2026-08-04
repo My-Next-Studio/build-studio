@@ -83,11 +83,18 @@ could not be told about a failure you were not already watching.
 
 ### Known issues
 
-- **Dependency alerts are enabled on one of nine repositories here.** Every
-  other repo returns a 403 and shows an *"alerts are not enabled"* row on the
-  Monitor tab instead of advisories. That row is information, not an error, and
-  links to the setting — but until the feature is switched on per repository,
-  the tab's most valuable source is silent for that project.
+- **Dependency alerts start out enabled on very few repositories.** A repo
+  without them returns a 403 and shows an *"alerts are not enabled"* row on the
+  Monitor tab instead of advisories. That row is information rather than an
+  error, and carries an **enable** button that turns the feature on through the
+  same `gh` credential Monitor already uses.
+
+  The button exists because linking to GitHub's settings page is a trap on a
+  **private** repository: GitHub answers an unauthenticated request with 404
+  rather than a sign-in prompt — it will not confirm the repo exists — so a
+  browser session that is not signed in looks exactly like a dead link. Doing it
+  server-side removes the browser, and the question of which browser profile
+  answered, from the loop.
 
   If you debug that 403, ignore `gh`'s advice that it *"needs the
   `admin:repo_hook` scope"*. It is misleading: the same token reads alerts fine
