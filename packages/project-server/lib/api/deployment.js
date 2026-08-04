@@ -186,6 +186,17 @@ function createDeploymentRouter(config, gitOps, {
 
   // runId → { resultFile } for in-flight CI-fix investigations (proposal lookup).
   const investigations = new Map();
+  const currentInvestigationFile = () => path.join(projectRoot, 'tmp', 'ci-investigate', 'current.json');
+  /** The last investigation started, as recorded on disk. */
+  function readCurrentInvestigation() {
+    try { return JSON.parse(fs.readFileSync(currentInvestigationFile(), 'utf8')); } catch { return null; }
+  }
+  // Rehydrate so a restarted server can still resolve the proposal file for a
+  // run it did not itself start.
+  {
+    const cur = readCurrentInvestigation();
+    if (cur && cur.runId && cur.resultFile) investigations.set(cur.runId, { resultFile: cur.resultFile });
+  }
   const AUTOFIX_FILE = path.join(projectRoot, '.build-studio', 'ci-autofix.json');
   function readAutofixEnabled() {
     try { return JSON.parse(fs.readFileSync(AUTOFIX_FILE, 'utf8')).enabled === true; } catch { return false; }
@@ -635,7 +646,91 @@ function createDeploymentRouter(config, gitOps, {
       return res.status(500).json({ error: e.message });
     }
     investigations.set(result.runId, { resultFile });
+    // Persist the pointer. The runId previously existed only in the browser tab
+    // that started the investigation, so navigating away lost the only handle
+    // to a run that was still going — the agent kept working and its proposal
+    // became unreachable. Written to disk rather than held in memory so it also
+    // survives this router being re-created.
+    try {
+      fs.writeFileSync(currentInvestigationFile(), JSON.stringify({
+        runId: result.runId, resultFile, ciRunId: runId, runTitle,
+        startedAt: new Date().toISOString(),
+      }, null, 2));
+    } catch (e) {
+      console.warn('[ci-investigate] could not record the active investigation:', e.message);
+    }
     res.json({ runId: result.runId, sessionName: result.sessionName });
+  });
+
+  /**
+   * Forget the recorded investigation. Without this the proposal file outlives
+   * its usefulness and `/active` keeps re-offering a fix that has already been
+   * accepted or thrown away.
+   */
+  function clearCurrentInvestigation() {
+    const cur = readCurrentInvestigation();
+    try { if (cur && cur.resultFile) fs.unlinkSync(cur.resultFile); } catch {}
+    try { fs.unlinkSync(currentInvestigationFile()); } catch {}
+  }
+
+  // GET /api/deployment/ci-investigate/active — rediscover an investigation
+  // without already knowing its runId.
+  //
+  // The client used to hold the runId in component state, so leaving the CI/CD
+  // tab discarded the only handle to a running investigation: the agent carried
+  // on, wrote its proposal, and nothing could ever show it. This is how the tab
+  // finds its way back.
+  //
+  // Resolution order matters. The in-memory run record is the weakest of the
+  // three signals — it dies with the server — while the PROPOSAL FILE and the
+  // working tree are durable artifacts on disk. So a completed investigation is
+  // recoverable even when the run that produced it is long forgotten, which is
+  // exactly the case worth recovering.
+  router.get('/deployment/ci-investigate/active', (req, res) => {
+    const cur = readCurrentInvestigation();
+    if (!cur || !cur.runId) return res.json({ active: null });
+
+    const entry = getOneShotStatusFn(cur.runId);
+    const base = { runId: cur.runId, ciRunId: cur.ciRunId, runTitle: cur.runTitle, startedAt: cur.startedAt };
+
+    if (entry && entry.state === 'running') {
+      return res.json({ active: { ...base, state: 'running' } });
+    }
+
+    // No live run — but a proposal on disk means the agent finished and nobody
+    // ever saw the result.
+    let proposal = null;
+    try {
+      if (cur.resultFile && fs.existsSync(cur.resultFile)) {
+        proposal = JSON.parse(fs.readFileSync(cur.resultFile, 'utf8'));
+      }
+    } catch { /* unreadable — treated as absent below */ }
+
+    if (proposal) {
+      let diff = '';
+      try { diff = execGit(['diff']); } catch {}
+      let untracked = [];
+      try { untracked = execGit(['ls-files', '--others', '--exclude-standard']).split('\n').filter(Boolean); } catch {}
+      return res.json({
+        active: {
+          ...base,
+          state: 'complete',
+          proposal: {
+            rootCause: '', summary: '', fixable: null, filesChanged: [],
+            ...proposal,
+            diff, untracked, hasChanges: Boolean(diff) || untracked.length > 0,
+          },
+        },
+      });
+    }
+
+    if (entry && (entry.state === 'error' || entry.state === 'timeout')) {
+      return res.json({ active: { ...base, state: entry.state, error: entry.stderr || entry.state } });
+    }
+    // Started, no live run, no proposal: the run did not survive (most likely a
+    // server restart killed it). Say so rather than showing a spinner forever.
+    if (!entry) return res.json({ active: { ...base, state: 'lost' } });
+    return res.json({ active: null });
   });
 
   // GET /api/deployment/ci-investigate/:runId/status — poll; on completion returns the proposal.
@@ -688,6 +783,7 @@ function createDeploymentRouter(config, gitOps, {
             { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
         } catch {}
         try { execGit(['checkout', orig]); } catch {}
+        clearCurrentInvestigation();
         return res.json({ ok: true, mode: 'pr', branch, prUrl });
       }
       // push
@@ -696,6 +792,7 @@ function createDeploymentRouter(config, gitOps, {
       const branch = execGit(['branch', '--show-current']);
       execGit(['push', 'origin', branch]);
       const hash = execGit(['rev-parse', '--short', 'HEAD']);
+      clearCurrentInvestigation();
       return res.json({ ok: true, mode: 'push', hash, branch });
     } catch (e) {
       return res.status(500).json({ error: `Accept failed: ${e.stderr || e.message}` });
@@ -712,6 +809,7 @@ function createDeploymentRouter(config, gitOps, {
         execGit(['stash', 'push', '--include-untracked', '-m', 'ci-fix-dismiss']);
         try { execGit(['stash', 'drop']); } catch {}
       }
+      clearCurrentInvestigation();
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: `Dismiss failed: ${e.stderr || e.message}` });

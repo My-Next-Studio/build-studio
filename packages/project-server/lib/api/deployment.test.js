@@ -241,3 +241,103 @@ test('POST /deployment/deploy — a non-deployable target (auto-on-push) → 400
     assert.match(r.body.error, /not manually deployable/);
   } finally { cleanDir(projectRoot); }
 });
+
+// ─── recovering an investigation the tab forgot (2026-08-04) ──────────────────
+//
+// The runId lived only in the browser tab that started the investigation, so
+// navigating away discarded the only handle to a run still in progress: the
+// agent carried on, wrote its proposal, and nothing could ever surface it.
+// These pin the rediscovery path, and specifically its resolution order — the
+// in-memory run record is the WEAKEST signal, because it dies with the server,
+// while the proposal file and working tree survive.
+
+function seedInvestigation(projectRoot, { proposal = null, runId = 'run-1' } = {}) {
+  // Real projects gitignore tmp/ (verified: `git check-ignore` matches
+  // tmp/ci-investigate/current.json in every managed repo), and the existing
+  // result file already lives there. Mirror that, or the bookkeeping files show
+  // up as untracked changes and the dismiss path tries to stash them — which is
+  // a property of the fixture, not of the product. The initial commit matters
+  // too: `git stash` fails outright in a repo that has none.
+  const g = (args) => execFileSync('git', args, { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
+  fs.writeFileSync(path.join(projectRoot, '.gitignore'), 'tmp/\n');
+  g(['add', '.gitignore']);
+  g(['commit', '-m', 'init']);
+  const dir = path.join(projectRoot, 'tmp', 'ci-investigate');
+  fs.mkdirSync(dir, { recursive: true });
+  const resultFile = path.join(dir, 'result.json');
+  if (proposal) fs.writeFileSync(resultFile, JSON.stringify(proposal));
+  fs.writeFileSync(path.join(dir, 'current.json'), JSON.stringify({
+    runId, resultFile, ciRunId: 42, startedAt: new Date().toISOString(),
+  }));
+  return { resultFile };
+}
+
+test('ci-investigate/active — nothing recorded → nothing active', async () => {
+  const projectRoot = makeTmpDir();
+  try {
+    gitInit(projectRoot);
+    const app = makeApp({ projectRoot, deployment: { repo: 'owner/repo' } });
+    const r = await req(app, 'GET', '/api/deployment/ci-investigate/active');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.active, null);
+  } finally { cleanDir(projectRoot); }
+});
+
+test('ci-investigate/active — a running investigation is rediscovered by a tab that never started it', async () => {
+  const projectRoot = makeTmpDir();
+  try {
+    gitInit(projectRoot);
+    seedInvestigation(projectRoot);
+    const app = makeApp({ projectRoot, deployment: { repo: 'owner/repo' } },
+      { getOneShotStatusFn: () => ({ state: 'running' }) });
+    const r = await req(app, 'GET', '/api/deployment/ci-investigate/active');
+    assert.equal(r.body.active.state, 'running');
+    assert.equal(r.body.active.runId, 'run-1');
+  } finally { cleanDir(projectRoot); }
+});
+
+test('ci-investigate/active — a finished proposal is recovered even with the run record gone', async () => {
+  // The case that matters most: the agent completed while nobody was looking,
+  // and the server has since forgotten the run. The proposal is on disk.
+  const projectRoot = makeTmpDir();
+  try {
+    gitInit(projectRoot);
+    seedInvestigation(projectRoot, {
+      proposal: { rootCause: 'flaky mktemp', summary: 'portable template', fixable: true, filesChanged: ['ci.yml'] },
+    });
+    const app = makeApp({ projectRoot, deployment: { repo: 'owner/repo' } },
+      { getOneShotStatusFn: () => null });
+    const r = await req(app, 'GET', '/api/deployment/ci-investigate/active');
+    assert.equal(r.body.active.state, 'complete');
+    assert.equal(r.body.active.proposal.rootCause, 'flaky mktemp');
+    assert.equal(r.body.active.proposal.fixable, true);
+    assert.equal(typeof r.body.active.proposal.hasChanges, 'boolean');
+  } finally { cleanDir(projectRoot); }
+});
+
+test('ci-investigate/active — a run that vanished with no proposal reports "lost", not a spinner', async () => {
+  const projectRoot = makeTmpDir();
+  try {
+    gitInit(projectRoot);
+    seedInvestigation(projectRoot); // recorded, but no proposal written
+    const app = makeApp({ projectRoot, deployment: { repo: 'owner/repo' } },
+      { getOneShotStatusFn: () => null });
+    const r = await req(app, 'GET', '/api/deployment/ci-investigate/active');
+    assert.equal(r.body.active.state, 'lost');
+  } finally { cleanDir(projectRoot); }
+});
+
+test('ci-investigate/active — dismissing clears it, so an old proposal stops re-appearing', async () => {
+  const projectRoot = makeTmpDir();
+  try {
+    gitInit(projectRoot);
+    seedInvestigation(projectRoot, { proposal: { rootCause: 'x', summary: 'y', fixable: true } });
+    const app = makeApp({ projectRoot, deployment: { repo: 'owner/repo' } },
+      { getOneShotStatusFn: () => null });
+
+    assert.equal((await req(app, 'GET', '/api/deployment/ci-investigate/active')).body.active.state, 'complete');
+    const d = await req(app, 'POST', '/api/deployment/ci-fix-dismiss', {});
+    assert.equal(d.status, 200);
+    assert.equal((await req(app, 'GET', '/api/deployment/ci-investigate/active')).body.active, null);
+  } finally { cleanDir(projectRoot); }
+});

@@ -230,6 +230,24 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   reconstruction is the weaker fallback and the UI says which one you are about
   to file.
 
+- **A CI investigation survives leaving the CI/CD tab.** The run id lived only
+  in the browser tab that started it, so navigating away and back discarded the
+  only handle to a running investigation — the DevOps agent carried on, wrote
+  its proposal, and nothing could ever surface it. The tab now rediscovers an
+  investigation on mount via `GET /deployment/ci-investigate/active`, resuming
+  the poll if it is still running or showing the proposal if it finished while
+  you were elsewhere.
+
+  Resolution deliberately does not trust the in-memory run record, which is the
+  weakest of the three signals because it dies with the server. The **proposal
+  file and the working tree** are durable, so a finished investigation is
+  recoverable even when the run that produced it has been forgotten — which is
+  precisely the case worth recovering. A run that vanished leaving no proposal
+  reports itself as lost rather than spinning forever.
+
+  Accepting or dismissing a fix now clears the record, so a proposal you have
+  already dealt with stops re-appearing.
+
 - **The CI/CD DevOps card no longer clips its own buttons.** The card was capped
   at 560px with `overflow: hidden` while the column holding Commit, Push and the
   deploy targets refused to shrink. A long target label — "iOS → App Store

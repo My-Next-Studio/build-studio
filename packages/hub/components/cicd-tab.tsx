@@ -181,6 +181,39 @@ export function CicdTab() {
     poll()
   }, [api, stopInvestigatePolling])
 
+  // Rediscover an investigation this tab did not start — or started before it
+  // was unmounted. The runId used to live only in this component's state, so
+  // navigating away discarded the only handle to a run that was still going:
+  // the agent finished, wrote its proposal, and nothing could ever surface it.
+  // The server records the run, and a completed proposal survives on disk, so
+  // coming back to the tab picks up where it left off.
+  useEffect(() => {
+    let cancelled = false
+    api.get('/deployment/ci-investigate/active').then((d: {
+      active?: { runId: string; state: string; proposal?: CiProposal; error?: string } | null
+    }) => {
+      if (cancelled || !d.active) return
+      const a = d.active
+      if (a.state === 'running') {
+        setInvestigate({ phase: 'running', runId: a.runId })
+        startInvestigatePolling(a.runId)
+      } else if (a.state === 'complete' && a.proposal) {
+        setInvestigate({ phase: 'proposal', proposal: a.proposal })
+      } else if (a.state === 'lost') {
+        // Started, but the run is gone and left no proposal — almost always a
+        // server restart. Say that, rather than spinning on a run that will
+        // never report.
+        setInvestigate({
+          phase: 'error',
+          message: 'The previous investigation did not survive a restart, and left no proposal. Start it again.',
+        })
+      } else if (a.error) {
+        setInvestigate({ phase: 'error', message: a.error })
+      }
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [api, startInvestigatePolling])
+
   const handleInvestigate = useCallback(async (runId?: number) => {
     setInvestigate({ phase: 'running', runId: '' })
     const data = await api.post('/deployment/ci-investigate', runId ? { runId } : {})
