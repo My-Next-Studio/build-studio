@@ -74,9 +74,18 @@ body {
 
 /* ── Animations ────────────────────────────── */
 
+/* Orange pulse means exactly one thing: a human is blocking the machine, go
+   unblock it. That signal currently has a 100% action rate and is worth
+   protecting — so a broken CI run, which is not necessarily urgent, shares the
+   mechanic but not the colour. Two states, two readings, no click required. */
 @keyframes pulse-border {
   0%, 100% { border-color: rgba(249,115,22,0.15); }
   50% { border-color: rgba(249,115,22,0.45); }
+}
+
+@keyframes pulse-border-red {
+  0%, 100% { border-color: rgba(239,68,68,0.15); }
+  50% { border-color: rgba(239,68,68,0.45); }
 }
 
 @keyframes fade-in {

@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { runOneShot: defaultRunOneShot, getOneShotStatus: defaultGetOneShotStatus } = require('../oneshot');
+const { createMonitor } = require('../monitor');
 
 const CI_INVESTIGATE_MAX_DURATION_MS = 15 * 60 * 1000;
 // A local-command deploy target runs a configured host command (e.g. a fastlane
@@ -180,6 +181,10 @@ function resolveDeployTargets(config) {
 function createDeploymentRouter(config, gitOps, {
   runOneShotFn = defaultRunOneShot,
   getOneShotStatusFn = defaultGetOneShotStatus,
+  // Shared with the Monitor router so both read one cached `gh run list`.
+  // Defaulted rather than required: a project with no `deployment.repo` makes
+  // no GitHub calls through it at all, so constructing one is free.
+  monitor = createMonitor(config),
 } = {}) {
   const router = express.Router();
   const { projectRoot } = config;
@@ -481,69 +486,40 @@ function createDeploymentRouter(config, gitOps, {
     }
   });
 
-  // GET /api/deployment/ci-status — poll latest CI run status
+  // GET /api/deployment/ci-status — latest CI run, served from the monitor cache.
+  //
+  // This used to shell out to `gh` twice, synchronously, on every request. That
+  // was survivable while it only ran with the CI/CD tab open, but the tab state
+  // now also feeds the tab selector, the status bar and desktop notifications,
+  // so it is read continuously across every project. It reads from
+  // `lib/monitor.js` instead: one cached `gh run list` shared with the Monitor
+  // tab, refreshed on a backoff, never blocking the event loop.
+  //
+  // The run it returns is the newest PUSH run. Previously, with no
+  // `ci_workflow` configured, `--limit 1` returned the most recent run of any
+  // workflow — so on a project whose most frequent runs are nightly cron jobs,
+  // this endpoint reported the cron's result as the CI status. That is fixed
+  // for every project at once, with nothing to configure.
   router.get('/deployment/ci-status', (req, res) => {
-    const dep = config.deployment || {};
-    const repo = dep.repo;
-    if (!repo) {
+    if (!config.deployment || !config.deployment.repo) {
       return res.status(400).json({ error: 'deployment.repo not set' });
     }
-    try {
-      // Scope to the configured deploy workflow so unrelated runs (Dependabot
-      // PRs, other workflows) don't surface here. When deployedOnPush=false
-      // the deploy job only fires on workflow_dispatch — narrowing the event
-      // avoids showing push runs whose deploy step is correctly skipped.
-      const runListArgs = ['run', 'list', '--repo', repo, '--limit', '1'];
-      if (dep.ci_workflow) {
-        runListArgs.push('--workflow', dep.ci_workflow);
-        if (dep.deployedOnPush === false) {
-          runListArgs.push('--event', 'workflow_dispatch');
-        } else {
-          runListArgs.push('--branch', 'main');
-        }
-      }
-      runListArgs.push('--json', 'databaseId,status,conclusion,displayTitle,createdAt,updatedAt,event');
-      const runsJson = execFileSync('gh', runListArgs, {
-        encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
-      }).trim();
-      const runs = JSON.parse(runsJson);
-      if (!runs.length) {
-        return res.json({ run: null });
-      }
-      const run = runs[0];
-
-      // Fetch per-job detail
-      let jobs = [];
-      try {
-        const jobsJson = execFileSync('gh', [
-          'run', 'view', String(run.databaseId), '--repo', repo,
-          '--json', 'jobs',
-        ], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-        const parsed = JSON.parse(jobsJson);
-        jobs = (parsed.jobs || []).map(j => ({
-          name: j.name,
-          status: j.status,
-          conclusion: j.conclusion,
-          startedAt: j.startedAt,
-          completedAt: j.completedAt,
-        }));
-      } catch {}
-
-      res.json({
-        run: {
-          id: run.databaseId,
-          status: run.status,
-          conclusion: run.conclusion,
-          title: run.displayTitle,
-          event: run.event,
-          createdAt: run.createdAt,
-          updatedAt: run.updatedAt,
-        },
-        jobs,
-      });
-    } catch (e) {
-      res.status(500).json({ error: `CI status check failed: ${e.stderr || e.message}` });
+    const ci = monitor.getCi();
+    // A cache that has never resolved is loading, not broken — say so rather
+    // than reporting a null run, which the tab would render as "no CI".
+    if (!ci.run && ci.loading && !ci.fetchedAt) {
+      return res.json({ run: null, jobs: [], loading: true });
     }
+    if (!ci.run && ci.error) {
+      return res.status(500).json({ error: `CI status check failed: ${ci.error}` });
+    }
+    res.json({
+      run: ci.run,
+      jobs: ci.jobs,
+      fetchedAt: ci.fetchedAt,
+      stale: ci.stale,
+      ...(ci.error ? { warning: ci.error } : {}),
+    });
   });
 
   // ─── CI-fix investigation ────────────────────────────────────────────────

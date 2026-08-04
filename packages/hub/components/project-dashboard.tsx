@@ -117,6 +117,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
   )
   const [portals, setPortals] = useState<PortalConfig[]>(initialPortalsConfig || [])
   const [wfBrief, setWfBrief] = useState<WorkflowBrief | null>(null)
+  const [ciFailed, setCiFailed] = useState(false)
   const { agents, reload: reloadAgents } = useAgents()
   const api = useProjectApi()
 
@@ -176,6 +177,16 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
           setWfBrief(null)
         }
       } catch { setWfBrief(null) }
+
+      // CI rides the same tick. This is what makes the CI/CD tab highlight
+      // without being open — previously the only CI poll lived inside that tab
+      // and was torn down on unmount, so a failure could never announce itself.
+      // The cost is a local request against an in-memory cache; the underlying
+      // `gh` call is on its own backoff inside the project-server.
+      try {
+        const s = await api.get('/monitor/summary')
+        setCiFailed(s?.ci?.conclusion === 'failure')
+      } catch { /* leave the last known CI state rather than falsely clearing it */ }
     }
     poll()
     const interval = setInterval(poll, 6000)
@@ -305,9 +316,18 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
               fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 500,
               cursor: 'pointer', marginBottom: -1,
               letterSpacing: '0.03em', transition: 'color 0.15s',
+              display: 'inline-flex', alignItems: 'center', gap: 5,
             }}
           >
             {t.label}
+            {t.key === 'cicd' && ciFailed && (
+              <span style={{
+                width: 5, height: 5, borderRadius: '50%',
+                background: 'var(--red)',
+                boxShadow: '0 0 6px rgba(239,68,68,0.4)',
+                animation: 'pulse-border-red 2s ease-in-out infinite',
+              }} />
+            )}
           </button>
         ))}
 
@@ -317,6 +337,9 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
         {functions.map(fn => {
           const isActive = fn.id === activeFunction
           const hasNotification = wfBrief?.waitingForInput && wfFunctionId === fn.id
+          // Red on whichever function owns the CI/CD tab — looked up rather
+          // than hardcoded to 'operations', since the tab set is configurable.
+          const hasCiAlert = !hasNotification && ciFailed && fn.tabs?.includes('cicd')
           return (
             <button
               key={fn.id}
@@ -339,6 +362,14 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
                   background: 'var(--orange)',
                   boxShadow: '0 0 6px rgba(249,115,22,0.4)',
                   animation: 'pulse-border 2s ease-in-out infinite',
+                }} />
+              )}
+              {hasCiAlert && (
+                <span style={{
+                  width: 5, height: 5, borderRadius: '50%',
+                  background: 'var(--red)',
+                  boxShadow: '0 0 6px rgba(239,68,68,0.4)',
+                  animation: 'pulse-border-red 2s ease-in-out infinite',
                 }} />
               )}
             </button>

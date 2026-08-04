@@ -1,6 +1,17 @@
 # Plan: CI/CD tab — monitor CI after a push, notify on failure, highlight the tab
 
-> **Status: proposed 2026-07-28.** Owner request: after pushing from
+> **Status: implemented 2026-08-04.** All three gaps closed, alongside
+> [monitor-tab.md](monitor-tab.md) — they shared G-1 and it was built once, as
+> a cache in the project-server (`lib/github-cache.js` + `lib/monitor.js`)
+> rather than as a second poller, so `/deployment/ci-status` stopped shelling
+> out per request and the hub's existing 6-second poll now carries CI state.
+> G-2: red `pulse-border-red` on the CI/CD tab, its owning function and the
+> status-bar project button. G-3: Electron main-process notifications
+> (`shared/ci-notify.js`), firing on failure **and** on recovery, on transitions
+> only. The cadence question raised below was answered by decoupling: the UI
+> cadence and the GitHub cadence are no longer the same number.
+>
+> **Original request follows.** Owner request: after pushing from
 > Operations → CI/CD, the run's progress should be visible from that tab, a
 > failure should raise a notification, and the tab should be highlighted the way
 > it already is when a workflow is waiting for input.

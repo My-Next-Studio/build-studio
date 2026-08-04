@@ -15,11 +15,24 @@ interface WorkflowInfo {
   progress: { done: number; total: number }
 }
 
+interface CiSummary {
+  status: string
+  conclusion: string | null
+  url: string | null
+  title: string | null
+  id: number
+}
+
 interface ProjectStatus {
   name: string
   port: number
   running: boolean
   workflow: WorkflowInfo | null
+  // Both ride along with this poll rather than being fetched by whichever tab
+  // happens to be open — that is the point of the change, since you cannot be
+  // told about a failure you are not already watching.
+  ci?: CiSummary | null
+  alerts?: { actionable: number; total: number } | null
 }
 
 export function GlobalStatusBar() {
@@ -102,6 +115,10 @@ export function GlobalStatusBar() {
         const isCurrent = s.name === currentProject
         const wf = s.workflow
         const waiting = wf?.waitingForInput && wf.currentStep !== 'completed'
+        // CI red pulses too, but never at the same time as waiting-for-input:
+        // if a human is blocking the machine, that is the more urgent of the
+        // two and the button can only say one thing at a time.
+        const ciFailed = s.ci?.conclusion === 'failure' && !waiting
 
         return (
           <button
@@ -123,8 +140,12 @@ export function GlobalStatusBar() {
               fontWeight: 500,
               whiteSpace: 'nowrap',
               transition: 'all 0.15s',
-              animation: waiting ? 'pulse-border 2s ease-in-out infinite' : 'none',
-              outline: waiting ? '1px solid rgba(249,115,22,0.2)' : 'none',
+              animation: waiting ? 'pulse-border 2s ease-in-out infinite'
+                : ciFailed ? 'pulse-border-red 2s ease-in-out infinite'
+                : 'none',
+              outline: waiting ? '1px solid rgba(249,115,22,0.2)'
+                : ciFailed ? '1px solid rgba(239,68,68,0.2)'
+                : 'none',
               outlineOffset: -1,
             }}
             onMouseEnter={e => { if (!isCurrent) e.currentTarget.style.background = 'var(--surface2)' }}
@@ -134,11 +155,14 @@ export function GlobalStatusBar() {
             <span style={{
               width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
               background: !s.running ? 'var(--muted)'
-                : wf?.currentStep === 'completed' ? 'var(--green)'
                 : waiting ? 'var(--orange)'
+                : ciFailed ? 'var(--red)'
+                : wf?.currentStep === 'completed' ? 'var(--green)'
                 : wf ? 'var(--yellow)'
                 : 'var(--green)',
-              boxShadow: waiting ? '0 0 6px rgba(249,115,22,0.4)' : 'none',
+              boxShadow: waiting ? '0 0 6px rgba(249,115,22,0.4)'
+                : ciFailed ? '0 0 6px rgba(239,68,68,0.4)'
+                : 'none',
             }} />
 
             <span style={{ color: isCurrent ? 'var(--text)' : 'var(--text-dim)', fontWeight: isCurrent ? 600 : 500 }}>

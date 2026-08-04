@@ -6,6 +6,26 @@ export const dynamic = 'force-dynamic'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { registry, processManager } = require(/* turbopackIgnore: true */ '@build-studio/shared')
 
+interface CiSummary {
+  status: string
+  conclusion: string | null
+  url: string | null
+  title: string | null
+  id: number
+}
+
+interface AlertCounts {
+  critical: number; high: number; moderate: number; low: number; info: number
+  total: number; actionable: number
+}
+
+interface MonitorSummary {
+  configured: boolean
+  ci: CiSummary | null
+  counts: AlertCounts
+  stale: boolean
+}
+
 interface ProjectStatus {
   name: string
   port: number
@@ -19,6 +39,12 @@ interface ProjectStatus {
     waitingForInput: boolean
     progress: { done: number; total: number }
   } | null
+  // CI state and alert counts ride along with the workflow poll so the tab
+  // selector, the status bar and the Monitor tab can all read them without
+  // being open. Cheap to include: the project-server serves both from an
+  // in-memory cache, so this adds no GitHub traffic at this cadence.
+  ci?: CiSummary | null
+  alerts?: AlertCounts | null
 }
 
 function httpGetJson(url: string, timeoutMs: number): Promise<unknown> {
@@ -62,11 +88,24 @@ export async function GET() {
         return { name: p.name, port: p.port, running: false, workflow: null } as ProjectStatus
       }
 
+      // Monitor summary is fetched alongside the workflow, not instead of it:
+      // a project with no workflow still has CI and alerts worth reporting, and
+      // a monitor failure must never cost us the workflow status. Hence the
+      // separate catch rather than one try around both.
+      let monitor: MonitorSummary | null = null
+      try {
+        monitor = await httpGetJson(`http://localhost:${status.port}/api/monitor/summary`, 2000) as MonitorSummary
+      } catch {
+        monitor = null
+      }
+      const ci = monitor?.ci ?? null
+      const alerts = monitor?.counts ?? null
+
       try {
         const wfData = await httpGetJson(`http://localhost:${status.port}/api/workflow`, 2000) as { workflow?: Record<string, unknown> }
         const wf = wfData?.workflow as Record<string, unknown> | undefined
         if (!wf) {
-          return { name: p.name, port: status.port, running: true, workflow: null }
+          return { name: p.name, port: status.port, running: true, workflow: null, ci, alerts }
         }
 
         // Calculate progress: count done agents in current step
@@ -96,9 +135,11 @@ export async function GET() {
             waitingForInput,
             progress: { done, total },
           },
+          ci,
+          alerts,
         }
       } catch {
-        return { name: p.name, port: status.port, running: true, workflow: null } as ProjectStatus
+        return { name: p.name, port: status.port, running: true, workflow: null, ci, alerts } as ProjectStatus
       }
     })
   )

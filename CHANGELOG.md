@@ -21,6 +21,118 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-08-04 — A Monitor tab, and CI that tells you when it breaks
+
+Two monitoring gaps closed together, because both came down to the same missing
+piece: nothing polled GitHub unless you already had the right tab open. You
+could not be told about a failure you were not already watching.
+
+### Added
+
+- **A Monitor tab** on the home view, beside Projects / Demos / Model. It lists
+  cross-project conditions that nobody triggered and that can go red days after
+  your last commit: scheduled workflows whose latest run failed, and open
+  dependency advisories. Grouped worst-first, since that is how a morning triage
+  actually reads.
+
+  Nothing is stored. Every row is derived on each poll, so an alert is visible
+  exactly as long as its condition holds — fix the advisory, or let the nightly
+  job go green, and the row disappears on its own. There is no dismiss button by
+  design: a stored acknowledgement drifts, and a Monitor tab still showing a
+  vulnerability that was patched last week is one you learn to ignore.
+
+- **Desktop notifications on CI failure and recovery.** Push, go do something
+  else, and the app tells you when the run turns red — and again when it goes
+  back to green, so you do not have to check to learn a fix landed. They fire
+  from the Electron main process, so they arrive with the app in the background.
+
+  Notifications are for *transitions*, never conditions: an unchanged red run
+  never re-announces itself, and the first poll after launch only establishes a
+  baseline. Otherwise every start-up would greet you with alarms about failures
+  that may be a week old.
+
+- **A red CI pulse** on the CI/CD tab, the function that owns it, and the
+  project button in the status bar. It shares the existing pulse mechanic but
+  not its colour — orange still means one thing only, "a human is blocking the
+  machine, go unblock it", and that signal was worth protecting.
+
+### Changed
+
+- **The CI light now tracks your push CI, not whichever workflow ran most
+  recently.** With no `deployment.ci_workflow` configured, CI status came from
+  the single most recent run of *any* workflow — so on a project whose most
+  frequent runs are nightly cron jobs, the CI/CD tab reported the cron's result.
+  One managed project here showed a red CI light for a failing staleness gate
+  while its actual push CI was green the whole time.
+
+  CI now considers only `push` and `workflow_dispatch` runs. **If a project's CI
+  light changes colour after this update, the new colour is the correct one** —
+  and the scheduled job it used to be showing you has moved to the Monitor tab,
+  where it belongs. Nothing to configure; `ci_workflow` still narrows the light
+  if you have set it.
+
+- **`GET /api/deployment/ci-status` is served from cache.** It used to shell out
+  to `gh` twice, synchronously, on every request. That was survivable while it
+  only ran with the CI/CD tab open; now that CI state feeds the tab selector,
+  the status bar and notifications, it is read continuously across every
+  project. GitHub is queried on a backoff — fast while a run is in flight,
+  every five minutes when nothing is happening — and one `gh run list` serves
+  both the CI light and the Monitor tab's scheduled alerts.
+
+  Projects without `deployment.repo` make no GitHub calls at all.
+
+### Known issues
+
+- **Dependency alerts are enabled on one of nine repositories here.** Every
+  other repo returns a 403 and shows an *"alerts are not enabled"* row on the
+  Monitor tab instead of advisories. That row is information, not an error, and
+  links to the setting — but until the feature is switched on per repository,
+  the tab's most valuable source is silent for that project.
+
+  If you debug that 403, ignore `gh`'s advice that it *"needs the
+  `admin:repo_hook` scope"*. It is misleading: the same token reads alerts fine
+  on the repository where the feature is on. The scope is not the problem.
+
+- **A scheduled job is reported on its first failure**, at moderate severity,
+  escalating to high once it has failed twice running. One failure may be flaky
+  infrastructure — but suppressing it hides a real break for a full day, since
+  the next data point is 24 hours away. If that proves noisy, the threshold is
+  the thing to change.
+
+### Upgrade steps
+
+**In Build Studio** — full rebuild, since both hub and project-server changed:
+`cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`, then restart the app *and*
+the project-servers (the cached poller lives in the project-server).
+
+macOS will ask permission the first time a notification fires.
+
+**In each managed project** — nothing to do, but two things are worth knowing.
+A project needs `deployment.repo` in `.build-studio/config.yaml` to appear on
+Monitor at all; that is already set on the projects with CI. And dependency
+advisories need Dependabot alerts enabled on the repository — see Known issues.
+
+### Notes for forks
+
+- **Alerts are derived, never stored, and that is load-bearing.** The auto-clear
+  behaviour is not a feature that was built; it is what you get by keeping no
+  state. If you add a source, make it queryable for its current condition rather
+  than a fire-and-forget event, or you will need reconciliation logic that
+  drifts. If you add acknowledgement, key it on a stable per-alert identity
+  (GitHub's Dependabot `number`, never the package name) — keying on the
+  package means acknowledging one advisory silently swallows the next one for
+  that dependency, which is the one you most want to see.
+
+- **Never poll GitHub from a UI cadence.** `lib/github-cache.js` exists so the
+  hub can poll every 6 seconds while GitHub is queried once per TTL. Reading
+  `gh` directly from a route puts a subprocess on every request, and once that
+  route feeds a status bar rather than a single open tab, it is a continuous
+  stream of authenticated calls against the same credential the push button and
+  the CI-investigate agent depend on.
+
+---
+
 ## 2026-07-31 — Recover stuck agents, reap finished ones, and pause before thrashing
 
 Four separate stalls this week traced back to the same shape: workflow state

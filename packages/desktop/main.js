@@ -568,6 +568,72 @@ function startDockBadgePoll() {
   setTimeout(updateDockBadge, 8000);
 }
 
+// ─── CI failure notifications ──────────────────────────────────────────────
+//
+// This lives in the main process rather than the renderer for one reason: the
+// case worth notifying about is "you pushed, then went and did something else",
+// and a web Notification from the hub only fires while a renderer is open and
+// permitted. A main-process Notification arrives with the app in the
+// background, which is the whole point.
+//
+// It polls the hub's own cross-project status endpoint instead of talking to
+// each project-server, so it inherits the same cached CI state the UI sees and
+// costs nothing extra against GitHub.
+
+let _ciPollInterval = null;
+let _ciBaseline = null;   // project → last seen conclusion; null until first poll
+
+function fetchGlobalStatus() {
+  return new Promise((resolve) => {
+    const req = http.get(`http://localhost:${HUB_PORT}/api/global-status`, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve(null); } });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(5000, () => { req.destroy(); resolve(null); });
+  });
+}
+
+async function checkCiTransitions() {
+  try {
+    const { Notification } = require('electron');
+    if (!Notification.isSupported()) return;
+    const { diffCiStates, ciStatesFromStatuses, conclusionsOf } = require('@build-studio/shared/ci-notify');
+
+    const data = await fetchGlobalStatus();
+    if (!data || !Array.isArray(data.statuses)) return;   // keep the baseline
+
+    const states = ciStatesFromStatuses(data.statuses);
+    // The first poll of a session only establishes the baseline. Announcing
+    // whatever happens to be red at launch would be reporting history as news.
+    const events = _ciBaseline === null ? [] : diffCiStates(_ciBaseline, states);
+    _ciBaseline = { ...(_ciBaseline || {}), ...conclusionsOf(states) };
+
+    for (const ev of events) {
+      const n = new Notification({
+        title: `${ev.kind === 'failed' ? '🔴' : '🟢'} ${ev.title}`,
+        body: ev.body,
+        silent: ev.kind === 'recovered',   // good news does not need a sound
+      });
+      // Clicking takes you to the run that changed, which is the next thing
+      // you would do anyway.
+      if (ev.url) n.on('click', () => shell.openExternal(ev.url));
+      n.show();
+    }
+  } catch (e) {
+    console.error('[ci-notify] poll failed', e && e.message);
+  }
+}
+
+function startCiNotifyPoll() {
+  if (_ciPollInterval) return;
+  // 60s: the project-servers refresh from GitHub on their own backoff, so a
+  // faster tick here would only re-read the same cache.
+  _ciPollInterval = setInterval(checkCiTransitions, 60_000);
+  setTimeout(checkCiTransitions, 12_000);
+}
+
 // A GPU/compositor process crash typically blacks the window without producing
 // a macOS .ips report. Chromium usually relaunches the GPU process on its own,
 // but the existing render contents can stay black — so log it and reload to
@@ -634,6 +700,7 @@ app.whenReady().then(async () => {
 
   createWindow(showOnboarding);
   startDockBadgePoll();
+  startCiNotifyPoll();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

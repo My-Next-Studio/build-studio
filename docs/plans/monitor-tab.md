@@ -1,6 +1,18 @@
 # Plan: a Monitor tab for alerts that need handling
 
-> **Status: proposed 2026-08-03.** Owner request: scheduled-job failures and
+> **Status: implemented 2026-08-04.** Built as scoped, with the shared poll of
+> G-1 solved by caching in the project-server (`lib/github-cache.js`) rather
+> than by a new poller — the hub keeps its existing 6-second cadence and GitHub
+> is queried once per TTL. Sources: `lib/monitor-alerts.js` (derivation, pure),
+> `lib/monitor.js` (fetch + backoff), `api/monitor.js`, hub `app/api/monitor/`
+> and `components/monitor-tab.tsx`. Decided at build time: **no acknowledgement
+> in v1** (open decision 1) and **grouped by severity** (open decision 3). Open
+> decision 2 — whether a cleared alert leaves a trace — resolved as *no trace on
+> Monitor*, with the CI half answered by recovery notifications. Open decision
+> 4: a scheduled job is reported on its first failure at `moderate`, escalating
+> to `high` at two consecutive.
+>
+> **Original request follows.** Owner request: scheduled-job failures and
 > GitHub vulnerability alerts do not belong on the CI/CD tab — that tab is for
 > taking an action (push, deploy) and watching its outcome. They want a separate
 > cross-project **Monitor** tab, alongside Projects / Demos / Model, listing

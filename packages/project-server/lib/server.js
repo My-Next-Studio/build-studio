@@ -17,6 +17,8 @@ const { createTerminalRouter } = require('./api/terminal');
 const { createWorkflowRouter } = require('./api/workflow');
 const { createRunRouter } = require('./api/run');
 const { createDeploymentRouter } = require('./api/deployment');
+const { createMonitorRouter } = require('./api/monitor');
+const { createMonitor } = require('./monitor');
 const { createRunbooksRouter } = require('./api/runbooks');
 const { createOpsUITestsRouter } = require('./api/ops-uitests');
 const { createDemoSetupRouter } = require('./api/demo-setup');
@@ -171,7 +173,11 @@ function startServer(projectRoot, opts = {}) {
   const terminalRouter = createTerminalRouter(config, state, tmuxOps);
   const workflowRouter = createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast);
   const runRouter = createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecutionPlan);
-  const deploymentRouter = createDeploymentRouter(config, gitOps);
+  // One monitor per project-server, shared by the CI/CD tab and the Monitor
+  // tab so a single cached `gh run list` answers both.
+  const monitor = createMonitor(config);
+  const deploymentRouter = createDeploymentRouter(config, gitOps, { monitor });
+  const monitorRouter = createMonitorRouter(config, monitor);
   const runbooksRouter = createRunbooksRouter(config);
   const opsUITestsRouter = createOpsUITestsRouter(config);
   const demoSetupRouter = createDemoSetupRouter(config);
@@ -186,6 +192,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', workflowRouter);
   app.use('/api', runRouter);
   app.use('/api', deploymentRouter);
+  app.use('/api', monitorRouter);
   app.use('/api', runbooksRouter);
   app.use('/api', opsUITestsRouter);
   app.use('/api', demoSetupRouter);
@@ -665,6 +672,9 @@ function startServer(projectRoot, opts = {}) {
         ...(config.roles.standalone || []),
       ];
       console.log(`  Roles:   ${allRoles.length} (${(config.roles.review || []).length} review, ${(config.roles.execution || []).length} execution, ${(config.roles.standalone || []).length} standalone)\n`);
+      // Warm the CI/alert caches so the first hub poll after a restart shows
+      // real state instead of an empty light. No-ops without deployment.repo.
+      monitor.prime();
     });
   };
 
