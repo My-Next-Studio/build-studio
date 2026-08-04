@@ -325,16 +325,20 @@ export function CicdTab() {
         borderRadius: 8,
         overflow: 'hidden',
         width: '100%',
-        maxWidth: 560,
       }}>
-        <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        {/* wrap: on a narrow pane the controls drop below the info column
+            instead of squeezing it to nothing. */}
+        <div style={{
+          padding: '12px 16px', display: 'flex', alignItems: 'flex-start',
+          gap: 12, flexWrap: 'wrap',
+        }}>
           {/* Avatar */}
           {devOpsAvatar
             ? <img src={devOpsAvatar} alt="DevOps" style={{ width: 88, height: 88, flexShrink: 0, borderRadius: 8 }} />
             : <span style={{ fontSize: 22, lineHeight: '28px', flexShrink: 0 }}>{devOpsCfg.avatar}</span>}
 
           {/* Info */}
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: '1 1 260px', minWidth: 240 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
                 DevOps
@@ -371,7 +375,10 @@ export function CicdTab() {
           </div>
 
           {/* Commit + Push + Deploy buttons */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, flexShrink: 0 }}>
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
+            gap: 6, minWidth: 0, marginLeft: 'auto',
+          }}>
             <button
               onClick={() => {
                 setCommitResult(null)
@@ -433,12 +440,14 @@ export function CicdTab() {
               const busy = deployingId === target.id
               const result = deployResults[target.id]
               return (
-                // Column, not row: a long target.label (e.g. "Promote last
-                // build → /Applications") plus its post-deploy result message
-                // side-by-side can exceed the card's fixed maxWidth (560,
-                // overflow:hidden above) and clip/overlap the Commit/Push
-                // controls above it. Stack instead, matching how Commit/Push's
-                // own result spans already render below their buttons.
+                // Column, not row: a long target.label (e.g. "iOS → App Store
+                // metadata (fastlane deliver)") beside its post-deploy result
+                // message makes a very wide row, which used to clip against the
+                // card and overlap the Commit/Push controls. Stack instead,
+                // matching how Commit/Push's own result spans render below
+                // their buttons. The label itself is width-bounded and wraps
+                // (see maxWidth below), so it can no longer set the column's
+                // width on its own.
                 <div key={target.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                   {target.canDeploy ? (
                     <button
@@ -454,6 +463,7 @@ export function CicdTab() {
                         cursor: !busy && deployingId === null ? 'pointer' : 'default',
                         opacity: busy ? 0.6 : (deployingId !== null ? 0.5 : 1),
                         transition: 'all 0.15s',
+                        maxWidth: 340, whiteSpace: 'normal', textAlign: 'right', lineHeight: 1.35,
                       }}
                     >
                       {busy ? 'Deploying…' : `Deploy: ${target.label}`}
@@ -461,6 +471,7 @@ export function CicdTab() {
                   ) : (
                     <span title={target.description || ''} style={{
                       fontFamily: 'var(--mono)', fontSize: 9, color: 'var(--muted)',
+                      maxWidth: 340, textAlign: 'right', lineHeight: 1.4,
                     }}>
                       {target.label} — {target.description || 'auto on push'}
                     </span>

@@ -230,6 +230,15 @@ obvious remedy — relaunch the step — was the one that destroyed the work.
   reconstruction is the weaker fallback and the UI says which one you are about
   to file.
 
+- **The CI/CD DevOps card no longer clips its own buttons.** The card was capped
+  at 560px with `overflow: hidden` while the column holding Commit, Push and the
+  deploy targets refused to shrink. A long target label — "iOS → App Store
+  metadata (fastlane deliver)" — therefore pushed past the card edge and was cut
+  off, and the info column beside it collapsed toward zero width, wrapping
+  "versioning: semver" over the deploy descriptions. The card now uses the
+  width available to it, matching the CI Health / Changelog / Working Tree
+  sections below, and long labels wrap instead of setting the column's width.
+
 - **A failing watchdog tick no longer kills the project-server.** The 30-second
   agent watchdog ran with no error handling, so any throw inside it became an
   uncaught exception and exited the process — the project simply disappeared
