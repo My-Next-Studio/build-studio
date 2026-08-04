@@ -50,6 +50,36 @@ function latestPushRun(runs) {
 }
 
 /**
+ * Resolve a configured `ci_workflow` to the display name runs are tagged with.
+ *
+ * `deployment.ci_workflow` is conventionally a FILENAME — `deploy-pages.yml` —
+ * because that is what `gh run list --workflow` accepts. But `gh run list
+ * --json workflowName` reports the workflow's *display* name, `Deploy Pages`,
+ * so filtering runs by the configured string directly matches nothing and the
+ * CI light goes blank. (That is exactly what happened to a project here the
+ * moment filtering moved from the gh flag into our own code.)
+ *
+ * Deriving one from the other is not safe — a workflow named "Deploy to Pages"
+ * can live in `deploy-pages.yml` — so this maps them through the real workflow
+ * list. Returns null when nothing matches, and callers fall back to treating
+ * the configured value as a display name, which is the other legal spelling.
+ *
+ * @param {string} ciWorkflow  a filename, a path, or a display name
+ * @param {{name:string, path:string}[]} workflows  from `gh workflow list`
+ */
+function resolveWorkflowName(ciWorkflow, workflows) {
+  if (!ciWorkflow) return null;
+  const list = Array.isArray(workflows) ? workflows : [];
+  for (const w of list) {
+    if (!w) continue;
+    if (w.name === ciWorkflow) return w.name;
+    const path = String(w.path || '');
+    if (path === ciWorkflow || path.split('/').pop() === ciWorkflow) return w.name;
+  }
+  return null;
+}
+
+/**
  * Scheduled workflows whose most recent run failed.
  *
  * Grouped by workflow, because a nightly gate that failed three nights running
@@ -213,6 +243,7 @@ module.exports = {
   SEVERITY_ORDER,
   PUSH_EVENTS,
   latestPushRun,
+  resolveWorkflowName,
   deriveScheduledAlerts,
   deriveDependabotAlerts,
   classifyAlertsError,

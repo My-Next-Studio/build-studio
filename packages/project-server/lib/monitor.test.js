@@ -26,6 +26,12 @@ function fakeGh({ runs = RUNS, alerts = ALERTS, alertsError = null, jobsError = 
       if (jobsError) throw new Error('jobs unavailable');
       return { stdout: JSON.stringify({ jobs: [{ name: 'build', status: 'completed', conclusion: 'success' }] }) };
     }
+    if (args[0] === 'workflow' && args[1] === 'list') {
+      return { stdout: JSON.stringify([
+        { name: 'CI', path: '.github/workflows/ci.yml', id: 1 },
+        { name: 'Deploy Pages', path: '.github/workflows/deploy-pages.yml', id: 2 },
+      ]) };
+    }
     if (args[0] === 'api') {
       if (alertsError) { const e = new Error('gh failed'); e.stderr = alertsError; throw e; }
       return { stdout: JSON.stringify(alerts) };
@@ -90,6 +96,38 @@ test('a configured ci_workflow narrows the light but not the alert list', async 
   assert.equal(m.getCi().run.workflowName, 'CI');
   // The scheduled gate lives in a different workflow and must still be seen.
   assert.ok(m.getAlerts().alerts.some((a) => a.title === 'nightly gate'));
+});
+
+test('a ci_workflow given as a filename still finds its runs', async () => {
+  // Regression: config carries `deploy-pages.yml`, runs are tagged
+  // `Deploy Pages`. Filtering on the raw configured string blanked the light.
+  const runs = [
+    { conclusion: 'success', createdAt: 'a', updatedAt: 'a', databaseId: 9, event: 'push', status: 'completed', displayTitle: 'ship', workflowName: 'Deploy Pages', url: 'u' },
+    { conclusion: 'failure', createdAt: 'b', updatedAt: 'b', databaseId: 8, event: 'push', status: 'completed', workflowName: 'CI', url: 'u2' },
+  ];
+  const { exec, calls } = fakeGh({ runs });
+  const m = createMonitor(
+    { name: 'p', deployment: { repo: 'o/r', ci_workflow: 'deploy-pages.yml' } },
+    { execFileAsync: exec }
+  );
+  m.prime();
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(m.getCi().run.workflowName, 'Deploy Pages');
+  assert.ok(calls.some((c) => c.startsWith('workflow list')), 'it resolves the filename');
+});
+
+test('the workflow-name lookup happens once, not on every refresh', async () => {
+  const runs = [{ conclusion: 'success', createdAt: 'a', updatedAt: 'a', databaseId: 9, event: 'push', status: 'completed', workflowName: 'Deploy Pages', url: 'u' }];
+  const { exec, calls } = fakeGh({ runs });
+  const m = createMonitor(
+    { name: 'p', deployment: { repo: 'o/r', ci_workflow: 'deploy-pages.yml' } },
+    { execFileAsync: exec }
+  );
+  await m.prime();
+  await new Promise((r) => setTimeout(r, 10));
+  const before = calls.filter((c) => c.startsWith('workflow list')).length;
+  assert.equal(before, 1);
 });
 
 test('disabled dependency alerts surface as an info row, not as an error', async () => {

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  latestPushRun, deriveScheduledAlerts, deriveDependabotAlerts,
+  latestPushRun, resolveWorkflowName, deriveScheduledAlerts, deriveDependabotAlerts,
   classifyAlertsError, notEnabledAlert, sortAlerts, countBySeverity,
 } = require('./monitor-alerts');
 
@@ -51,6 +51,29 @@ test('a manual re-run counts as a push run; Dependabot\'s own updater does not',
   assert.equal(latestPushRun([{ event: 'dynamic', conclusion: 'failure' }]), null);
   assert.equal(latestPushRun([]), null);
   assert.equal(latestPushRun(null), null);
+});
+
+test('a ci_workflow FILENAME resolves to the display name runs are tagged with', () => {
+  // The real shape: config says `deploy-pages.yml`, gh reports `Deploy Pages`.
+  // Comparing the configured string to workflowName matches nothing, which
+  // blanks the CI light — the regression this function exists to prevent.
+  const workflows = [
+    { name: 'CI', path: '.github/workflows/ci.yml', id: 1 },
+    { name: 'Deploy Pages', path: '.github/workflows/deploy-pages.yml', id: 2 },
+  ];
+  assert.equal(resolveWorkflowName('deploy-pages.yml', workflows), 'Deploy Pages');
+  assert.equal(resolveWorkflowName('.github/workflows/deploy-pages.yml', workflows), 'Deploy Pages');
+  // A display name is the other legal spelling and must keep working.
+  assert.equal(resolveWorkflowName('Deploy Pages', workflows), 'Deploy Pages');
+});
+
+test('an unresolvable workflow yields null rather than a wrong guess', () => {
+  // Deriving a name from a filename would be wrong: "Deploy to Pages" can live
+  // in deploy-pages.yml. Better to fall back than to invent a match.
+  assert.equal(resolveWorkflowName('nope.yml', [{ name: 'CI', path: 'ci.yml' }]), null);
+  assert.equal(resolveWorkflowName('x.yml', []), null);
+  assert.equal(resolveWorkflowName('', [{ name: 'CI', path: 'ci.yml' }]), null);
+  assert.equal(resolveWorkflowName('x.yml', null), null);
 });
 
 test('a failing nightly gate raises one alert, not one per failed night', () => {

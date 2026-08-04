@@ -56,6 +56,29 @@ function createMonitor(config, deps = {}) {
     return (config && config.deployment && config.deployment.repo) || null;
   }
 
+  // repo|ci_workflow → resolved display name. Memoized for the process
+  // lifetime: a workflow's display name changes about as often as its file is
+  // renamed, and a project-server restart re-resolves it anyway.
+  const workflowNameCache = new Map();
+
+  async function resolveConfiguredWorkflow(r, ciWorkflow) {
+    const key = `${r}|${ciWorkflow}`;
+    if (workflowNameCache.has(key)) return workflowNameCache.get(key);
+    let resolved = null;
+    try {
+      const { stdout } = await exec('gh', [
+        'workflow', 'list', '--repo', r, '--limit', '100', '--json', 'name,path,id',
+      ], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+      resolved = alertsLib.resolveWorkflowName(ciWorkflow, JSON.parse(String(stdout || '[]').trim() || '[]'));
+    } catch (_) {
+      // Leave it unresolved rather than caching a failure as "no such
+      // workflow" — the next refresh gets to try again.
+      return null;
+    }
+    workflowNameCache.set(key, resolved);
+    return resolved;
+  }
+
   async function fetchRuns() {
     const r = repo();
     if (!r) return { runs: [] };
@@ -66,9 +89,18 @@ function createMonitor(config, deps = {}) {
     // the filter is applied when picking the CI run, not when fetching.
     const { stdout } = await exec('gh', args, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
     const runs = JSON.parse(String(stdout || '[]').trim() || '[]');
-    const ciRuns = dep.ci_workflow
-      ? runs.filter((x) => x && x.workflowName === dep.ci_workflow)
-      : runs;
+
+    let ciRuns = runs;
+    if (dep.ci_workflow) {
+      ciRuns = runs.filter((x) => x && x.workflowName === dep.ci_workflow);
+      // No match usually means ci_workflow is a filename rather than a display
+      // name. Resolving costs one extra call, once per server lifetime — and
+      // only for projects spelled that way.
+      if (ciRuns.length === 0) {
+        const resolved = await resolveConfiguredWorkflow(r, dep.ci_workflow);
+        if (resolved) ciRuns = runs.filter((x) => x && x.workflowName === resolved);
+      }
+    }
     const run = alertsLib.latestPushRun(ciRuns);
 
     // Per-job detail, only for the run the CI/CD tab is about to render. Failing
