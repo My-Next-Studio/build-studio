@@ -17,6 +17,8 @@
  */
 
 /** Worst first. The Monitor tab groups on this, so the order is the UI's order. */
+const { refreshCommand } = require('./fix-reachability');
+
 const SEVERITY_ORDER = ['critical', 'high', 'moderate', 'low', 'info'];
 
 /**
@@ -188,17 +190,29 @@ function classifyBump(from, to) {
  * you work. Three rows that look identical today need wildly different amounts
  * of you:
  *
- *   'ready'   — Dependabot has a PR open and it is not a major. Merge it.
- *   'major'   — a PR exists, but green CI does not justify merging a major.
- *   'blocked' — a patched version exists upstream and no PR appeared, which
- *               almost always means the dependency is pinned transitively.
- *               (postcss under `next` here.) Needs a decision, not a merge.
- *   'none'    — no patched version exists at all. Nobody can fix it yet.
+ *   'ready'    — Dependabot has a PR open and it is not a major. Merge it.
+ *   'major'    — a PR exists, but green CI does not justify merging a major.
+ *   'refresh'  — a patch exists, no PR appeared, and every constraint in the
+ *                lockfile already permits it. Nothing is blocked; the lockfile
+ *                just has not been regenerated. One command, not a decision.
+ *   'upstream' — a patch exists but some parent's range excludes it, so nothing
+ *                you run locally will resolve it. Wait, or force an override.
+ *   'blocked'  — a patch exists, no PR appeared, and we could NOT read the
+ *                constraints well enough to say which of the two it is.
+ *   'none'     — no patched version exists at all. Nobody can fix it yet.
  *
- * `blocked` and `none` are the rows worth your attention; `ready` is the bulk
- * and is batch-mergeable.
+ * 'refresh' and 'upstream' were both 'blocked' until reachability analysis
+ * existed, and collapsing them was a real defect: measured here, two of three
+ * "decisions" were one-command lockfile refreshes. A label that demands
+ * judgement where none is needed trains people to stop opening the list.
+ * 'blocked' survives as the honest answer when the lockfile could not be read —
+ * see fix-reachability.js on why that verdict is withheld rather than guessed.
+ *
+ * @param {(alert) => ('refresh'|'upstream'|null)} [reachability]  consulted only
+ *        for advisories that would otherwise be 'blocked'. Injected rather than
+ *        computed here so this module stays free of file IO.
  */
-function withFixReadiness(alerts, prs, { autofixEnabled } = {}) {
+function withFixReadiness(alerts, prs, { autofixEnabled, reachability } = {}) {
   const dependabotPrs = (Array.isArray(prs) ? prs : []).filter(isDependabotPr);
   return (alerts || []).map((a) => {
     // With security updates switched off, no PR was ever attempted — so a
@@ -217,15 +231,31 @@ function withFixReadiness(alerts, prs, { autofixEnabled } = {}) {
       : null;
 
     let fix;
+    let command = null;
     if (pr) {
       const bump = parseBumpTitle(pr.title);
       fix = bump && classifyBump(bump.from, bump.to) === 'major' ? 'major' : 'ready';
+    } else if (!a.hasPatch) {
+      fix = 'none';
     } else {
-      fix = a.hasPatch ? 'blocked' : 'none';
+      // A patch exists and Dependabot opened nothing. Ask the lockfile which
+      // kind of "no PR" this is; it answers null when it cannot tell, and the
+      // old undifferentiated label is what that falls back to.
+      let verdict = null;
+      if (typeof reachability === 'function') {
+        try { verdict = reachability(a); } catch { verdict = null; }
+      }
+      fix = verdict === 'refresh' ? 'refresh' : verdict === 'upstream' ? 'upstream' : 'blocked';
+      if (fix === 'refresh') {
+        // Name the command. "One command fixes this" without saying which one
+        // just moves the puzzle somewhere less convenient.
+        command = refreshCommand(a.ecosystem, a.pkg, a.manifestPath);
+      }
     }
     return {
       ...a,
       fix,
+      command,
       prNumber: pr ? pr.number : null,
       prUrl: pr ? pr.url : null,
     };
@@ -240,7 +270,9 @@ function escapeRe(s) {
 const FIX_LABEL = {
   ready: 'fix ready — merge',
   major: 'major bump — needs review',
-  blocked: 'patch exists, no PR — likely pinned',
+  refresh: 'lockfile out of date — one command',
+  upstream: 'blocked upstream — nothing to run',
+  blocked: 'patch exists, no PR — could not read the lockfile',
   none: 'no fix available yet',
   inactive: 'security updates are off — unknown until enabled',
 };
@@ -271,6 +303,12 @@ function deriveDependabotAlerts(alerts, project) {
         // are known — see withFixReadiness.
         pkg,
         hasPatch: !!a.security_vulnerability?.first_patched_version?.identifier,
+        // Everything reachability analysis needs to decide whether the patch is
+        // installable today — see fix-reachability.js. Carried on the alert so
+        // the lockfile read happens once, in the layer that is allowed to do IO.
+        patchedVersion: a.security_vulnerability?.first_patched_version?.identifier || null,
+        ecosystem: a.dependency?.package?.ecosystem || null,
+        manifestPath: a.dependency?.manifest_path || null,
         title: `${pkg} — ${a.security_advisory?.summary || 'security advisory'}`,
         // Runtime vs development is the first thing you want when triaging, and
         // it is the difference between "ships to users" and "build-time only".
@@ -364,7 +402,14 @@ function autofixDisabledAlert(project, repo, openCount) {
  * alone buries the handful that need thought under the bulk that does not, and
  * a list you cannot triage at a glance is one you stop opening.
  */
-const FIX_PRIORITY = { major: 0, blocked: 1, none: 2, inactive: 2.5, ready: 3 };
+// 'upstream' sinks BELOW 'none': both are things you cannot act on, but 'none'
+// at least becomes actionable the day a patch ships, whereas 'upstream' is
+// waiting on someone else's release and re-reading it changes nothing.
+// 'refresh' sits just above 'ready' — it is a single command, so it belongs
+// with the work you can clear rather than the work you must think about.
+const FIX_PRIORITY = {
+  major: 0, blocked: 1, none: 2, inactive: 2.5, refresh: 2.8, ready: 3, upstream: 4,
+};
 
 function sortAlerts(alerts) {
   return [...(alerts || [])].sort((a, b) => {

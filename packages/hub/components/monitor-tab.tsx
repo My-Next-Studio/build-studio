@@ -27,7 +27,9 @@ interface Alert {
   url: string | null
   since: string | null
   /** How much of you this row needs — see FIX_LABEL in monitor-alerts.js. */
-  fix?: 'ready' | 'major' | 'blocked' | 'none' | 'inactive'
+  fix?: 'ready' | 'major' | 'refresh' | 'upstream' | 'blocked' | 'none' | 'inactive'
+  /** For a `refresh` row: the exact command that clears it. */
+  command?: string | null
   prNumber?: number | null
   prUrl?: string | null
 }
@@ -38,7 +40,16 @@ interface Alert {
 const FIX_BADGE: Record<string, { label: string; color: string }> = {
   ready: { label: 'merge', color: 'var(--green)' },
   major: { label: 'major — review', color: 'var(--orange)' },
-  blocked: { label: 'pinned — decide', color: 'var(--orange)' },
+  // Green like `merge`, because it belongs to the same category — work you can
+  // clear without thinking. It was the collapse of THIS into "pinned — decide"
+  // that made the list feel unactionable: two of three such rows here were a
+  // single command, and calling them decisions is what taught you to skip them.
+  refresh: { label: 'run one command', color: 'var(--green)' },
+  // Deliberately not orange. Orange means "you must decide"; this needs nothing
+  // from you until someone else ships a release, and dressing it as a pending
+  // decision is what makes a list feel like unpaid debt.
+  upstream: { label: 'blocked upstream', color: 'var(--text-dim)' },
+  blocked: { label: 'no PR — decide', color: 'var(--orange)' },
   none: { label: 'no fix yet', color: 'var(--text-dim)' },
   inactive: { label: 'updates off', color: 'var(--text-dim)' },
 }
@@ -124,6 +135,11 @@ export function MonitorTab() {
 
   const actionable = alerts.filter((a) => a.severity !== 'info')
   const readyCount = alerts.filter((a) => a.fix === 'ready').length
+  const refreshCount = alerts.filter((a) => a.fix === 'refresh').length
+  // 'upstream' is deliberately absent from every count. It is not a decision
+  // you owe anyone, and including it in a "needs you" total is how a number
+  // stays stubbornly non-zero no matter what you do — which is how people stop
+  // believing the number.
   const needsYou = alerts.filter((a) => a.fix === 'major' || a.fix === 'blocked').length
   const notRunning = projects.filter((p) => !p.running)
 
@@ -153,6 +169,11 @@ export function MonitorTab() {
         {loaded && readyCount > 0 && (
           <div style={{ fontSize: 11, color: 'var(--green)' }}>
             {readyCount} ready to merge
+          </div>
+        )}
+        {loaded && refreshCount > 0 && (
+          <div style={{ fontSize: 11, color: 'var(--green)' }}>
+            {refreshCount} one-command {refreshCount === 1 ? 'fix' : 'fixes'}
           </div>
         )}
         {loaded && needsYou > 0 && (
@@ -258,6 +279,20 @@ function AlertRow({ alert, color, enableState, onEnable }: {
           {alert.detail}
           {age ? `${alert.detail ? ' · ' : ''}${age}` : ''}
         </div>
+        {/* Selectable, not a button: it runs in the project's own checkout and
+            may want a glance before it runs, so copying it beats firing it from
+            a dashboard that cannot show you the diff afterwards. */}
+        {alert.command && (
+          <code style={{
+            display: 'inline-block', marginTop: 6, fontSize: 11,
+            fontFamily: 'var(--mono)', color: 'var(--text)',
+            background: 'var(--surface2)', border: '1px solid var(--border)',
+            borderRadius: 4, padding: '2px 6px', userSelect: 'all',
+            wordBreak: 'break-all',
+          }}>
+            {alert.command}
+          </code>
+        )}
         {enableError && (
           <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>
             Could not enable: {enableError}

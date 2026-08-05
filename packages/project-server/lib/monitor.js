@@ -1,9 +1,13 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { createCache } = require('./github-cache');
 const alertsLib = require('./monitor-alerts');
+const reach = require('./fix-reachability');
+const { assertInside } = require('./path-guard');
 
 const execFileAsync = promisify(execFile);
 
@@ -227,8 +231,66 @@ function createMonitor(config, deps = {}) {
     };
   }
 
+  /**
+   * Read a manifest from the managed project, or null.
+   *
+   * `manifest_path` comes from GitHub, so it is treated as untrusted input even
+   * though the API is the one supplying it: assertInside keeps a path that
+   * escapes the project — through traversal or a sibling directory whose name
+   * merely extends it — from turning a monitoring read into an arbitrary one.
+   */
+  function readProjectFile(relPath) {
+    if (!relPath || !config.projectRoot) return null;
+    try {
+      const abs = assertInside(relPath, config.projectRoot);
+      return fs.readFileSync(abs, 'utf8');
+    } catch { return null; }
+  }
+
+  // Manifests are read once per derivation pass rather than once per advisory:
+  // a repo with thirty npm advisories would otherwise re-read and re-parse the
+  // same multi-megabyte package-lock.json thirty times on every poll.
+  let manifestCache = new Map();
+
+  /**
+   * Whether an advisory's patch is installable today. Returns null — meaning
+   * "keep the vaguer label" — for any ecosystem or manifest we cannot read.
+   */
+  function reachabilityOf(alert) {
+    const eco = String(alert.ecosystem || '').toLowerCase();
+    const { pkg, patchedVersion, manifestPath } = alert;
+    if (!pkg || !patchedVersion) return null;
+
+    if (eco === 'npm') {
+      // The advisory names package-lock.json; a repo using yarn or pnpm has no
+      // such file and correctly falls through to null.
+      const lockPath = manifestPath && manifestPath.endsWith('package-lock.json')
+        ? manifestPath : 'package-lock.json';
+      if (!manifestCache.has(lockPath)) manifestCache.set(lockPath, readProjectFile(lockPath));
+      const lockJson = manifestCache.get(lockPath);
+      return lockJson ? reach.classifyNpm({ lockJson, pkgName: pkg, patchedVersion }) : null;
+    }
+
+    if (eco === 'pip') {
+      // The advisory points at the lock (uv.lock / requirements.txt) but the
+      // CONSTRAINT — the thing that decides whether a newer version is allowed —
+      // lives in the pyproject.toml beside it.
+      const dir = manifestPath && manifestPath.includes('/')
+        ? manifestPath.slice(0, manifestPath.lastIndexOf('/')) : '';
+      const pyPath = dir ? `${dir}/pyproject.toml` : 'pyproject.toml';
+      if (!manifestCache.has(pyPath)) manifestCache.set(pyPath, readProjectFile(pyPath));
+      const pyprojectText = manifestCache.get(pyPath);
+      return pyprojectText ? reach.classifyPip({ pyprojectText, pkgName: pkg, patchedVersion }) : null;
+    }
+
+    return null;
+  }
+
   /** The derived alert list. Sorted worst-first; nothing is stored. */
   function getAlerts() {
+    // Fresh per pass, so an edited lockfile is picked up on the next poll rather
+    // than being remembered for the lifetime of the server.
+    manifestCache = new Map();
     if (!repo()) return { configured: false, alerts: [], counts: alertsLib.countBySeverity([]) };
     const runsC = runsCache.get();
     const alertsC = alertsCache.get();
@@ -243,7 +305,10 @@ function createMonitor(config, deps = {}) {
       const advisories = alertsLib.withFixReadiness(
         alertsLib.deriveDependabotAlerts(dep.alerts, projectName),
         dep.prs,
-        { autofixEnabled: dep.autofix ? dep.autofix.enabled : undefined }
+        {
+          autofixEnabled: dep.autofix ? dep.autofix.enabled : undefined,
+          reachability: reachabilityOf,
+        }
       );
       out.push(...advisories);
       // Seeing without acting is its own condition, and the one that lets

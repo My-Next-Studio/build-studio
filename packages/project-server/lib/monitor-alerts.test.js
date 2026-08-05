@@ -196,13 +196,53 @@ test('a bump with an open PR is merge-ready; a major one is not', () => {
   assert.equal(vite.prUrl, 'p13');
 });
 
-test('a patch that exists with no PR is blocked, not ready', () => {
-  // The postcss-under-next case: a fix exists upstream but the dependency is
-  // pinned transitively, so no PR will ever appear. That is a decision, not a
-  // merge, and must not be filed alongside the one-click rows.
+test('a patch with no PR, and no way to read the lockfile, stays blocked', () => {
+  // Without reachability analysis all we know is "a fix exists and nothing
+  // opened a PR". That is worth saying, and worth NOT dressing up as either of
+  // the sharper verdicts below.
   const [a] = withFixReadiness([{ pkg: 'lodash', hasPatch: true }], PRS);
   assert.equal(a.fix, 'blocked');
   assert.equal(a.prNumber, null);
+  assert.equal(a.command, null);
+});
+
+test('reachability splits blocked into refresh and upstream', () => {
+  const alerts = [
+    { pkg: 'cryptography', hasPatch: true, ecosystem: 'pip', manifestPath: 'tools/x/uv.lock' },
+    { pkg: 'esbuild', hasPatch: true, ecosystem: 'npm', manifestPath: 'package-lock.json' },
+  ];
+  const verdicts = { cryptography: 'refresh', esbuild: 'upstream' };
+  const [crypto, esbuild] = withFixReadiness(alerts, [], {
+    reachability: (a) => verdicts[a.pkg] || null,
+  });
+  assert.equal(crypto.fix, 'refresh');
+  assert.equal(crypto.command, 'cd tools/x && uv lock --upgrade-package cryptography',
+    'a refresh row carries the command that clears it');
+  assert.equal(esbuild.fix, 'upstream');
+  assert.equal(esbuild.command, null, 'nothing to run is the whole point of upstream');
+});
+
+test('a null verdict falls back to blocked rather than guessing', () => {
+  const [a] = withFixReadiness(
+    [{ pkg: 'lodash', hasPatch: true, ecosystem: 'npm' }], [],
+    { reachability: () => null });
+  assert.equal(a.fix, 'blocked');
+});
+
+test('a reachability probe that throws cannot take the poll down with it', () => {
+  const [a] = withFixReadiness(
+    [{ pkg: 'lodash', hasPatch: true, ecosystem: 'npm' }], [],
+    { reachability: () => { throw new Error('unreadable lockfile'); } });
+  assert.equal(a.fix, 'blocked');
+});
+
+test('security updates off still wins over reachability', () => {
+  // Reachability answers "could this be installed", not "is anything trying".
+  // With updates off we have not earned either sharp verdict.
+  const [a] = withFixReadiness(
+    [{ pkg: 'lodash', hasPatch: true, ecosystem: 'npm' }], [],
+    { autofixEnabled: false, reachability: () => 'refresh' });
+  assert.equal(a.fix, 'inactive');
 });
 
 test('with security updates off, a missing PR is not a diagnosis', () => {
@@ -253,6 +293,18 @@ test('rows needing a decision sort above rows you can just merge', () => {
   // Otherwise the handful that need thought are buried under the bulk that
   // does not, and the list stops being triageable at a glance.
   assert.deepEqual(sorted.map((a) => a.fix), ['major', 'blocked', 'none', 'ready']);
+});
+
+test('upstream sinks to the bottom, refresh sits with the clearable work', () => {
+  const sorted = sortAlerts([
+    { severity: 'high', fix: 'upstream', project: 'a', title: 'u' },
+    { severity: 'high', fix: 'ready', project: 'a', title: 'r' },
+    { severity: 'high', fix: 'refresh', project: 'a', title: 'f' },
+    { severity: 'high', fix: 'major', project: 'a', title: 'm' },
+  ]);
+  // 'upstream' is the one row re-reading cannot change — unlike 'none', which
+  // becomes actionable the day a patch ships. It belongs last.
+  assert.deepEqual(sorted.map((a) => a.fix), ['major', 'refresh', 'ready', 'upstream']);
 });
 
 test('the ready-to-merge count drives the "you can clear these" summary', () => {

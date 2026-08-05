@@ -156,6 +156,39 @@ review, not by an incident.
 
 ### Changed
 
+- **"pinned — decide" is split into a fix you can run and a wait you cannot.**
+  That one badge was covering two situations with opposite answers, and the
+  common one was not a decision at all:
+
+  - **run one command** — every constraint in the lockfile already permits the
+    patched version, so nothing is blocked and the lockfile merely needs
+    regenerating. The row now prints the exact command.
+  - **blocked upstream** — some parent's range excludes the patch, so nothing
+    you run locally can resolve it until that parent ships a wider range.
+  - **no PR — decide** — the honest remainder: a patch exists, no PR appeared,
+    and the lockfile could not be read well enough to say which of the two
+    it is. This is the old behaviour, now confined to the cases that earn it.
+
+  Of the three "decisions" on this installation, two were one-command lockfile
+  refreshes — a direct `cryptography>=42.0` whose lock pinned an older build,
+  and a transitive `@babel/core` whose parents already allowed the fix. Only
+  `esbuild` was genuinely blocked, by `vite` and `tsx` both wanting `^0.27.0`
+  against a `0.28.1` fix. Demanding judgement where the answer is one command is
+  how a list teaches you to stop opening it.
+
+  **The analysis refuses to guess.** A range form it does not confidently
+  understand, an ecosystem it has no reader for (only npm and pip today), an
+  unreadable manifest — each falls back to the vaguer label rather than
+  asserting something wrong. A false "run one command" costs you a command that
+  does nothing; a false "blocked upstream" hides a fix. Saying *"I could not
+  tell"* is cheaper than either, so it is what happens whenever the answer is
+  not certain.
+
+  Sorting changed with it: **blocked upstream now sorts last**, below even "no
+  fix yet". It is the one row that re-reading cannot change, and it is excluded
+  from the "needs a decision" count — a number that stays non-zero no matter
+  what you do is a number you stop believing.
+
 - **Build Studio now runs `git fetch` on your projects.** It never did before,
   which meant the CI/CD tab's "behind: N" was only as current as the last time
   *you* fetched in a terminal. Two managed projects here were displaying
@@ -247,6 +280,13 @@ Electron setup, where nothing is needed.
   drawn tightly without breaking a screen. If your fork writes through it, the
   limits are: text extensions only, and no path segment in `BLOCKED_SEGMENTS`.
   Widen those constants deliberately rather than removing the guard.
+- **`fix-reachability.js` fails closed, and that is the design.** Every function
+  returns null the moment it meets a version range, operator or manifest it does
+  not confidently understand, and the caller keeps the vaguer label. It carries
+  no semver dependency for the same reason — a hand-checked narrow grammar that
+  opts out loudly is safer here than a broad one that always answers. If you add
+  an ecosystem, preserve that: return null rather than a plausible guess.
+
 - **The CORS allowlist and the WebSocket check must stay in step.** They read
   the same allowlist from `lib/allowed-origins.js` on purpose. If you add an
   origin for one, you have added it for the other — and if you relax only the
