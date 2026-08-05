@@ -4,7 +4,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   latestPushRun, resolveWorkflowName, deriveScheduledAlerts, deriveDependabotAlerts,
-  classifyAlertsError, notEnabledAlert, sortAlerts, countBySeverity,
+  classifyAlertsError, notEnabledAlert, autofixDisabledAlert, sortAlerts, countBySeverity,
+  isDependabotPr, parseBumpTitle, classifyBump, withFixReadiness, countReadyToMerge,
 } = require('./monitor-alerts');
 
 // Trimmed from a real `gh run list --json event,conclusion,status,workflowName,
@@ -170,6 +171,104 @@ test('not-enabled is information with a link to fix it, not a failure', () => {
   assert.equal(a.kind, 'not-enabled');
   assert.match(a.url, /settings\/security_analysis/);
   assert.equal(notEnabledAlert('p', null).url, null);
+});
+
+// Real Dependabot PR shapes: branch `dependabot/<eco>/<pkg>-<version>`, title
+// "Bump <pkg> from X to Y".
+const PRS = [
+  { number: 12, title: 'Bump postcss from 8.5.11 to 8.5.12', url: 'p12', headRefName: 'dependabot/npm_and_yarn/postcss-8.5.12', author: { login: 'app/dependabot' } },
+  { number: 13, title: 'Bump vite from 5.4.0 to 6.0.0', url: 'p13', headRefName: 'dependabot/npm_and_yarn/vite-6.0.0', author: { login: 'app/dependabot' } },
+  { number: 14, title: 'feat: something a human wrote', url: 'p14', headRefName: 'feat/thing', author: { login: 'lars' } },
+];
+
+test('a bump with an open PR is merge-ready; a major one is not', () => {
+  const alerts = [
+    { pkg: 'postcss', hasPatch: true },
+    { pkg: 'vite', hasPatch: true },
+  ];
+  const [postcss, vite] = withFixReadiness(alerts, PRS);
+
+  // The whole point: these two look identical on the alert payload, and need
+  // completely different amounts of a human.
+  assert.equal(postcss.fix, 'ready');
+  assert.equal(postcss.prNumber, 12);
+  assert.equal(vite.fix, 'major', 'green CI does not justify merging a major');
+  assert.equal(vite.prUrl, 'p13');
+});
+
+test('a patch that exists with no PR is blocked, not ready', () => {
+  // The postcss-under-next case: a fix exists upstream but the dependency is
+  // pinned transitively, so no PR will ever appear. That is a decision, not a
+  // merge, and must not be filed alongside the one-click rows.
+  const [a] = withFixReadiness([{ pkg: 'lodash', hasPatch: true }], PRS);
+  assert.equal(a.fix, 'blocked');
+  assert.equal(a.prNumber, null);
+});
+
+test('with security updates off, a missing PR is not a diagnosis', () => {
+  // Nothing is opening PRs, so "no PR" says nothing about whether the fix is
+  // takeable. Calling it 'blocked' would assert pinning we have not observed —
+  // and on a repo with updates off, that would be EVERY advisory.
+  const [a] = withFixReadiness([{ pkg: 'postcss', hasPatch: true }], [], { autofixEnabled: false });
+  assert.equal(a.fix, 'inactive');
+  assert.equal(a.prNumber, null);
+});
+
+test('no patched version at all is its own state', () => {
+  const [a] = withFixReadiness([{ pkg: 'lodash', hasPatch: false }], []);
+  assert.equal(a.fix, 'none');
+});
+
+test('a human PR is not mistaken for a Dependabot fix', () => {
+  assert.equal(isDependabotPr(PRS[0]), true);
+  assert.equal(isDependabotPr(PRS[2]), false);
+  // Matching on the branch prefix keeps working after a human takes the PR over
+  // to resolve conflicts, which is when the author login stops being dependabot.
+  assert.equal(isDependabotPr({ headRefName: 'dependabot/npm_and_yarn/x-1.0', author: { login: 'lars' } }), true);
+});
+
+test('bump titles are parsed, and unreadable ones do not claim safety', () => {
+  assert.deepEqual(parseBumpTitle('Bump vite from 5.4.0 to 6.0.0'), { from: '5.4.0', to: '6.0.0' });
+  assert.deepEqual(parseBumpTitle('chore(deps): bump sharp from v0.34.5 to v0.35.0'), { from: '0.34.5', to: '0.35.0' });
+  assert.equal(parseBumpTitle('Update dependencies'), null);
+  // Unreadable versions return null rather than 'minor' — implying a bump is
+  // safe when we cannot tell is the one wrong answer here.
+  assert.equal(classifyBump('weird', '1.0.0'), null);
+});
+
+test('under 1.0 a minor is a major, which is the sharp case exactly', () => {
+  assert.equal(classifyBump('5.4.0', '6.0.0'), 'major');
+  assert.equal(classifyBump('8.5.11', '8.5.12'), 'minor');
+  assert.equal(classifyBump('0.34.5', '0.35.0'), 'major');
+  assert.equal(classifyBump('0.34.5', '0.34.6'), 'minor');
+});
+
+test('rows needing a decision sort above rows you can just merge', () => {
+  const sorted = sortAlerts([
+    { severity: 'high', fix: 'ready', project: 'a', title: 'r' },
+    { severity: 'high', fix: 'blocked', project: 'a', title: 'b' },
+    { severity: 'high', fix: 'major', project: 'a', title: 'm' },
+    { severity: 'high', fix: 'none', project: 'a', title: 'n' },
+  ])
+  // Otherwise the handful that need thought are buried under the bulk that
+  // does not, and the list stops being triageable at a glance.
+  assert.deepEqual(sorted.map((a) => a.fix), ['major', 'blocked', 'none', 'ready']);
+});
+
+test('the ready-to-merge count drives the "you can clear these" summary', () => {
+  assert.equal(countReadyToMerge([{ fix: 'ready' }, { fix: 'ready' }, { fix: 'major' }, {}]), 2);
+  assert.equal(countReadyToMerge([]), 0);
+});
+
+test('alerts-on-but-updates-off is reported as its own condition', () => {
+  // Distinct from "not enabled", and worse: the repo can see advisories and
+  // has no way to act, so they pile up silently.
+  const a = autofixDisabledAlert('deskrhythm', 'o/r', 13);
+  assert.equal(a.kind, 'autofix-disabled');
+  assert.equal(a.severity, 'info');
+  assert.match(a.detail, /13 open advisories/);
+  assert.match(autofixDisabledAlert('p', 'o/r', 0).detail, /nothing will open a fix PR/);
+  assert.match(autofixDisabledAlert('p', 'o/r', 1).detail, /1 open advisory\b/);
 });
 
 test('sorting is worst-first and stable across equal severities', () => {

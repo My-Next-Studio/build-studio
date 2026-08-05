@@ -137,6 +137,115 @@ function deriveScheduledAlerts(runs, project) {
 }
 
 /**
+ * Is this a Dependabot pull request, and which package is it bumping?
+ *
+ * Dependabot names its branches `dependabot/<ecosystem>/<path?>/<pkg>-<version>`
+ * and titles them "Bump <pkg> from X to Y" (or "chore(deps): bump …"). Matching
+ * on the branch prefix rather than the author login keeps working if the PR is
+ * later taken over by a human, which is what happens when a bump needs manual
+ * conflict resolution.
+ */
+function isDependabotPr(pr) {
+  if (!pr) return false;
+  if (String(pr.headRefName || '').startsWith('dependabot/')) return true;
+  return /dependabot/i.test(String(pr.author?.login || ''));
+}
+
+/** "Bump vite from 5.4.0 to 6.0.0" → { from: '5.4.0', to: '6.0.0' } */
+function parseBumpTitle(title) {
+  const m = String(title || '').match(/from\s+v?(\d+[\w.-]*)\s+to\s+v?(\d+[\w.-]*)/i);
+  return m ? { from: m[1], to: m[2] } : null;
+}
+
+/**
+ * How much judgement does this bump need?
+ *
+ * The distinction that matters is major-vs-not, because a green build is
+ * sufficient evidence to merge a patch bump and is NOT sufficient for a major.
+ * Under 1.0 the minor carries breaking changes by convention, so 0.34 → 0.35 is
+ * treated as a major — that is the sharp case exactly.
+ *
+ * Returns 'major' | 'minor' | null (null when the versions cannot be read,
+ * which stays honest rather than guessing 'minor' and implying it is safe).
+ */
+function classifyBump(from, to) {
+  const parse = (v) => {
+    const m = String(v || '').match(/^(\d+)\.(\d+)/);
+    return m ? { major: +m[1], minor: +m[2] } : null;
+  };
+  const a = parse(from);
+  const b = parse(to);
+  if (!a || !b) return null;
+  if (a.major !== b.major) return 'major';
+  if (a.major === 0 && a.minor !== b.minor) return 'major';
+  return 'minor';
+}
+
+/**
+ * Attach fix-readiness to each advisory.
+ *
+ * This is what turns the Monitor list from something you scroll into something
+ * you work. Three rows that look identical today need wildly different amounts
+ * of you:
+ *
+ *   'ready'   — Dependabot has a PR open and it is not a major. Merge it.
+ *   'major'   — a PR exists, but green CI does not justify merging a major.
+ *   'blocked' — a patched version exists upstream and no PR appeared, which
+ *               almost always means the dependency is pinned transitively.
+ *               (postcss under `next` here.) Needs a decision, not a merge.
+ *   'none'    — no patched version exists at all. Nobody can fix it yet.
+ *
+ * `blocked` and `none` are the rows worth your attention; `ready` is the bulk
+ * and is batch-mergeable.
+ */
+function withFixReadiness(alerts, prs, { autofixEnabled } = {}) {
+  const dependabotPrs = (Array.isArray(prs) ? prs : []).filter(isDependabotPr);
+  return (alerts || []).map((a) => {
+    // With security updates switched off, no PR was ever attempted — so a
+    // missing PR says nothing about whether the fix is takeable, and calling it
+    // 'blocked' would assert a diagnosis we have not earned. This is not
+    // hypothetical: every advisory on a repo with updates off would otherwise
+    // read as "pinned, needs a decision" when the real answer is "turn updates
+    // on and find out".
+    if (autofixEnabled === false) {
+      return { ...a, fix: 'inactive', prNumber: null, prUrl: null };
+    }
+    const pkg = a.pkg;
+    const pr = pkg
+      ? dependabotPrs.find((p) => String(p.headRefName || '').includes(pkg)
+          || new RegExp(`bump\\s+${escapeRe(pkg)}\\b`, 'i').test(String(p.title || '')))
+      : null;
+
+    let fix;
+    if (pr) {
+      const bump = parseBumpTitle(pr.title);
+      fix = bump && classifyBump(bump.from, bump.to) === 'major' ? 'major' : 'ready';
+    } else {
+      fix = a.hasPatch ? 'blocked' : 'none';
+    }
+    return {
+      ...a,
+      fix,
+      prNumber: pr ? pr.number : null,
+      prUrl: pr ? pr.url : null,
+    };
+  });
+}
+
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Human wording for each readiness state — used by the tab and kept with it. */
+const FIX_LABEL = {
+  ready: 'fix ready — merge',
+  major: 'major bump — needs review',
+  blocked: 'patch exists, no PR — likely pinned',
+  none: 'no fix available yet',
+  inactive: 'security updates are off — unknown until enabled',
+};
+
+/**
  * Open Dependabot advisories.
  *
  * `id` keys on GitHub's per-repo alert `number`, deliberately not on the
@@ -158,6 +267,10 @@ function deriveDependabotAlerts(alerts, project) {
         project,
         id: `dependabot:${a.number}`,
         severity: SEVERITY_ORDER.includes(sev) ? sev : 'moderate',
+        // Carried through so fix-readiness can be attached once the open PRs
+        // are known — see withFixReadiness.
+        pkg,
+        hasPatch: !!a.security_vulnerability?.first_patched_version?.identifier,
         title: `${pkg} — ${a.security_advisory?.summary || 'security advisory'}`,
         // Runtime vs development is the first thing you want when triaging, and
         // it is the difference between "ships to users" and "build-time only".
@@ -217,14 +330,56 @@ function notEnabledAlert(project, repo) {
   };
 }
 
-/** Worst first; ties broken by project then title so the order is stable. */
+/**
+ * Alerts are visible but nothing can act on them.
+ *
+ * This is a distinct and worse state than "not enabled": the repository can see
+ * advisories and has no mechanism to fix them, so they accumulate silently. It
+ * is what let thirteen advisories pile up on one repo here when nine of them
+ * needed nothing but a version bump — and it is the state every repo lands in
+ * the moment alerts are switched on without security updates.
+ */
+function autofixDisabledAlert(project, repo, openCount) {
+  return {
+    source: 'dependabot',
+    kind: 'autofix-disabled',
+    project,
+    id: 'dependabot:autofix-disabled',
+    severity: 'info',
+    title: 'Security updates are off — advisories will accumulate',
+    detail: openCount > 0
+      ? `${openCount} open advisor${openCount === 1 ? 'y' : 'ies'} and nothing is opening fix PRs`
+      : 'nothing will open a fix PR when an advisory appears',
+    url: repo ? `https://github.com/${repo}/security/dependabot` : null,
+    since: null,
+  };
+}
+
+/**
+ * Worst first, and within a severity the rows that need YOU before the rows you
+ * can merge.
+ *
+ * The ordering is the feature: a batch of `ready` rows is a few clicks, while a
+ * `blocked` or `major` row is a decision. Sorting them together by severity
+ * alone buries the handful that need thought under the bulk that does not, and
+ * a list you cannot triage at a glance is one you stop opening.
+ */
+const FIX_PRIORITY = { major: 0, blocked: 1, none: 2, inactive: 2.5, ready: 3 };
+
 function sortAlerts(alerts) {
   return [...(alerts || [])].sort((a, b) => {
     const d = SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity);
     if (d !== 0) return d;
+    const f = (FIX_PRIORITY[a.fix] ?? 1.5) - (FIX_PRIORITY[b.fix] ?? 1.5);
+    if (f !== 0) return f;
     const p = String(a.project || '').localeCompare(String(b.project || ''));
     return p !== 0 ? p : String(a.title || '').localeCompare(String(b.title || ''));
   });
+}
+
+/** How many advisories are one merge away, for the summary line. */
+function countReadyToMerge(alerts) {
+  return (alerts || []).filter((a) => a.fix === 'ready').length;
 }
 
 /**
@@ -254,6 +409,13 @@ module.exports = {
   deriveDependabotAlerts,
   classifyAlertsError,
   notEnabledAlert,
+  autofixDisabledAlert,
+  isDependabotPr,
+  parseBumpTitle,
+  classifyBump,
+  withFixReadiness,
   sortAlerts,
   countBySeverity,
+  countReadyToMerge,
+  FIX_LABEL,
 };

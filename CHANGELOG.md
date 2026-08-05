@@ -21,7 +21,52 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-08-05 — The home view remembers which tab you were on
+## 2026-08-05 — Monitor tells you which rows need you
+
+### Added
+
+- **Advisory rows now say what they need from you.** Previously a row you could
+  clear by merging a waiting PR looked identical to one needing an afternoon's
+  judgement, so a long list was untriageable and the honest response was to stop
+  opening it. Each advisory now carries one of:
+
+  - **merge** — Dependabot has a fix PR open and it is not a major. The row
+    links to the PR rather than the advisory, because the PR is the action.
+  - **major — review** — a PR exists, but a green build is not sufficient
+    evidence to merge a major.
+  - **pinned — decide** — a patched version exists upstream and no PR appeared,
+    which almost always means a transitive pin. A decision, not a merge.
+  - **no fix yet** — nothing to take.
+  - **updates off** — security updates are disabled, so no PR was ever
+    attempted and nothing can be concluded until they are on.
+
+  Within a severity, rows needing a decision sort above rows you can merge, and
+  the header splits the count — "18 ready to merge · 3 need a decision" rather
+  than "21 open".
+
+- **A row for "alerts are on but nothing acts on them."** A repository can see
+  advisories and have no mechanism to fix them, which is how thirteen piled up
+  on one project here when nine needed only a version bump. That state is now
+  reported rather than left to be inferred from a list that quietly grows.
+
+### Changed
+
+- **Enabling dependency alerts also enables security updates.** The button on a
+  not-enabled row now switches on both. Enabling sight without action is the
+  trap the row exists to close — turning on alerts alone produces a repo that
+  watches advisories accumulate.
+
+### Fixed
+
+- **The CI light no longer tracks whichever branch pushed last.** CI status
+  considered every push run regardless of branch, so a push to a feature branch
+  became "the latest run" and the light reported that branch's result. It is now
+  scoped to the repository's default branch.
+
+  Latent for most projects today, and it would have become permanent the moment
+  Dependabot started opening PRs — those push constantly. The same scoping is
+  correct for scheduled-job alerts, since GitHub only runs `schedule` workflows
+  on the default branch.
 
 ### Fixed
 

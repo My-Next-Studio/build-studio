@@ -14,10 +14,14 @@ const ALERTS = [{
   number: 7, state: 'open', created_at: '2026-07-27T13:40:39Z', html_url: 'h7',
   dependency: { package: { name: 'lodash' }, scope: 'runtime' },
   security_advisory: { ghsa_id: 'GHSA-1', severity: 'high', summary: 'prototype pollution' },
+  // A patched version usually exists — whether anything can TAKE it is the
+  // separate question that fix-readiness answers.
+  security_vulnerability: { first_patched_version: { identifier: '4.17.21' }, vulnerable_version_range: '< 4.17.21' },
 }];
 
 /** Records every gh invocation so call COUNT — the whole point — is assertable. */
-function fakeGh({ runs = RUNS, alerts = ALERTS, alertsError = null, jobsError = false } = {}) {
+function fakeGh({ runs = RUNS, alerts = ALERTS, alertsError = null, jobsError = false,
+                 prs = [], autofixEnabled = true } = {}) {
   const calls = [];
   const exec = async (bin, args) => {
     calls.push(args.join(' '));
@@ -31,6 +35,13 @@ function fakeGh({ runs = RUNS, alerts = ALERTS, alertsError = null, jobsError = 
         { name: 'CI', path: '.github/workflows/ci.yml', id: 1 },
         { name: 'Deploy Pages', path: '.github/workflows/deploy-pages.yml', id: 2 },
       ]) };
+    }
+    if (args[0] === 'repo' && args[1] === 'view') {
+      return { stdout: JSON.stringify({ defaultBranchRef: { name: 'main' } }) };
+    }
+    if (args[0] === 'pr' && args[1] === 'list') return { stdout: JSON.stringify(prs) };
+    if (args[0] === 'api' && String(args[1]).includes('automated-security-fixes')) {
+      return { stdout: JSON.stringify({ enabled: autofixEnabled, paused: false }) };
     }
     if (args[0] === 'api') {
       if (alertsError) { const e = new Error('gh failed'); e.stderr = alertsError; throw e; }
@@ -96,6 +107,82 @@ test('a configured ci_workflow narrows the light but not the alert list', async 
   assert.equal(m.getCi().run.workflowName, 'CI');
   // The scheduled gate lives in a different workflow and must still be seen.
   assert.ok(m.getAlerts().alerts.some((a) => a.title === 'nightly gate'));
+});
+
+test('runs are scoped to the default branch, so a feature branch cannot hijack the light', async () => {
+  const { exec, calls } = fakeGh();
+  const m = createMonitor(CONFIG, { execFileAsync: exec });
+  m.prime();
+  await new Promise((r) => setTimeout(r, 10));
+  const runList = calls.find((c) => c.startsWith('run list'));
+  // Without this a push to a feature branch becomes "the latest push run" —
+  // latent today, permanent once Dependabot starts opening PRs.
+  assert.match(runList, /--branch main/);
+});
+
+test('the default branch is resolved once, not on every refresh', async () => {
+  const { exec, calls } = fakeGh();
+  const m = createMonitor(CONFIG, { execFileAsync: exec });
+  await m.prime();
+  await new Promise((r) => setTimeout(r, 10));
+  await runsRefresh(m);
+  assert.equal(calls.filter((c) => c.startsWith('repo view')).length, 1);
+});
+
+// Force a second runs fetch without waiting out the TTL.
+async function runsRefresh(m) {
+  m.getCi();
+  await new Promise((r) => setTimeout(r, 5));
+}
+
+test('an advisory with a waiting PR reads as merge-ready', async () => {
+  const prs = [{ number: 12, title: 'Bump lodash from 4.17.20 to 4.17.21', url: 'p12', headRefName: 'dependabot/npm_and_yarn/lodash-4.17.21', author: { login: 'app/dependabot' } }];
+  const { exec } = fakeGh({ prs });
+  const m = createMonitor(CONFIG, { execFileAsync: exec });
+  m.prime();
+  await new Promise((r) => setTimeout(r, 10));
+
+  const adv = m.getAlerts().alerts.find((a) => a.kind === 'advisory');
+  assert.equal(adv.fix, 'ready');
+  assert.equal(adv.prNumber, 12);
+  assert.equal(m.getAlerts().readyToMerge, 1);
+});
+
+test('alerts on but security updates off is surfaced as its own row', async () => {
+  const { exec } = fakeGh({ autofixEnabled: false });
+  const m = createMonitor(CONFIG, { execFileAsync: exec });
+  m.prime();
+  await new Promise((r) => setTimeout(r, 10));
+
+  const row = m.getAlerts().alerts.find((a) => a.kind === 'autofix-disabled');
+  assert.ok(row, 'seeing without acting is the state that lets advisories pile up');
+  assert.equal(row.severity, 'info');
+});
+
+test('enabling turns on BOTH toggles, never just visibility', async () => {
+  const { exec, calls } = fakeGh({ autofixEnabled: false });
+  const m = createMonitor(CONFIG, { execFileAsync: exec });
+  await m.enableAlerts();
+  assert.ok(calls.some((c) => c.includes('PUT /repos/o/r/vulnerability-alerts')));
+  assert.ok(calls.some((c) => c.includes('PUT /repos/o/r/automated-security-fixes')),
+    'enabling sight without action is the trap this closes');
+});
+
+test('losing the PR list costs merge-readiness but not the advisories', async () => {
+  const exec = async (bin, args) => {
+    if (args[0] === 'pr') throw new Error('pr list unavailable');
+    if (args[0] === 'repo') return { stdout: JSON.stringify({ defaultBranchRef: { name: 'main' } }) };
+    if (args[0] === 'run' && args[1] === 'list') return { stdout: JSON.stringify(RUNS) };
+    if (args[0] === 'run') return { stdout: JSON.stringify({ jobs: [] }) };
+    if (args[0] === 'api' && String(args[1]).includes('automated')) return { stdout: '{"enabled":true}' };
+    return { stdout: JSON.stringify(ALERTS) };
+  };
+  const m = createMonitor(CONFIG, { execFileAsync: exec });
+  m.prime();
+  await new Promise((r) => setTimeout(r, 10));
+  const adv = m.getAlerts().alerts.find((a) => a.kind === 'advisory');
+  assert.ok(adv, 'the advisories are the payload; readiness is supporting detail');
+  assert.equal(adv.fix, 'blocked');
 });
 
 test('a ci_workflow given as a filename still finds its runs', async () => {

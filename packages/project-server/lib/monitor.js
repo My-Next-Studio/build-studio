@@ -79,11 +79,35 @@ function createMonitor(config, deps = {}) {
     return resolved;
   }
 
+  // The repo's default branch, resolved once per process. Memoized for the same
+  // reason as the workflow name: it changes about as often as the repo is
+  // renamed, and a server restart re-resolves it.
+  let defaultBranch = null;
+  async function resolveDefaultBranch(r) {
+    if (defaultBranch) return defaultBranch;
+    try {
+      const { stdout } = await exec('gh', ['repo', 'view', r, '--json', 'defaultBranchRef'], { encoding: 'utf8' });
+      defaultBranch = JSON.parse(String(stdout || '{}'))?.defaultBranchRef?.name || null;
+    } catch (_) { return null; }
+    return defaultBranch;
+  }
+
   async function fetchRuns() {
     const r = repo();
     if (!r) return { runs: [] };
     const dep = config.deployment || {};
+    // Scoped to the default branch, which fixes a real defect and costs
+    // nothing: a push to a feature branch would otherwise become "the latest
+    // push run" and the CI light would report that branch's result instead of
+    // the project's. Latent while feature branches are rare — and permanent the
+    // moment Dependabot starts opening PRs, since those push constantly.
+    //
+    // The same filter is correct for the Monitor tab's scheduled alerts:
+    // GitHub only ever runs `schedule` workflows on the default branch, so
+    // nothing is lost, and ONE `gh run list` still serves both readers.
+    const branch = await resolveDefaultBranch(r);
     const args = ['run', 'list', '--repo', r, '--limit', '30', '--json', RUN_FIELDS];
+    if (branch) args.push('--branch', branch);
     // A configured ci_workflow still narrows the CI light, but the run list has
     // to stay wide enough to see scheduled workflows for the Monitor tab — so
     // the filter is applied when picking the CI run, not when fetching.
@@ -121,22 +145,50 @@ function createMonitor(config, deps = {}) {
     return { runs, run, jobs };
   }
 
+  /**
+   * Everything Dependabot-shaped, in one cache entry: the open advisories,
+   * whether security updates are switched on, and the open bump PRs.
+   *
+   * The PRs are what let an advisory say "merge this" rather than "deal with
+   * this" — an advisory with a waiting PR is a click, one without is a
+   * decision, and they are indistinguishable from the alert payload alone.
+   */
   async function fetchDependabot() {
     const r = repo();
-    if (!r) return { alerts: [], state: 'unconfigured' };
+    if (!r) return { alerts: [], prs: [], autofix: null, state: 'unconfigured' };
+    let alerts;
     try {
       const { stdout } = await exec('gh', [
         'api', `/repos/${r}/dependabot/alerts?state=open&per_page=100`,
       ], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-      return { alerts: JSON.parse(String(stdout || '[]').trim() || '[]'), state: 'ok' };
+      alerts = JSON.parse(String(stdout || '[]').trim() || '[]');
     } catch (e) {
-      // A disabled feature is a normal, expected answer here — eight of nine
+      // A disabled feature is a normal, expected answer here — most
       // repositories give it — so it resolves as data rather than rejecting.
       // Only genuine faults become cache errors worth retrying.
       const kind = alertsLib.classifyAlertsError(e.stderr || e.message);
-      if (kind === 'disabled') return { alerts: [], state: 'disabled' };
+      if (kind === 'disabled') return { alerts: [], prs: [], autofix: null, state: 'disabled' };
       throw new Error(`dependabot: ${kind}: ${String(e.stderr || e.message).trim().slice(0, 200)}`);
     }
+
+    // Both of these are supporting detail: failing to read either must not cost
+    // us the advisories themselves, which are the actual payload.
+    let autofix = null;
+    try {
+      const { stdout } = await exec('gh', ['api', `/repos/${r}/automated-security-fixes`], { encoding: 'utf8' });
+      autofix = JSON.parse(String(stdout || '{}').trim() || '{}');
+    } catch (_) { /* unknown — the tab simply won't claim either way */ }
+
+    let prs = [];
+    try {
+      const { stdout } = await exec('gh', [
+        'pr', 'list', '--repo', r, '--state', 'open', '--limit', '100',
+        '--json', 'number,title,url,headRefName,author',
+      ], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+      prs = JSON.parse(String(stdout || '[]').trim() || '[]');
+    } catch (_) { /* advisories still render, just without merge-readiness */ }
+
+    return { alerts, prs, autofix, state: 'ok' };
   }
 
   const runsCache = createCache({
@@ -188,7 +240,17 @@ function createMonitor(config, deps = {}) {
     if (dep && dep.state === 'disabled') {
       out.push(alertsLib.notEnabledAlert(projectName, repo()));
     } else if (dep && Array.isArray(dep.alerts)) {
-      out.push(...alertsLib.deriveDependabotAlerts(dep.alerts, projectName));
+      const advisories = alertsLib.withFixReadiness(
+        alertsLib.deriveDependabotAlerts(dep.alerts, projectName),
+        dep.prs,
+        { autofixEnabled: dep.autofix ? dep.autofix.enabled : undefined }
+      );
+      out.push(...advisories);
+      // Seeing without acting is its own condition, and the one that lets
+      // advisories pile up unattended — so it is reported, not inferred.
+      if (dep.autofix && dep.autofix.enabled === false) {
+        out.push(alertsLib.autofixDisabledAlert(projectName, repo(), advisories.length));
+      }
     }
 
     const alerts = alertsLib.sortAlerts(out);
@@ -196,6 +258,7 @@ function createMonitor(config, deps = {}) {
       configured: true,
       alerts,
       counts: alertsLib.countBySeverity(alerts),
+      readyToMerge: alertsLib.countReadyToMerge(alerts),
       stale: runsC.stale || alertsC.stale,
       error: runsC.error || alertsC.error || null,
     };
@@ -239,14 +302,22 @@ function createMonitor(config, deps = {}) {
   async function enableAlerts() {
     const r = repo();
     if (!r) throw new Error('deployment.repo not set');
-    try {
-      await exec('gh', ['api', '-X', 'PUT', `/repos/${r}/vulnerability-alerts`], { encoding: 'utf8' });
-    } catch (e) {
-      const detail = String(e.stderr || e.message || '').trim().slice(0, 300);
-      throw new Error(detail || 'gh call failed');
+
+    // BOTH toggles, always. Enabling alerts alone is the trap this whole row
+    // exists to close: the repo gains the ability to see advisories and no
+    // ability to act on them, and they accumulate until someone notices. Both
+    // PUTs are idempotent, so this is safe on a repo that already has one on.
+    const endpoints = ['vulnerability-alerts', 'automated-security-fixes'];
+    for (const endpoint of endpoints) {
+      try {
+        await exec('gh', ['api', '-X', 'PUT', `/repos/${r}/${endpoint}`], { encoding: 'utf8' });
+      } catch (e) {
+        const detail = String(e.stderr || e.message || '').trim().slice(0, 300);
+        throw new Error(`${endpoint}: ${detail || 'gh call failed'}`);
+      }
     }
     await alertsCache.refresh();
-    return { repo: r };
+    return { repo: r, enabled: endpoints };
   }
 
   return { getCi, getAlerts, getSummary, prime, enableAlerts };

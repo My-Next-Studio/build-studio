@@ -26,6 +26,21 @@ interface Alert {
   detail: string
   url: string | null
   since: string | null
+  /** How much of you this row needs — see FIX_LABEL in monitor-alerts.js. */
+  fix?: 'ready' | 'major' | 'blocked' | 'none' | 'inactive'
+  prNumber?: number | null
+  prUrl?: string | null
+}
+
+// A row that is one click apart from a row that is an hour of work must not
+// look the same. `ready` is deliberately the quietest of the four: it is the
+// bulk of the list and the least deserving of attention.
+const FIX_BADGE: Record<string, { label: string; color: string }> = {
+  ready: { label: 'merge', color: 'var(--green)' },
+  major: { label: 'major — review', color: 'var(--orange)' },
+  blocked: { label: 'pinned — decide', color: 'var(--orange)' },
+  none: { label: 'no fix yet', color: 'var(--text-dim)' },
+  inactive: { label: 'updates off', color: 'var(--text-dim)' },
 }
 
 interface ProjectState {
@@ -108,6 +123,8 @@ export function MonitorTab() {
   }, [poll])
 
   const actionable = alerts.filter((a) => a.severity !== 'info')
+  const readyCount = alerts.filter((a) => a.fix === 'ready').length
+  const needsYou = alerts.filter((a) => a.fix === 'major' || a.fix === 'blocked').length
   const notRunning = projects.filter((p) => !p.running)
 
   return (
@@ -130,6 +147,19 @@ export function MonitorTab() {
             : actionable.length === 0 ? 'nothing to handle'
             : `${actionable.length} open`}
         </div>
+        {/* Splitting the count is the difference between "21 problems" and
+            "18 clicks and 3 decisions" — the same list, but only one of those
+            is a list you open. */}
+        {loaded && readyCount > 0 && (
+          <div style={{ fontSize: 11, color: 'var(--green)' }}>
+            {readyCount} ready to merge
+          </div>
+        )}
+        {loaded && needsYou > 0 && (
+          <div style={{ fontSize: 11, color: 'var(--orange)' }}>
+            {needsYou} need{needsYou === 1 ? 's' : ''} a decision
+          </div>
+        )}
       </div>
 
       {error && (
@@ -192,10 +222,18 @@ function AlertRow({ alert, color, enableState, onEnable }: {
   // "Not enabled" is information about a blind spot, not a fault — it gets the
   // muted treatment and an action that fixes the blind spot rather than a link
   // to a problem that does not exist.
-  const isNotEnabled = alert.kind === 'not-enabled'
+  // Both "not enabled" and "enabled but nothing acts on it" are fixed by the
+  // same button — it turns on both toggles, because enabling sight without
+  // action is what let advisories accumulate in the first place.
+  const isSetupRow = alert.kind === 'not-enabled' || alert.kind === 'autofix-disabled'
   const busy = enableState === 'busy'
   const enableError = enableState && enableState !== 'busy' ? enableState : null
   const age = since(alert.since)
+  const badge = alert.fix ? FIX_BADGE[alert.fix] : null
+  // When a fix PR is waiting, the useful destination is the PR, not the
+  // advisory — the advisory describes the problem, the PR is the action.
+  const href = alert.prUrl || alert.url
+  const hrefLabel = alert.prUrl ? `PR #${alert.prNumber} ↗` : 'open ↗'
   return (
     <div style={{
       display: 'flex', alignItems: 'flex-start', gap: 12,
@@ -205,6 +243,15 @@ function AlertRow({ alert, color, enableState, onEnable }: {
       <div style={{ minWidth: 0, flex: '1 1 auto' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)' }}>{alert.project}</span>
+          {badge && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
+              color: badge.color, border: `1px solid ${badge.color}`, borderRadius: 3,
+              padding: '0 4px', whiteSpace: 'nowrap',
+            }}>
+              {badge.label}
+            </span>
+          )}
           <span style={{ fontSize: 12, color: 'var(--text)', wordBreak: 'break-word' }}>{alert.title}</span>
         </div>
         <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
@@ -222,7 +269,7 @@ function AlertRow({ alert, color, enableState, onEnable }: {
           linking to GitHub's settings page — on a private repo that link 404s
           for any browser session that is not signed in, which is impossible to
           tell apart from a dead link. */}
-      {isNotEnabled ? (
+      {isSetupRow ? (
         <button
           onClick={onEnable}
           disabled={busy}
@@ -235,18 +282,18 @@ function AlertRow({ alert, color, enableState, onEnable }: {
         >
           {busy ? 'enabling…' : 'enable'}
         </button>
-      ) : alert.url ? (
+      ) : href ? (
         <a
-          href={alert.url}
+          href={href}
           target="_blank"
           rel="noreferrer"
           style={{
             flexShrink: 0, fontSize: 11, color: 'var(--text-dim)', textDecoration: 'none',
             border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px',
-            fontFamily: 'var(--mono)',
+            fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
           }}
         >
-          open ↗
+          {hrefLabel}
         </a>
       ) : null}
     </div>
