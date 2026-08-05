@@ -31,6 +31,8 @@ interface DeploymentInfo {
   remoteFetchedAt?: string | null
   remoteFetchError?: string | null
   canRebase?: boolean
+  branch?: string | null
+  detachedHead?: boolean
   autoTag: boolean
   versioning: string
   canDeploy?: boolean
@@ -361,7 +363,9 @@ export function CicdTab() {
 
   const devOpsCfg = roleConfig('DevOps')
   const devOpsAvatar = avatarSrc('DevOps', 88)
-  const canPush = info.hasRemote && info.deployCommits.length > 0
+  // A detached HEAD has no branch to push, and pushing was producing git's
+  // "invalid refspec ''" rather than saying so.
+  const canPush = info.hasRemote && info.deployCommits.length > 0 && !info.detachedHead
   // Strictly the server's verdict, and deliberately not inferred from `behind`.
   // A project-server still running an older bundle sends neither `canRebase` nor
   // `compareRef` and has no /deployment/rebase route — inferring the button into
@@ -427,6 +431,23 @@ export function CicdTab() {
               )}
               <span>versioning: <span style={{ color: 'var(--text-dim)' }}>{info.versioning}</span></span>
             </div>
+
+            {/* A detached HEAD is not an error, but every push-shaped action is
+                unavailable until it is resolved, and a commit made while
+                detached belongs to no branch — so the warning leads with the
+                work at risk rather than with the disabled button. */}
+            {info.detachedHead && (
+              <div style={{
+                fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--orange)',
+                border: '1px solid var(--orange)', borderRadius: 4,
+                padding: '5px 8px', marginBottom: 6, lineHeight: 1.5,
+              }}>
+                HEAD is detached — no branch to push or rebase. Check out a branch
+                (<code>git checkout main</code>) to re-enable them. If you have committed
+                while detached, save it first with <code>git branch &lt;name&gt; HEAD</code> —
+                those commits belong to no branch and become unreachable once you switch.
+              </div>
+            )}
 
             {/* Remote status */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)' }}>

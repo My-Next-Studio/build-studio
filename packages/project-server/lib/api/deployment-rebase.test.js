@@ -182,6 +182,31 @@ test('an interrupted rebase is reported, not papered over as success', async () 
   fs.rmSync(path.join(local, '.git', 'rebase-merge'), { recursive: true, force: true });
 });
 
+test('a detached HEAD is named, not turned into "invalid refspec"', async () => {
+  // Reported from a real project: `git branch --show-current` is empty when
+  // detached, so `git push origin ''` reached git and came back with a refspec
+  // error that named neither the cause nor the fix.
+  commit(local, 'mine.md', 'mine\n', 'my local work');
+  git(local, ['checkout', '-q', '--detach', 'HEAD']);
+
+  const push = await fetch(`${baseUrl}/api/deployment/push`, { method: 'POST' });
+  const pushBody = await push.json();
+  assert.strictEqual(push.status, 400);
+  assert.strictEqual(pushBody.detachedHead, true);
+  assert.match(pushBody.error, /detached/i);
+  assert.doesNotMatch(pushBody.error, /refspec/i);
+  assert.match(pushBody.error, /git branch/, 'tells you how to save a detached commit');
+
+  const rb = await rebase();
+  assert.strictEqual(rb.status, 400);
+  assert.match((await rb.json()).error, /detached/i);
+
+  const info = await deployment();
+  assert.strictEqual(info.detachedHead, true);
+  assert.strictEqual(info.branch, null);
+  assert.strictEqual(info.canRebase, false, 'neither action is offered without a branch');
+});
+
 test('GET /deployment reports canRebase and the ref it would use', async () => {
   advanceRemote('theirs.md', 'theirs\n', 'their work');
   // First call schedules the background fetch and may still see stale refs...

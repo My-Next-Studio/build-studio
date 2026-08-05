@@ -332,6 +332,10 @@ function createDeploymentRouter(config, gitOps, {
     let deployCommits = [];
     const hasRemote = hasOrigin();
     const compareRef = hasRemote ? resolveCompareRef() : null;
+    // Empty on a detached HEAD. Reported so the tab can say so up front instead
+    // of letting Push fail with git's own unhelpful "invalid refspec ''".
+    let currentBranch = '';
+    try { currentBranch = execGit(['branch', '--show-current']); } catch {}
 
     // Instant, and never throws — schedules a background `git fetch` when the
     // last one has aged out. See the cache's comment for why this is not inline.
@@ -392,6 +396,8 @@ function createDeploymentRouter(config, gitOps, {
       behind,
       hasRemote,
       compareRef,
+      branch: currentBranch || null,
+      detachedHead: !currentBranch,
       // Freshness of the numbers above, so the tab can say "behind: 0" without
       // implying it has looked recently. null until the first fetch lands.
       remoteFetchedAt: remoteState && remoteState.fetchedAt
@@ -399,7 +405,8 @@ function createDeploymentRouter(config, gitOps, {
       remoteFetchError: (remoteState && remoteState.error) || null,
       // Rebase is offered on the same condition the user would apply by eye:
       // there is something upstream we do not have.
-      canRebase: Boolean(hasRemote && compareRef && behind > 0),
+      // Both actions need a branch to act on, so neither is offered without one.
+      canRebase: Boolean(hasRemote && compareRef && behind > 0 && currentBranch),
       autoTag: dep.auto_tag !== false,
       versioning: dep.versioning || 'semver',
       // Deploy button is meaningful only when production updates REQUIRE a manual
@@ -467,9 +474,29 @@ function createDeploymentRouter(config, gitOps, {
       return res.status(400).json({ error: 'No remote "origin" configured' });
     }
 
+    // `git branch --show-current` is EMPTY on a detached HEAD, and passing that
+    // through produced `git push origin ''` → "fatal: invalid refspec ''", which
+    // names neither the real problem nor the fix. Detached HEADs happen: checking
+    // out origin/main directly, inspecting an old commit, an interrupted rebase.
+    // Worse, a commit made while detached belongs to no branch, so the useful
+    // thing to say is "your work is at risk", not "invalid refspec".
+    let branch = '';
+    try { branch = execGit(['branch', '--show-current']); } catch {}
+    if (!branch) {
+      let head = '';
+      try { head = execGit(['rev-parse', '--short', 'HEAD']); } catch {}
+      return res.status(400).json({
+        error: `HEAD is detached at ${head || 'an unknown commit'} — there is no branch to push. `
+          + `Check out a branch first (\`git checkout main\`). If you have committed while detached, `
+          + `save that work before switching: \`git branch <name> ${head || 'HEAD'}\`, or it will be `
+          + `left unreachable.`,
+        detachedHead: true,
+        head: head || null,
+      });
+    }
+
     const results = [];
     try {
-      const branch = execGit(['branch', '--show-current']);
       execGit(['push', 'origin', branch]);
       results.push(`Pushed ${branch} to origin`);
     } catch (e) {

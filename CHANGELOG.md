@@ -226,6 +226,19 @@ review, not by an incident.
 
 ### Fixed
 
+- **Push on a detached HEAD said "fatal: invalid refspec ''".** `git branch
+  --show-current` is empty when HEAD is detached, and that empty string went
+  straight into `git push origin ''`. The message named neither the cause nor
+  the cure, and one managed project here hit it.
+
+  The CI/CD tab now says HEAD is detached before you click, disables Push and
+  Rebase (neither has a branch to act on), and leads with the part that actually
+  matters: **a commit made while detached belongs to no branch**, so it becomes
+  unreachable the moment you check one out. The warning gives the command to
+  save it first. Detached HEADs are easy to reach by accident — checking out
+  `origin/main` directly does it — and the old error gave no hint that anything
+  was at risk.
+
 - **The CI light no longer tracks whichever branch pushed last.** CI status
   considered every push run regardless of branch, so a push to a feature branch
   became "the latest run" and the light reported that branch's result. It is now
