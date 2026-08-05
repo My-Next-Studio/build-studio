@@ -21,7 +21,88 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-08-05 — Monitor tells you which rows need you
+## 2026-08-05 — Close the project-server to other browser tabs
+
+### Security
+
+Read this one even if you skip the rest: it changes who could reach your
+project-servers, and the answer was wider than the README claimed.
+
+- **The API no longer answers every website you visit.** Each project-server
+  sent `Access-Control-Allow-Origin: *`, and it has no authentication of any
+  kind. Binding to `127.0.0.1` — which it does — keeps out other *machines*, not
+  other *tabs*: any page open in your browser could call
+  `http://localhost:<port>/api/...` and read the response. That reaches project
+  and PRD file contents, config, git operations, and agent session control. The
+  wildcard paired with `Allow-Headers: Content-Type` also cleared the preflight
+  for JSON bodies, so writes were reachable too, not only reads.
+
+  The header is now echoed back only for an allow-listed origin — by default the
+  hub, `http://localhost:18080` and its `127.0.0.1` spelling. Anything else gets
+  no CORS headers and the browser refuses the response. Requests carrying no
+  `Origin` at all are still served, because those are non-browser callers (the
+  Electron health poll, the overseer's loopback call, `curl`) and were never the
+  exposure.
+
+- **The terminal WebSocket now checks its origin.** This is the half that CORS
+  could not have fixed. WebSockets are exempt from the same-origin policy, so no
+  response header stops a page from opening `ws://localhost:<port>` — and that
+  socket hands every client the project's persistent pty and writes whatever it
+  sends straight to the shell. Any page you visited could open an interactive
+  shell as you, in your project directory. The handshake is now rejected with
+  403 unless the origin is allow-listed.
+
+  Had only the CORS half shipped, the boundary would have looked closed while
+  the more direct path stayed open — which is why both landed together.
+
+- **File routes no longer accept a sibling directory whose name extends the
+  allowed one.** `files.js`, `status.js` and `runbooks.js` each checked
+  containment with `abs.startsWith(base)`, which is a string test, not a path
+  test: with `docs/` allowed, `docs-private/secret.md` passes it, because the
+  characters do in fact match. A `path-guard.js` helper that gets this right has
+  been in the tree — and tested against precisely this — since it was written;
+  it was simply never wired into these four call sites. It is now.
+
+  The `/chat` route is the one to notice. It writes nothing, but whatever it
+  reads is pasted into the model's system prompt and streamed back, so an
+  escape there was a way to read a file out through the response.
+
+- **The document-write route stops accepting paths that end in code
+  execution.** `PUT /api/file` checked only that the target was somewhere under
+  the project — and carried none of the directory or file-type limits its
+  read-side twin had. Writing `.git/hooks/pre-commit` was therefore allowed by
+  the guard behaving exactly as designed, and ran as you on that repository's
+  next commit. Writes are now confined to `.md`/`.markdown`/`.txt`, outside a
+  blocked set of directories.
+
+- **Sensitive directories are matched per path segment, not by string prefix.**
+  The old `/^(\.git|node_modules|dist|\.next|\.env)/` test was wrong in both
+  directions: it refused `.github/` for merely starting with `.git`, and it only
+  ever examined the first segment, so `docs/.git/config` walked straight past
+  it. Matching segments also let the list grow to the things that actually
+  decide behaviour — `.github/` (runs in CI), `.claude/` (steers future agents),
+  `.build-studio/` (ports and model selection), and `.env.*` variants.
+
+- **Widening is possible, but now deliberate.** Set
+  `BUILD_STUDIO_ALLOWED_ORIGINS` to a comma-separated list to replace the
+  default allowlist, mirroring how `BUILD_STUDIO_LISTEN_HOST` works. A literal
+  `*` in that variable is treated as an origin named `*` and matches nothing —
+  the old behaviour cannot be restored by accident.
+
+No evidence any of this was exploited; it is reachable-in-principle, found by
+review, not by an incident.
+
+### Notes for forks
+
+- **`PUT /api/file` is stricter than it was, and has no in-tree caller.**
+  Nothing in the hub calls it — which is why the write restrictions above could
+  be drawn tightly without breaking a screen. If your fork writes through it,
+  the limits to check are: text extensions only, and no path segment in the
+  blocked set. Loosen `BLOCKED_SEGMENTS` or the extension test in
+  `lib/api/files.js` deliberately rather than reverting to a `startsWith` check.
+- **New containment guards must go through `assertInside` (`lib/path-guard.js`),
+  never `abs.startsWith(base)`.** The latter reads as correct and is not; this
+  release exists partly because four call sites were written that way.
 
 ### Added
 
@@ -97,11 +178,21 @@ that move underneath you without your having edited anything.
 
 ### Upgrade steps
 
-**In Build Studio** — hub-only change: `cd packages/hub && npx next build`, then
-`cd packages/desktop && node inject-resources.js`, then restart the app. The
-project-servers can keep running.
+**In Build Studio** — `cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`, then restart the app.
+
+**Restart every running project-server** — unlike the rest of this day's
+entries, the security fixes live in `project-server/`, so a server that keeps
+running keeps serving the wildcard and the old path checks. Stop and start each
+one from the hub, or restart the Electron app. Until a given server is
+restarted, that project is still reachable from any browser tab.
 
 **In each managed project** — nothing to do.
+
+**If you run the hub somewhere other than `http://localhost:18080`** — set
+`BUILD_STUDIO_ALLOWED_ORIGINS` to that origin before restarting, or the hub's
+SSE connections and terminals will be refused. The default covers the standard
+Electron setup, where nothing is needed.
 
 ---
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { assertInside } = require('../path-guard');
 
 function createRunbooksRouter(config) {
   const router = express.Router();
@@ -32,8 +33,12 @@ function createRunbooksRouter(config) {
   router.get('/runbook', (req, res) => {
     const filename = req.query.filename;
     if (!filename) return res.status(400).json({ error: 'filename required' });
-    const abs = path.resolve(runbooksDir, filename);
-    if (!abs.startsWith(runbooksDir)) return res.status(403).json({ error: 'forbidden' });
+    // startsWith(runbooksDir) would have accepted a sibling directory whose
+    // name merely extends this one — docs/runbooks-archive/ next to
+    // docs/runbooks/. assertInside requires a real directory boundary.
+    let abs;
+    try { abs = assertInside(filename, runbooksDir); }
+    catch { return res.status(403).json({ error: 'forbidden' }); }
     if (!fs.existsSync(abs)) return res.status(404).json({ error: 'not found' });
     const content = fs.readFileSync(abs, 'utf8');
     res.json({ filename, content });

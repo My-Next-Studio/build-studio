@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { derivePrdPhase } = require('../prd-phase');
+const { assertInside } = require('../path-guard');
 
 // ─── Active-PRD + Backlog parsers (used by /status/prd-phase) ───────────────
 
@@ -573,8 +574,14 @@ function createStatusRouter(config, gitOps, state) {
     }
 
     if (documentPath) {
-      const absPath = path.resolve(docsPath, documentPath);
-      if (absPath.startsWith(docsPath) && fs.existsSync(absPath)) {
+      // Worth guarding tightly even though nothing is written here: whatever
+      // this reads is pasted into the model's system prompt and streamed back
+      // to the caller, so a path that escapes docs/ is a way to read a file out
+      // through the response. startsWith let a sibling directory whose name
+      // extends docsPath (docs-private/ next to docs/) do exactly that.
+      let absPath = null;
+      try { absPath = assertInside(documentPath, docsPath); } catch { /* skipped below */ }
+      if (absPath && fs.existsSync(absPath)) {
         const docContent = fs.readFileSync(absPath, 'utf8');
         systemPrompt += `\n\n---\nCurrent document (${path.basename(documentPath)}):\n\n${docContent}`;
       }

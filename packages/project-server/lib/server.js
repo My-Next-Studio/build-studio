@@ -26,6 +26,7 @@ const { createBacklogRouter } = require('./api/backlog');
 const { createSupportRouter } = require('./api/support');
 const { createCliConfigRouter } = require('./api/cli-config');
 const { createOverseer } = require('./overseer');
+const { parseAllowedOrigins, isAllowedOrigin } = require('./allowed-origins');
 
 function startServer(projectRoot, opts = {}) {
   const config = loadConfig(projectRoot);
@@ -58,11 +59,27 @@ function startServer(projectRoot, opts = {}) {
     return defaultJsonParser(req, res, next);
   });
 
-  // CORS — allow hub and other origins to connect directly
+  // CORS — echo back an allow-listed origin, never '*'. See lib/allowed-origins.js
+  // for why the 127.0.0.1 bind does not already cover this.
+  const allowedOrigins = parseAllowedOrigins(process.env.BUILD_STUDIO_ALLOWED_ORIGINS);
   app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    const origin = req.headers.origin;
+    // Vary: Origin unconditionally — the response body is identical either way,
+    // but the ACAO header is not, and a cache that missed that could hand a
+    // hub-stamped header to some other origin.
+    res.setHeader('Vary', 'Origin');
+    if (isAllowedOrigin(origin, allowedOrigins)) {
+      // Only set ACAO when there IS an origin to echo. A no-origin caller is a
+      // non-browser client that neither needs nor reads the header.
+      if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+    // A disallowed origin still gets 204 on the preflight, just without the
+    // headers that would let it proceed — the browser fails the actual request.
+    // Answering 403 here would leak "this port is a project-server" to any page
+    // that probes it; a bare 204 is indistinguishable from an endpoint that
+    // simply does not do CORS.
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
@@ -217,7 +234,24 @@ function startServer(projectRoot, opts = {}) {
 
   // WebSocket / persistent pty terminal
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server });
+  // Origin check on the handshake. This is NOT redundant with the CORS
+  // middleware above: WebSockets are exempt from the same-origin policy
+  // entirely, so no CORS header this server sends can stop a page from opening
+  // ws://localhost:<port>. And this socket is not a read-only feed — the
+  // connection handler below hands every client the persistent pty and writes
+  // their {type:'input'} straight to the shell. Unguarded, any page you visit
+  // gets an interactive shell running as you, in your project directory.
+  //
+  // Browsers set Origin on every WebSocket handshake and it cannot be forged
+  // from page JavaScript, which is exactly what makes it usable here.
+  const wss = new WebSocketServer({
+    server,
+    verifyClient: ({ origin }, done) => {
+      if (isAllowedOrigin(origin, allowedOrigins)) return done(true);
+      console.warn(`[ws] rejected handshake from origin ${origin}`);
+      done(false, 403, 'Forbidden origin');
+    },
+  });
   wss.on('error', () => {}); // Suppress WSS error when server fails to bind
 
   let persistentPty = null;
