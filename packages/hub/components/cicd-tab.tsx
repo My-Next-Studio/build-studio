@@ -27,6 +27,10 @@ interface DeploymentInfo {
   ahead: number
   behind: number
   hasRemote: boolean
+  compareRef?: string | null
+  remoteFetchedAt?: string | null
+  remoteFetchError?: string | null
+  canRebase?: boolean
   autoTag: boolean
   versioning: string
   canDeploy?: boolean
@@ -85,6 +89,8 @@ export function CicdTab() {
   const [info, setInfo] = useState<DeploymentInfo | null>(null)
   const [pushing, setPushing] = useState(false)
   const [pushResult, setPushResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const [rebasing, setRebasing] = useState(false)
+  const [rebaseResult, setRebaseResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [deployingId, setDeployingId] = useState<string | null>(null)
   const [deployResults, setDeployResults] = useState<Record<string, { ok: boolean; message: string }>>({})
   const [showCommitInput, setShowCommitInput] = useState(false)
@@ -305,6 +311,28 @@ export function CicdTab() {
     setPushing(false)
   }
 
+  const handleRebase = async () => {
+    setRebasing(true)
+    setRebaseResult(null)
+    setPushResult(null) // a stale "non-fast-forward" from the push that sent you here
+    try {
+      const result = await api.post('/deployment/rebase')
+      if (result.ok) {
+        // stashConflicts means the rebase landed but the working tree needs you —
+        // reporting that as a plain success is how someone pushes a broken tree.
+        const clean = !result.stashConflicts?.length
+        setRebaseResult({ ok: clean, message: result.message || 'Rebased' })
+      } else {
+        const files = result.conflicts?.length ? ` (${result.conflicts.join(', ')})` : ''
+        setRebaseResult({ ok: false, message: `${result.error || 'Rebase failed'}${files}` })
+      }
+      load()
+    } catch {
+      setRebaseResult({ ok: false, message: 'Rebase failed' })
+    }
+    setRebasing(false)
+  }
+
   const handleDeploy = async (target: DeployTarget) => {
     setDeployingId(target.id)
     setDeployResults(prev => { const next = { ...prev }; delete next[target.id]; return next })
@@ -334,6 +362,12 @@ export function CicdTab() {
   const devOpsCfg = roleConfig('DevOps')
   const devOpsAvatar = avatarSrc('DevOps', 88)
   const canPush = info.hasRemote && info.deployCommits.length > 0
+  // Strictly the server's verdict, and deliberately not inferred from `behind`.
+  // A project-server still running an older bundle sends neither `canRebase` nor
+  // `compareRef` and has no /deployment/rebase route — inferring the button into
+  // existence there would render "Rebase onto undefined" and 404 on click. No
+  // button at all is the honest rendering of "this server cannot do that yet".
+  const canRebase = info.canRebase === true && Boolean(info.compareRef)
   const workingTreeCount =
     (info.stagedFiles?.length || 0) +
     (info.unstagedFiles?.length || 0) +
@@ -399,7 +433,17 @@ export function CicdTab() {
               {info.hasRemote ? (
                 <>
                   <span>ahead: <span style={{ color: info.ahead > 0 ? 'var(--orange)' : 'var(--text-dim)' }}>{info.ahead}</span></span>
-                  <span>behind: <span style={{ color: info.behind > 0 ? 'var(--red)' : 'var(--text-dim)' }}>{info.behind}</span></span>
+                  {/* The tooltip is not decoration: this number is only as true
+                      as the last fetch, and "behind: 0" is otherwise impossible
+                      to tell apart from "nobody has looked since yesterday". */}
+                  <span title={
+                    info.remoteFetchError ? `Could not reach origin: ${info.remoteFetchError}`
+                      : info.remoteFetchedAt ? `origin last checked ${new Date(info.remoteFetchedAt).toLocaleTimeString()}`
+                      : 'origin not checked yet'
+                  }>
+                    behind: <span style={{ color: info.behind > 0 ? 'var(--red)' : 'var(--text-dim)' }}>{info.behind}</span>
+                    {info.remoteFetchError && <span style={{ color: 'var(--orange)' }}> ?</span>}
+                  </span>
                 </>
               ) : (
                 <span style={{ color: 'var(--red)' }}>no remote configured</span>
@@ -439,6 +483,38 @@ export function CicdTab() {
                 maxWidth: 260, textAlign: 'right',
               }}>
                 {commitResult.message}
+              </span>
+            )}
+            {/* Rebase sits ABOVE Push and only appears when there is something
+                to rebase onto. It is the step that unblocks the push below it,
+                and it shows up in the same moment the push would be rejected —
+                so the order on screen matches the order you do them in. */}
+            {canRebase && (
+              <button
+                onClick={handleRebase}
+                disabled={rebasing}
+                title={`Replay your local commits on top of ${info.compareRef} (${info.behind} commit${info.behind === 1 ? '' : 's'} behind). Uncommitted changes are stashed and restored.`}
+                style={{
+                  padding: '6px 16px', borderRadius: 6,
+                  border: '1px solid var(--orange)',
+                  background: 'transparent',
+                  color: 'var(--orange)',
+                  fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
+                  cursor: rebasing ? 'default' : 'pointer',
+                  opacity: rebasing ? 0.6 : 1,
+                  transition: 'all 0.15s',
+                }}
+              >
+                {rebasing ? 'Rebasing...' : `Rebase onto ${info.compareRef} (${info.behind})`}
+              </button>
+            )}
+            {rebaseResult && (
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 11,
+                color: rebaseResult.ok ? 'var(--green)' : 'var(--red)',
+                maxWidth: 260, textAlign: 'right',
+              }}>
+                {rebaseResult.message}
               </span>
             )}
             <button

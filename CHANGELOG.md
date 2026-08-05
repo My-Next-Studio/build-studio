@@ -94,6 +94,32 @@ review, not by an incident.
 
 ### Added
 
+- **A Rebase button on the CI/CD tab**, shown only when your branch is behind
+  its remote. Merging a Dependabot PR on github.com — which the Monitor tab now
+  actively encourages, one advisory at a time — moves the remote and leaves your
+  local branch behind, so the next Push from this tab is rejected as
+  non-fast-forward. The remedy was always a terminal away; the point is not to
+  need a terminal in the middle of a flow that otherwise happens here.
+
+  It appears directly above Push, because it is the step that unblocks it. What
+  it does:
+
+  - Fetches first, then rebases your branch onto the ref a push would update —
+    the branch's own upstream, or the remote's default branch.
+  - **Stashes and restores uncommitted work** (`--autostash`), so edits in
+    flight are not a reason to be sent away.
+  - **On conflict, aborts and puts everything back**, reporting which files
+    clashed. Nothing is left half-done, and you choose whether to resolve it
+    yourself or hand it to an agent.
+  - **Refuses to act if a rebase is already in progress.** It will not abort a
+    rebase it did not start — that is somebody's half-finished conflict
+    resolution, and it is not this button's to discard.
+
+  A rebase can succeed and still leave you work: restoring the stash can itself
+  conflict. That case is reported as a warning rather than a success, because
+  "rebased 3 commits" over a conflicted working tree is how a broken tree gets
+  pushed.
+
 - **Advisory rows now say what they need from you.** Previously a row you could
   clear by merging a waiting PR looked identical to one needing an afternoon's
   judgement, so a long list was untriageable and the honest response was to stop
@@ -119,6 +145,26 @@ review, not by an incident.
   reported rather than left to be inferred from a list that quietly grows.
 
 ### Changed
+
+- **Build Studio now runs `git fetch` on your projects.** It never did before,
+  which meant the CI/CD tab's "behind: N" was only as current as the last time
+  *you* fetched in a terminal. Two managed projects here were displaying
+  **behind: 0** while their remotes had genuinely moved on — and that is the
+  normal state immediately after merging a PR on github.com, which is exactly
+  when the number gets read.
+
+  The fetch is cached with a 60-second TTL and runs in the background off the
+  CI/CD tab's poll, so the tab still answers instantly and a corrected count
+  appears on the following poll rather than the current one. A repository whose
+  fetch fails backs off to five minutes instead of retrying every poll.
+
+  `git fetch` only updates remote-tracking refs — it does not touch your branch,
+  your working tree, or your stash. But it is network traffic against your
+  projects' remotes that did not happen before, so it is worth knowing about if
+  you work offline or on a metered connection.
+
+  Hovering "behind" now tells you when origin was last checked, so a zero can be
+  told apart from a zero nobody has verified since yesterday.
 
 - **The back button from a project now reads "← home", not "← projects".** The
   cross-project view holds four tabs — Projects, Demos, Model, Monitor — so

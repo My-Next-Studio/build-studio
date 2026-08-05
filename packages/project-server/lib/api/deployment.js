@@ -1,11 +1,24 @@
 const express = require('express');
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
+const { promisify } = require('util');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { runOneShot: defaultRunOneShot, getOneShotStatus: defaultGetOneShotStatus } = require('../oneshot');
 const { createMonitor } = require('../monitor');
+const { createCache } = require('../github-cache');
+
+const execFileAsync = promisify(execFile);
+
+// How long a `git fetch` result stays fresh. Short, because the number it feeds
+// ("behind: N") is the trigger for an action the user takes immediately after
+// merging something on GitHub — a stale zero there is worse than a spare fetch.
+const REMOTE_FETCH_TTL_MS = 60 * 1000;
+// A repo whose fetch fails (no network, auth expired, remote gone) must not be
+// retried on every 10s tab poll.
+const REMOTE_FETCH_ERROR_TTL_MS = 5 * 60 * 1000;
+const REMOTE_FETCH_TIMEOUT_MS = 30 * 1000;
 
 const CI_INVESTIGATE_MAX_DURATION_MS = 15 * 60 * 1000;
 // A local-command deploy target runs a configured host command (e.g. a fastlane
@@ -213,6 +226,74 @@ function createDeploymentRouter(config, gitOps, {
     }).trim();
   }
 
+  /** True when an `origin` remote exists. */
+  function hasOrigin() {
+    try { execGit(['remote', 'get-url', 'origin']); return true; } catch { return false; }
+  }
+
+  /**
+   * The ref a push would update — the branch's own upstream, else the remote's
+   * default branch (correct for a feature branch that has never been pushed).
+   * Callers are expected to have confirmed `hasOrigin()` first.
+   *
+   * Shared by the ahead/behind counters and the rebase route ON PURPOSE. If the
+   * two resolved this differently you could rebase onto a ref other than the one
+   * the "behind: N" you clicked was measured against, which is the kind of bug
+   * that only shows up on a feature branch and looks like data loss.
+   */
+  function resolveCompareRef() {
+    try { return execGit(['rev-parse', '--abbrev-ref', '@{upstream}']); } catch {}
+    try { return execGit(['rev-parse', '--abbrev-ref', 'origin/HEAD']); } catch {}
+    return null;
+  }
+
+  /**
+   * True when this repository is sitting in a half-finished rebase.
+   *
+   * Load-bearing for the rebase route: its error path runs `git rebase --abort`,
+   * and aborting a rebase somebody is part-way through resolving in a terminal
+   * would destroy that work. We only ever abort a rebase we started ourselves.
+   */
+  function rebaseInProgress() {
+    try {
+      const gitDir = execGit(['rev-parse', '--git-dir']);
+      const abs = path.isAbsolute(gitDir) ? gitDir : path.join(projectRoot, gitDir);
+      return fs.existsSync(path.join(abs, 'rebase-merge')) || fs.existsSync(path.join(abs, 'rebase-apply'));
+    } catch { return false; }
+  }
+
+  /** Files left with conflict markers, if any. */
+  function conflictedFiles() {
+    try {
+      return execGit(['diff', '--name-only', '--diff-filter=U']).split('\n').filter(Boolean);
+    } catch { return []; }
+  }
+
+  // `behind` is derived from remote-tracking refs, and those only move when
+  // something runs `git fetch` — which, until this cache existed, nothing here
+  // ever did. So the counter reported whatever was true the last time the user
+  // happened to fetch in a terminal, and read `behind: 0` for a repository whose
+  // remote had moved on hours ago. That is precisely the state you are in right
+  // after merging a Dependabot PR on GitHub, i.e. exactly when the number is
+  // being consulted.
+  //
+  // Fetching inline in the route was not an option: it is a network call on a
+  // synchronous handler, and the tab polls every 10 seconds. So it goes through
+  // the same read-through cache the GitHub pollers use — the route answers
+  // instantly from whatever the refs currently say and a fetch is scheduled
+  // behind it, so the number is correct on the next poll rather than this one.
+  const remoteFetch = createCache({
+    fetch: async () => {
+      if (!hasOrigin()) return { skipped: true };
+      await execFileAsync('git', ['fetch', '--quiet', 'origin'], {
+        cwd: projectRoot, timeout: REMOTE_FETCH_TIMEOUT_MS,
+      });
+      return { skipped: false };
+    },
+    ttlFor: () => REMOTE_FETCH_TTL_MS,
+    errorTtlMs: REMOTE_FETCH_ERROR_TTL_MS,
+  });
+
   // GET /api/deployment — version info, changelog delta, push status
   router.get('/deployment', (req, res) => {
     const dep = config.deployment || {};
@@ -249,21 +330,12 @@ function createDeploymentRouter(config, gitOps, {
       : []);
 
     let deployCommits = [];
-    let hasRemote = false;
-    let compareRef = null;
-    try {
-      execGit(['remote', 'get-url', 'origin']);
-      hasRemote = true;
-    } catch {}
+    const hasRemote = hasOrigin();
+    const compareRef = hasRemote ? resolveCompareRef() : null;
 
-    if (hasRemote) {
-      // 1. branch upstream, if the branch tracks one
-      try { compareRef = execGit(['rev-parse', '--abbrev-ref', '@{upstream}']); } catch {}
-      // 2. else the remote's default branch (origin/HEAD → e.g. origin/main)
-      if (!compareRef) {
-        try { compareRef = execGit(['rev-parse', '--abbrev-ref', 'origin/HEAD']); } catch {}
-      }
-    }
+    // Instant, and never throws — schedules a background `git fetch` when the
+    // last one has aged out. See the cache's comment for why this is not inline.
+    const remoteState = hasRemote ? remoteFetch.get() : null;
 
     if (compareRef) {
       try { deployCommits = parseLog(execGit(['log', `${compareRef}..HEAD`, '--format=%h|%s|%an|%ai'])); } catch {}
@@ -319,6 +391,15 @@ function createDeploymentRouter(config, gitOps, {
       ahead,
       behind,
       hasRemote,
+      compareRef,
+      // Freshness of the numbers above, so the tab can say "behind: 0" without
+      // implying it has looked recently. null until the first fetch lands.
+      remoteFetchedAt: remoteState && remoteState.fetchedAt
+        ? new Date(remoteState.fetchedAt).toISOString() : null,
+      remoteFetchError: (remoteState && remoteState.error) || null,
+      // Rebase is offered on the same condition the user would apply by eye:
+      // there is something upstream we do not have.
+      canRebase: Boolean(hasRemote && compareRef && behind > 0),
       autoTag: dep.auto_tag !== false,
       versioning: dep.versioning || 'semver',
       // Deploy button is meaningful only when production updates REQUIRE a manual
@@ -404,6 +485,96 @@ function createDeploymentRouter(config, gitOps, {
     }
 
     res.json({ ok: true, results });
+  });
+
+  // POST /api/deployment/rebase — replay local commits on top of the remote.
+  //
+  // Exists because merging a PR on GitHub (which the Monitor tab encourages, one
+  // Dependabot advisory at a time) leaves local `main` behind, and the next Push
+  // from this tab is rejected as non-fast-forward. The fix was always a terminal
+  // away; the point is not to need the terminal in the middle of a flow that
+  // otherwise happens here.
+  router.post('/deployment/rebase', async (req, res) => {
+    if (!hasOrigin()) return res.status(400).json({ error: 'No remote "origin" configured' });
+
+    // Refuse rather than interfere. See rebaseInProgress().
+    if (rebaseInProgress()) {
+      return res.status(409).json({
+        error: 'A rebase is already in progress in this repository. Finish or abort it in a terminal first — '
+          + 'this button will not touch a rebase it did not start.',
+      });
+    }
+
+    let branch = '';
+    try { branch = execGit(['branch', '--show-current']); } catch {}
+    if (!branch) {
+      return res.status(400).json({ error: 'HEAD is detached — check out a branch before rebasing' });
+    }
+
+    // Force a fetch and wait for it. The cached one may be up to a minute old,
+    // and a minute is exactly the gap between merging a PR and clicking this.
+    await remoteFetch.refresh();
+    const fetchState = remoteFetch.peek();
+    if (fetchState && fetchState.error) {
+      return res.status(502).json({ error: `git fetch failed: ${fetchState.error}` });
+    }
+
+    const compareRef = resolveCompareRef();
+    if (!compareRef) {
+      return res.status(400).json({ error: 'Could not resolve a remote branch to rebase onto' });
+    }
+
+    let behind = 0;
+    try { behind = parseInt(execGit(['rev-list', '--count', `HEAD..${compareRef}`]), 10) || 0; } catch {}
+    if (behind === 0) {
+      // Not an error. The fetch may simply have revealed that someone else
+      // already dealt with it, and re-reporting that as a failure would be noise.
+      return res.json({ ok: true, alreadyUpToDate: true, compareRef, message: `Already up to date with ${compareRef}` });
+    }
+
+    try {
+      // --autostash so uncommitted work in progress is not a reason to refuse.
+      // git puts it back afterwards, including when the rebase is aborted.
+      execGit(['rebase', '--autostash', compareRef]);
+    } catch (e) {
+      const conflicts = conflictedFiles();
+      let aborted = true;
+      try { execGit(['rebase', '--abort']); } catch { aborted = false; }
+      return res.status(409).json({
+        error: conflicts.length
+          ? `Rebase onto ${compareRef} hit conflicts in ${conflicts.length} file${conflicts.length === 1 ? '' : 's'}`
+          : `Rebase onto ${compareRef} failed`,
+        conflicts,
+        aborted,
+        // When the abort itself fails the repo IS left mid-rebase, and saying so
+        // is the difference between a retry and a confusing second failure.
+        message: aborted
+          ? 'The repository was returned to its previous state — nothing was changed.'
+          : 'WARNING: the rebase could not be aborted automatically. Resolve it in a terminal.',
+        detail: String((e && e.stderr) || (e && e.message) || '').trim(),
+      });
+    }
+
+    // A rebase can succeed and still leave conflict markers: --autostash reapplies
+    // the stash after the rebase lands, and that reapply can conflict on its own.
+    // Reporting "rebased 3 commits" while the tree is in that state would be a lie.
+    const stashConflicts = conflictedFiles();
+
+    let ahead = 0;
+    try { ahead = parseInt(execGit(['rev-list', '--count', `${compareRef}..HEAD`]), 10) || 0; } catch {}
+
+    res.json({
+      ok: true,
+      compareRef,
+      branch,
+      replayed: ahead,
+      stashConflicts,
+      message: stashConflicts.length
+        ? `Rebased ${branch} onto ${compareRef}, but restoring your uncommitted changes hit conflicts in `
+          + `${stashConflicts.length} file${stashConflicts.length === 1 ? '' : 's'}. The rebase itself is done; `
+          + 'resolve the working tree in a terminal.'
+        : `Rebased ${branch} onto ${compareRef} — ${ahead} commit${ahead === 1 ? '' : 's'} to push`,
+    });
   });
 
   // GET /api/services — dev_commands with live port status
