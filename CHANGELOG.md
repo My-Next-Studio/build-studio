@@ -51,6 +51,16 @@ that move underneath you without your having edited anything.
 
 ### Changed
 
+- **The back button from a project now reads "← home", not "← projects".** The
+  cross-project view holds four tabs — Projects, Demos, Model, Monitor — so
+  labelling the container after one of its own children read as a loop: you
+  clicked "projects" and landed somewhere whose first tab was also Projects.
+
+  "Home" names the view's position rather than its contents, which is what
+  "projects" got wrong and what any contents-based name would get wrong again
+  the next time a tab is added. It also matches what the source has always
+  called it (`home-tabs.tsx`, `HomeContent`, `HomePage`).
+
 - **Enabling dependency alerts also enables security updates.** The button on a
   not-enabled row now switches on both. Enabling sight without action is the
   trap the row exists to close — turning on alerts alone produces a repo that

@@ -88,9 +88,15 @@ export function GlobalStatusBar() {
     >
       {isProjectPage && (
         <>
+          {/* "home", not "projects": this button's destination is the
+              cross-project view, and Projects is only one of the four tabs
+              inside it — a container sharing a name with its own child reads
+              as a loop. Naming the POSITION rather than the contents also
+              means it survives the next tab, which "projects" did not. */}
           <button
             onClick={() => router.push('/')}
             className="app-no-drag"
+            title="Home — projects, demos, model defaults, monitor"
             style={{
               padding: '3px 8px',
               borderRadius: 'var(--radius)',
@@ -105,7 +111,7 @@ export function GlobalStatusBar() {
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface3)'; e.currentTarget.style.color = 'var(--text)' }}
             onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface2)'; e.currentTarget.style.color = 'var(--text-dim)' }}
           >
-            ← projects
+            ← home
           </button>
           <span style={{ width: 1, height: 14, background: 'var(--border-subtle)', margin: '0 4px' }} />
         </>
