@@ -160,6 +160,28 @@ test('refuses to touch a rebase someone else started', async () => {
   git(local, ['rebase', '--abort']);
 });
 
+test('an interrupted rebase is reported, not papered over as success', async () => {
+  // A project-server killed mid-rebase (a deploy, a crash) leaves .git/rebase-merge
+  // behind with a clean tree and no conflict files — this actually happened during
+  // a deploy. Simulated here by parking the repo in that state directly, because
+  // the state, not how it got there, is what the route has to notice.
+  commit(local, 'mine.md', 'mine\n', 'my local work');
+  advanceRemote('theirs.md', 'theirs\n', 'their work');
+  const res = await rebase();
+  const body = await res.json();
+  assert.strictEqual(body.ok, true, 'precondition: a clean rebase normally succeeds');
+
+  // Now park it and confirm the guard fires rather than the success path.
+  fs.mkdirSync(path.join(local, '.git', 'rebase-merge'), { recursive: true });
+  const parked = await rebase();
+  const parkedBody = await parked.json();
+  assert.strictEqual(parked.status, 409);
+  assert.strictEqual(parkedBody.rebaseInProgress, true);
+  assert.match(parkedBody.error, /git rebase --abort/);
+
+  fs.rmSync(path.join(local, '.git', 'rebase-merge'), { recursive: true, force: true });
+});
+
 test('GET /deployment reports canRebase and the ref it would use', async () => {
   advanceRemote('theirs.md', 'theirs\n', 'their work');
   // First call schedules the background fetch and may still see stale refs...

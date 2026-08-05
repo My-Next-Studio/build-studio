@@ -499,9 +499,17 @@ function createDeploymentRouter(config, gitOps, {
 
     // Refuse rather than interfere. See rebaseInProgress().
     if (rebaseInProgress()) {
+      // Name the command. This state is not always the user's own doing — if
+      // this project-server is stopped or redeployed while a rebase is running,
+      // the `git` child dies with it and leaves exactly this, through no action
+      // of theirs. Telling them only that we refuse to help would be unkind.
       return res.status(409).json({
-        error: 'A rebase is already in progress in this repository. Finish or abort it in a terminal first — '
-          + 'this button will not touch a rebase it did not start.',
+        error: 'A rebase is already in progress in this repository, so this button will not touch it — '
+          + 'aborting one that someone is part-way through resolving would destroy that work. '
+          + 'Run `git rebase --abort` to return the repository to its previous state (nothing is lost — '
+          + 'your branch tip is recorded in .git/rebase-merge/orig-head), or `git rebase --continue` to '
+          + 'finish it. Then this button will work again.',
+        rebaseInProgress: true,
       });
     }
 
@@ -552,6 +560,20 @@ function createDeploymentRouter(config, gitOps, {
           ? 'The repository was returned to its previous state — nothing was changed.'
           : 'WARNING: the rebase could not be aborted automatically. Resolve it in a terminal.',
         detail: String((e && e.stderr) || (e && e.message) || '').trim(),
+      });
+    }
+
+    // Exiting zero is not sufficient evidence that the rebase finished. A killed
+    // git child can leave .git/rebase-merge behind, and a repository parked that
+    // way looks fine to every other command in this tab until the next rebase
+    // refuses to run. Observed for real: a project-server restarted mid-rebase
+    // during a deploy left exactly this, and the success path would otherwise
+    // have reported "rebased 1 commit" over a branch still detached at `onto`.
+    if (rebaseInProgress()) {
+      return res.status(409).json({
+        error: `The rebase onto ${compareRef} did not finish — the repository is parked mid-rebase. `
+          + 'Run `git rebase --abort` to return it to its previous state; nothing is lost.',
+        rebaseInProgress: true,
       });
     }
 

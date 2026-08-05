@@ -113,12 +113,22 @@ review, not by an incident.
     yourself or hand it to an agent.
   - **Refuses to act if a rebase is already in progress.** It will not abort a
     rebase it did not start — that is somebody's half-finished conflict
-    resolution, and it is not this button's to discard.
+    resolution, and it is not this button's to discard. The refusal names
+    `git rebase --abort`, because you can land in that state without having done
+    anything: stopping or redeploying a project-server kills the `git` child
+    along with it, parking the repository mid-rebase.
 
   A rebase can succeed and still leave you work: restoring the stash can itself
   conflict. That case is reported as a warning rather than a success, because
   "rebased 3 commits" over a conflicted working tree is how a broken tree gets
-  pushed.
+  pushed. A zero exit status is likewise not taken as proof the rebase finished
+  — the route re-checks for a parked rebase afterwards and says so plainly.
+
+  **Do not stop or redeploy a project-server while a rebase is running.** The
+  `git` process is a child of that server and dies with it, leaving the
+  repository parked mid-rebase — clean working tree, no conflict, but detached.
+  `git rebase --abort` restores it and loses nothing. This is worth knowing
+  because the symptom reads like a conflict and is not one.
 
 - **Advisory rows now say what they need from you.** Previously a row you could
   clear by merging a waiting PR looked identical to one needing an afternoon's
