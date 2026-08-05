@@ -140,20 +140,23 @@ test('an unconstrained python dependency is a refresh', () => {
 // undici exactly, so classifyNpm says 'upstream' — but wrangler (within its own
 // allowed range) ships a miniflare with the patch, so npm says fixAvailable.
 
-const AUDIT = (fixAvailable, ghsa = 'GHSA-vmh5-xxxx-yyyy') => ({
-  vulnerabilities: {
-    undici: {
-      name: 'undici',
-      via: [{ name: 'undici', url: `https://github.com/advisories/${ghsa}` }],
-      fixAvailable,
+const AUDIT = (fixAvailable, ghsa = 'GHSA-vmh5-xxxx-yyyy', changed = 1) => ({
+  added: 0, removed: 0, changed,
+  audit: {
+    vulnerabilities: {
+      undici: {
+        name: 'undici',
+        via: [{ name: 'undici', url: `https://github.com/advisories/${ghsa}` }],
+        fixAvailable,
+      },
     },
   },
 });
 
 test('npm audit overrides the range math when a parent bump reaches the fix', () => {
-  const { classifyNpmFromAudit } = require('./fix-reachability');
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
   assert.deepStrictEqual(
-    classifyNpmFromAudit(AUDIT(true), 'undici', 'GHSA-vmh5-xxxx-yyyy'),
+    classifyNpmFromAuditFix(AUDIT(true), 'undici', 'GHSA-vmh5-xxxx-yyyy'),
     { verdict: 'refresh' });
 
   // ...and the range math on the same shape still says upstream, which is
@@ -163,15 +166,32 @@ test('npm audit overrides the range math when a parent bump reaches the fix', ()
     classifyNpm({ lockJson: lock, pkgName: 'undici', patchedVersion: '7.28.0' }), 'upstream');
 });
 
-test('fixAvailable false is a real upstream block', () => {
-  const { classifyNpmFromAudit } = require('./fix-reachability');
+test('fixAvailable: true but a no-op plan is NOT a fix', () => {
+  // The bug this replaced: `npm audit fix` answered "up to date", left the
+  // advisories in place, and told the user to run `npm audit fix` — a loop.
+  // npm reported fixAvailable: true with added/removed/changed all zero, on
+  // both affected projects. npm's PLAN is believed, not its summary.
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
   assert.deepStrictEqual(
-    classifyNpmFromAudit(AUDIT(false), 'undici', 'GHSA-vmh5-xxxx-yyyy'), { verdict: 'upstream' });
+    classifyNpmFromAuditFix(AUDIT(true, 'GHSA-vmh5-xxxx-yyyy', 0), 'undici', 'GHSA-vmh5-xxxx-yyyy'),
+    { verdict: 'upstream' });
+  // ...and a semver-major object is equally powerless when nothing would change.
+  assert.deepStrictEqual(
+    classifyNpmFromAuditFix(
+      AUDIT({ name: 'wrangler', version: '5.0.0', isSemVerMajor: true }, 'GHSA-vmh5-xxxx-yyyy', 0),
+      'undici', 'GHSA-vmh5-xxxx-yyyy'),
+    { verdict: 'upstream' });
+});
+
+test('fixAvailable false is a real upstream block', () => {
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
+  assert.deepStrictEqual(
+    classifyNpmFromAuditFix(AUDIT(false), 'undici', 'GHSA-vmh5-xxxx-yyyy'), { verdict: 'upstream' });
 });
 
 test('a fix needing a semver-major parent bump is a decision, and names its subject', () => {
-  const { classifyNpmFromAudit, breakingCommand } = require('./fix-reachability');
-  const r = classifyNpmFromAudit(
+  const { classifyNpmFromAuditFix, breakingCommand } = require('./fix-reachability');
+  const r = classifyNpmFromAuditFix(
     AUDIT({ name: 'wrangler', version: '5.0.0', isSemVerMajor: true }), 'undici', 'GHSA-vmh5-xxxx-yyyy');
   assert.strictEqual(r.verdict, 'breaking');
   assert.deepStrictEqual(r.fix, { name: 'wrangler', version: '5.0.0' });
@@ -179,9 +199,9 @@ test('a fix needing a semver-major parent bump is a decision, and names its subj
 });
 
 test('a non-major object fixAvailable is just a refresh', () => {
-  const { classifyNpmFromAudit } = require('./fix-reachability');
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
   assert.deepStrictEqual(
-    classifyNpmFromAudit(
+    classifyNpmFromAuditFix(
       AUDIT({ name: 'wrangler', version: '4.119.0', isSemVerMajor: false }), 'undici', 'GHSA-vmh5-xxxx-yyyy'),
     { verdict: 'refresh' });
 });
@@ -189,19 +209,19 @@ test('a non-major object fixAvailable is just a refresh', () => {
 test('an audit entry that does not mention OUR advisory decides nothing', () => {
   // fixAvailable is per package, so an entry about a different GHSA for the same
   // package is not evidence about this one.
-  const { classifyNpmFromAudit } = require('./fix-reachability');
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
   assert.strictEqual(
-    classifyNpmFromAudit(AUDIT(true, 'GHSA-aaaa-bbbb-cccc'), 'undici', 'GHSA-zzzz-yyyy-xxxx'), null);
+    classifyNpmFromAuditFix(AUDIT(true, 'GHSA-aaaa-bbbb-cccc'), 'undici', 'GHSA-zzzz-yyyy-xxxx'), null);
   // Without a GHSA to match on, the package-level verdict is the best available.
-  assert.deepStrictEqual(classifyNpmFromAudit(AUDIT(true), 'undici', null), { verdict: 'refresh' });
+  assert.deepStrictEqual(classifyNpmFromAuditFix(AUDIT(true), 'undici', null), { verdict: 'refresh' });
 });
 
 test('a missing package or malformed audit decides nothing', () => {
-  const { classifyNpmFromAudit } = require('./fix-reachability');
-  assert.strictEqual(classifyNpmFromAudit(AUDIT(true), 'absent', null), null);
-  assert.strictEqual(classifyNpmFromAudit({}, 'undici', null), null);
-  assert.strictEqual(classifyNpmFromAudit(null, 'undici', null), null);
-  assert.strictEqual(classifyNpmFromAudit({ vulnerabilities: { undici: { fixAvailable: 'maybe' } } }, 'undici', null), null);
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
+  assert.strictEqual(classifyNpmFromAuditFix(AUDIT(true), 'absent', null), null);
+  assert.strictEqual(classifyNpmFromAuditFix({}, 'undici', null), null);
+  assert.strictEqual(classifyNpmFromAuditFix(null, 'undici', null), null);
+  assert.strictEqual(classifyNpmFromAuditFix({ vulnerabilities: { undici: { fixAvailable: 'maybe' } } }, 'undici', null), null);
 });
 
 test('refreshCommand for npm is audit fix, not update <pkg>', () => {

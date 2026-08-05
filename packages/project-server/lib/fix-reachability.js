@@ -237,15 +237,16 @@ function classifyPip({ pyprojectText, pkgName, patchedVersion }) {
 // is still sound in — see classifyNpmFromAudit's caller.
 
 /**
- * @param {object} audit  parsed `npm audit --json`
+ * @param {object} dryRun  parsed `npm audit fix --dry-run --json`
  * @param {string} pkgName
  * @param {string|null} ghsaId  when known, require npm to have THIS advisory —
  *        `fixAvailable` is per package, so a package whose entry does not
  *        mention our advisory tells us nothing about our advisory.
  * @returns {{verdict:'refresh'|'breaking'|'upstream', fix?:object}|null}
  */
-function classifyNpmFromAudit(audit, pkgName, ghsaId) {
-  const vulns = audit && audit.vulnerabilities;
+function classifyNpmFromAuditFix(dryRun, pkgName, ghsaId) {
+  if (!dryRun || typeof dryRun !== 'object') return null;
+  const vulns = dryRun.audit && dryRun.audit.vulnerabilities;
   if (!vulns || typeof vulns !== 'object') return null;
   const entry = vulns[pkgName];
   if (!entry || typeof entry !== 'object') return null;
@@ -258,8 +259,22 @@ function classifyNpmFromAudit(audit, pkgName, ghsaId) {
   }
 
   const fa = entry.fixAvailable;
-  if (fa === true) return { verdict: 'refresh' };
   if (fa === false) return { verdict: 'upstream' };
+
+  // The decisive check, and the reason this reads a `--dry-run` rather than a
+  // plain audit: `fixAvailable: true` does NOT mean running the command changes
+  // anything. Reported from a real project — `npm audit fix` answered "up to
+  // date", left the advisories in place, and told the user to run `npm audit
+  // fix` again, which did the same. Both affected projects here reported
+  // fixAvailable: true alongside added/removed/changed all zero.
+  //
+  // So npm's own plan is what gets believed, not its summary of it. If npm
+  // would touch nothing, there is nothing to run, whatever the flag says.
+  const willChange = (Number(dryRun.added) || 0)
+    + (Number(dryRun.removed) || 0)
+    + (Number(dryRun.changed) || 0) > 0;
+  if (!willChange) return { verdict: 'upstream' };
+
   if (fa && typeof fa === 'object') {
     // { name, version, isSemVerMajor } — a fix exists but reaching it means
     // moving an ancestor across a major boundary. Not a refresh, not a wait.
@@ -267,6 +282,7 @@ function classifyNpmFromAudit(audit, pkgName, ghsaId) {
       ? { verdict: 'breaking', fix: { name: fa.name, version: fa.version } }
       : { verdict: 'refresh' };
   }
+  if (fa === true) return { verdict: 'refresh' };
   return null;
 }
 
@@ -305,7 +321,7 @@ module.exports = {
   satisfiesPep440,
   npmRangesFor,
   classifyNpm,
-  classifyNpmFromAudit,
+  classifyNpmFromAuditFix,
   classifyPip,
   pyprojectConstraint,
   refreshCommand,

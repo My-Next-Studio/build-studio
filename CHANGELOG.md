@@ -172,7 +172,8 @@ review, not by an incident.
     and we could not determine which of the above applies. This is the old
     behaviour, now confined to the cases that earn it.
 
-  **For npm the verdict comes from `npm audit`, not from reading the lockfile.**
+  **For npm the verdict comes from `npm audit fix --dry-run`, not from reading
+  the lockfile — and not from npm's `fixAvailable` flag either.**
   That distinction is the whole feature. Asking "does every current parent
   permit the patched version" gets the wrong answer whenever the fix arrives by
   updating an *ancestor*: `miniflare` pins `undici` to an exact version, but

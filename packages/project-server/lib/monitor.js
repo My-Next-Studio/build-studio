@@ -234,7 +234,7 @@ function createMonitor(config, deps = {}) {
         // Dependabot reports dev advisories, so anything that classifies them
         // must see them. Scope is conveyed by the row's own "development
         // dependency" label, not by hiding it.
-        const { stdout } = await execFileAsync('npm', ['audit', '--json', '--include=dev'], {
+        const { stdout } = await execFileAsync('npm', ['audit', 'fix', '--dry-run', '--json', '--include=dev'], {
           cwd: config.projectRoot, timeout: 60000, maxBuffer: 16 * 1024 * 1024,
         });
         return JSON.parse(stdout);
@@ -303,7 +303,7 @@ function createMonitor(config, deps = {}) {
       // that arrive by bumping an ancestor rather than the package itself.
       const audit = auditCache.get().value;
       if (audit) {
-        const r = reach.classifyNpmFromAudit(audit, pkg, alert.ghsaId);
+        const r = reach.classifyNpmFromAuditFix(audit, pkg, alert.ghsaId);
         if (r) {
           if (r.verdict === 'breaking') return { verdict: 'breaking', fix: r.fix };
           return r.verdict;
