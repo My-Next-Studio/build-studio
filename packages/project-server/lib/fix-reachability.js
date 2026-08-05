@@ -218,6 +218,58 @@ function classifyPip({ pyprojectText, pkgName, patchedVersion }) {
   return ok ? 'refresh' : 'upstream';
 }
 
+// ─── npm's own verdict ───────────────────────────────────────────────────────
+//
+// classifyNpm above answers "can the patched version be installed given the
+// parents' CURRENT versions". That is the wrong question, and shipping it was a
+// mistake worth recording: npm is also free to update those parents.
+//
+// Measured on this installation, every single "blocked upstream" row was wrong
+// because of it. `miniflare` pins `undici` to exactly 7.24.8, so the range math
+// called it blocked — but miniflare arrives via `wrangler ^4.98.0`, and a
+// wrangler inside that same range ships a miniflare pinning the patched 7.28.0.
+// One `npm update` away, reported as "nothing you can run".
+//
+// `npm audit --json` answers the right question, with the full registry behind
+// it, and distinguishes the case range math cannot see at all: a fix that
+// requires a semver-major bump of an ancestor, which genuinely is a decision.
+// So for npm we ask npm, and the range math is kept only for the direction it
+// is still sound in — see classifyNpmFromAudit's caller.
+
+/**
+ * @param {object} audit  parsed `npm audit --json`
+ * @param {string} pkgName
+ * @param {string|null} ghsaId  when known, require npm to have THIS advisory —
+ *        `fixAvailable` is per package, so a package whose entry does not
+ *        mention our advisory tells us nothing about our advisory.
+ * @returns {{verdict:'refresh'|'breaking'|'upstream', fix?:object}|null}
+ */
+function classifyNpmFromAudit(audit, pkgName, ghsaId) {
+  const vulns = audit && audit.vulnerabilities;
+  if (!vulns || typeof vulns !== 'object') return null;
+  const entry = vulns[pkgName];
+  if (!entry || typeof entry !== 'object') return null;
+
+  if (ghsaId) {
+    const via = Array.isArray(entry.via) ? entry.via : [];
+    const mentioned = via.some((v) => v && typeof v === 'object'
+      && String(v.url || '').toUpperCase().includes(String(ghsaId).toUpperCase()));
+    if (!mentioned) return null;
+  }
+
+  const fa = entry.fixAvailable;
+  if (fa === true) return { verdict: 'refresh' };
+  if (fa === false) return { verdict: 'upstream' };
+  if (fa && typeof fa === 'object') {
+    // { name, version, isSemVerMajor } — a fix exists but reaching it means
+    // moving an ancestor across a major boundary. Not a refresh, not a wait.
+    return fa.isSemVerMajor
+      ? { verdict: 'breaking', fix: { name: fa.name, version: fa.version } }
+      : { verdict: 'refresh' };
+  }
+  return null;
+}
+
 /**
  * The command that actually resolves a `refresh`. Shown verbatim in the UI —
  * a badge saying "one command" without naming it just relocates the puzzle.
@@ -228,10 +280,22 @@ function refreshCommand(ecosystem, pkgName, manifestPath) {
     : null;
   const cd = dir ? `cd ${dir} && ` : '';
   switch (String(ecosystem || '').toLowerCase()) {
-    case 'npm': return `${cd}npm update ${pkgName}`;
+    // `npm audit fix` rather than `npm update <pkg>`: the fix frequently lies in
+    // bumping an ANCESTOR, not the vulnerable package itself, and `npm update
+    // undici` does nothing when miniflare pins it. audit fix resolves the whole
+    // chain, and is the command npm's own verdict is describing.
+    case 'npm': return `${cd}npm audit fix`;
     case 'pip': return `${cd}uv lock --upgrade-package ${pkgName}`;
     default: return null;
   }
+}
+
+/** The targeted install a `breaking` row needs, so the review has a subject. */
+function breakingCommand(fix, manifestPath) {
+  if (!fix || !fix.name || !fix.version) return null;
+  const dir = manifestPath && manifestPath.includes('/')
+    ? manifestPath.slice(0, manifestPath.lastIndexOf('/')) : null;
+  return `${dir ? `cd ${dir} && ` : ''}npm install ${fix.name}@${fix.version}`;
 }
 
 module.exports = {
@@ -241,7 +305,9 @@ module.exports = {
   satisfiesPep440,
   npmRangesFor,
   classifyNpm,
+  classifyNpmFromAudit,
   classifyPip,
   pyprojectConstraint,
   refreshCommand,
+  breakingCommand,
 };

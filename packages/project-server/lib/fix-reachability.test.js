@@ -135,10 +135,86 @@ test('an unconstrained python dependency is a refresh', () => {
   }), 'refresh');
 });
 
+// ─── npm's own verdict ───────────────────────────────────────────────────────
+// The case that proved the range math asks the wrong question: miniflare pins
+// undici exactly, so classifyNpm says 'upstream' — but wrangler (within its own
+// allowed range) ships a miniflare with the patch, so npm says fixAvailable.
+
+const AUDIT = (fixAvailable, ghsa = 'GHSA-vmh5-xxxx-yyyy') => ({
+  vulnerabilities: {
+    undici: {
+      name: 'undici',
+      via: [{ name: 'undici', url: `https://github.com/advisories/${ghsa}` }],
+      fixAvailable,
+    },
+  },
+});
+
+test('npm audit overrides the range math when a parent bump reaches the fix', () => {
+  const { classifyNpmFromAudit } = require('./fix-reachability');
+  assert.deepStrictEqual(
+    classifyNpmFromAudit(AUDIT(true), 'undici', 'GHSA-vmh5-xxxx-yyyy'),
+    { verdict: 'refresh' });
+
+  // ...and the range math on the same shape still says upstream, which is
+  // exactly the disagreement this exists to settle.
+  const lock = { packages: { 'node_modules/miniflare': { dependencies: { undici: '7.24.8' } } } };
+  assert.strictEqual(
+    classifyNpm({ lockJson: lock, pkgName: 'undici', patchedVersion: '7.28.0' }), 'upstream');
+});
+
+test('fixAvailable false is a real upstream block', () => {
+  const { classifyNpmFromAudit } = require('./fix-reachability');
+  assert.deepStrictEqual(
+    classifyNpmFromAudit(AUDIT(false), 'undici', 'GHSA-vmh5-xxxx-yyyy'), { verdict: 'upstream' });
+});
+
+test('a fix needing a semver-major parent bump is a decision, and names its subject', () => {
+  const { classifyNpmFromAudit, breakingCommand } = require('./fix-reachability');
+  const r = classifyNpmFromAudit(
+    AUDIT({ name: 'wrangler', version: '5.0.0', isSemVerMajor: true }), 'undici', 'GHSA-vmh5-xxxx-yyyy');
+  assert.strictEqual(r.verdict, 'breaking');
+  assert.deepStrictEqual(r.fix, { name: 'wrangler', version: '5.0.0' });
+  assert.strictEqual(breakingCommand(r.fix, 'package-lock.json'), 'npm install wrangler@5.0.0');
+});
+
+test('a non-major object fixAvailable is just a refresh', () => {
+  const { classifyNpmFromAudit } = require('./fix-reachability');
+  assert.deepStrictEqual(
+    classifyNpmFromAudit(
+      AUDIT({ name: 'wrangler', version: '4.119.0', isSemVerMajor: false }), 'undici', 'GHSA-vmh5-xxxx-yyyy'),
+    { verdict: 'refresh' });
+});
+
+test('an audit entry that does not mention OUR advisory decides nothing', () => {
+  // fixAvailable is per package, so an entry about a different GHSA for the same
+  // package is not evidence about this one.
+  const { classifyNpmFromAudit } = require('./fix-reachability');
+  assert.strictEqual(
+    classifyNpmFromAudit(AUDIT(true, 'GHSA-aaaa-bbbb-cccc'), 'undici', 'GHSA-zzzz-yyyy-xxxx'), null);
+  // Without a GHSA to match on, the package-level verdict is the best available.
+  assert.deepStrictEqual(classifyNpmFromAudit(AUDIT(true), 'undici', null), { verdict: 'refresh' });
+});
+
+test('a missing package or malformed audit decides nothing', () => {
+  const { classifyNpmFromAudit } = require('./fix-reachability');
+  assert.strictEqual(classifyNpmFromAudit(AUDIT(true), 'absent', null), null);
+  assert.strictEqual(classifyNpmFromAudit({}, 'undici', null), null);
+  assert.strictEqual(classifyNpmFromAudit(null, 'undici', null), null);
+  assert.strictEqual(classifyNpmFromAudit({ vulnerabilities: { undici: { fixAvailable: 'maybe' } } }, 'undici', null), null);
+});
+
+test('refreshCommand for npm is audit fix, not update <pkg>', () => {
+  // `npm update undici` does nothing when miniflare pins it; the fix is upstream
+  // in the chain, which is what audit fix resolves.
+  assert.strictEqual(refreshCommand('npm', 'undici', 'package-lock.json'), 'npm audit fix');
+});
+
 test('refreshCommand names the directory the manifest lives in', () => {
   assert.strictEqual(
     refreshCommand('pip', 'cryptography', 'tools/remote-config/uv.lock'),
     'cd tools/remote-config && uv lock --upgrade-package cryptography');
-  assert.strictEqual(refreshCommand('npm', '@babel/core', 'package-lock.json'), 'npm update @babel/core');
+  assert.strictEqual(refreshCommand('npm', '@babel/core', 'package-lock.json'), 'npm audit fix');
+  assert.strictEqual(refreshCommand('npm', 'x', 'apps/web/package-lock.json'), 'cd apps/web && npm audit fix');
   assert.strictEqual(refreshCommand('cargo', 'x', 'Cargo.lock'), null, 'unknown ecosystems get no command');
 });

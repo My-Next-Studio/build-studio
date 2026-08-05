@@ -160,29 +160,44 @@ review, not by an incident.
   That one badge was covering two situations with opposite answers, and the
   common one was not a decision at all:
 
-  - **run one command** — every constraint in the lockfile already permits the
-    patched version, so nothing is blocked and the lockfile merely needs
-    regenerating. The row now prints the exact command.
-  - **blocked upstream** — some parent's range excludes the patch, so nothing
-    you run locally can resolve it until that parent ships a wider range.
+  - **run one command** — a fix is reachable without a breaking change. The row
+    prints the exact command (`npm audit fix`, or a `uv lock --upgrade-package`
+    for Python).
+  - **breaking bump — review** — a fix exists, but only by moving a parent
+    across a major version. A real decision, and the row names which parent and
+    to what version.
+  - **blocked upstream** — no fix is reachable at all until someone upstream
+    ships a release.
   - **no PR — decide** — the honest remainder: a patch exists, no PR appeared,
-    and the lockfile could not be read well enough to say which of the two
-    it is. This is the old behaviour, now confined to the cases that earn it.
+    and we could not determine which of the above applies. This is the old
+    behaviour, now confined to the cases that earn it.
 
-  Of the three "decisions" on this installation, two were one-command lockfile
-  refreshes — a direct `cryptography>=42.0` whose lock pinned an older build,
-  and a transitive `@babel/core` whose parents already allowed the fix. Only
-  `esbuild` was genuinely blocked, by `vite` and `tsx` both wanting `^0.27.0`
-  against a `0.28.1` fix. Demanding judgement where the answer is one command is
-  how a list teaches you to stop opening it.
+  **For npm the verdict comes from `npm audit`, not from reading the lockfile.**
+  That distinction is the whole feature. Asking "does every current parent
+  permit the patched version" gets the wrong answer whenever the fix arrives by
+  updating an *ancestor*: `miniflare` pins `undici` to an exact version, but
+  `miniflare` comes in via `wrangler`, and a wrangler within the range already
+  in your `package.json` ships a miniflare carrying the patch. Reading the
+  lockfile sees a hard pin and reports a dead end; npm sees a one-command fix.
+  Every "blocked upstream" row on this installation was of that shape.
 
-  **The analysis refuses to guess.** A range form it does not confidently
-  understand, an ecosystem it has no reader for (only npm and pip today), an
-  unreadable manifest — each falls back to the vaguer label rather than
-  asserting something wrong. A false "run one command" costs you a command that
-  does nothing; a false "blocked upstream" hides a fix. Saying *"I could not
-  tell"* is cheaper than either, so it is what happens whenever the answer is
-  not certain.
+  The lockfile analysis is kept only for the direction it is still sound in — if
+  every current parent already permits the patch, regenerating really does fix
+  it — and is consulted only when `npm audit` is unavailable. Its "blocked"
+  answer is no longer trusted at all.
+
+  Measured here, every advisory previously filed under "pinned — decide" turned
+  out to be clearable: 15 npm ones with a single `npm audit fix`, and a
+  `cryptography>=42.0` whose lockfile simply pinned an older build. Demanding
+  judgement where the answer is one command is how a list teaches you to stop
+  opening it.
+
+  **The analysis refuses to guess.** An ecosystem it has no reader for (only npm
+  and pip today), an unreadable manifest, an `npm audit` entry that does not
+  mention the specific advisory — each falls back to the vaguer label rather
+  than asserting something wrong. A false "run one command" costs you a command
+  that does nothing; a false "blocked upstream" hides a fix, which is worse.
+  Saying *"I could not tell"* is cheaper than either.
 
   Sorting changed with it: **blocked upstream now sorts last**, below even "no
   fix yet". It is the one row that re-reading cannot change, and it is excluded
@@ -299,6 +314,18 @@ Electron setup, where nothing is needed.
   no semver dependency for the same reason — a hand-checked narrow grammar that
   opts out loudly is safer here than a broad one that always answers. If you add
   an ecosystem, preserve that: return null rather than a plausible guess.
+
+- **Ask the package manager before reading its lockfile.** The npm path went the
+  other way first and was wrong on every row: reading the lockfile answers "can
+  the patch be installed given the parents' *current* versions", when the
+  question is "given their *allowed* versions" — and the two differ exactly when
+  the fix comes from bumping an ancestor. `npm audit --json` answers the real
+  question with the registry behind it. If you add an ecosystem, look for its
+  equivalent (`pip-audit`, `cargo audit`) before writing range arithmetic.
+
+- **`npm audit --json` exits non-zero whenever it finds anything**, which is the
+  only case it is ever called in — read the report off the rejected exec's
+  stdout, not from a success path that will never run.
 
 - **The CORS allowlist and the WebSocket check must stay in step.** They read
   the same allowlist from `lib/allowed-origins.js` on purpose. If you add an

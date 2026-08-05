@@ -209,6 +209,33 @@ function createMonitor(config, deps = {}) {
 
   const alertsCache = createCache({ fetch: fetchDependabot, ttlFor: () => TTL_ALERTS });
 
+  /**
+   * `npm audit --json` for this project.
+   *
+   * Exits NON-ZERO whenever any vulnerability is found — which is the only case
+   * we ever call it in — so the report has to be read off a rejected exec. The
+   * useful output is on stdout either way; only an empty stdout is a real
+   * failure.
+   *
+   * Behind a cache because it is a network call, and lazily triggered: `get()`
+   * is reached only from the npm branch of reachabilityOf, so a project with no
+   * npm advisories never runs it at all.
+   */
+  const auditCache = createCache({
+    fetch: async () => {
+      try {
+        const { stdout } = await execFileAsync('npm', ['audit', '--json'], {
+          cwd: config.projectRoot, timeout: 60000, maxBuffer: 16 * 1024 * 1024,
+        });
+        return JSON.parse(stdout);
+      } catch (e) {
+        if (e && typeof e.stdout === 'string' && e.stdout.trim()) return JSON.parse(e.stdout);
+        throw e;
+      }
+    },
+    ttlFor: () => TTL_ALERTS,
+  });
+
   /** CI state for the CI/CD tab — push runs only. Never blocks. */
   function getCi() {
     if (!repo()) return { configured: false, run: null, jobs: [], stale: false };
@@ -262,13 +289,29 @@ function createMonitor(config, deps = {}) {
     if (!pkg || !patchedVersion) return null;
 
     if (eco === 'npm') {
-      // The advisory names package-lock.json; a repo using yarn or pnpm has no
-      // such file and correctly falls through to null.
+      // npm's own verdict first — it knows the registry, so it can see fixes
+      // that arrive by bumping an ancestor rather than the package itself.
+      const audit = auditCache.get().value;
+      if (audit) {
+        const r = reach.classifyNpmFromAudit(audit, pkg, alert.ghsaId);
+        if (r) {
+          if (r.verdict === 'breaking') return { verdict: 'breaking', fix: r.fix };
+          return r.verdict;
+        }
+      }
+
+      // Audit unavailable or silent on this advisory. Fall back to the lockfile
+      // range math, but honour ONLY its 'refresh' answer: that direction stays
+      // sound (if every current parent already permits the patch, regenerating
+      // the lockfile really does fix it), while its 'upstream' answer is the one
+      // that was wrong — it cannot see a fix reachable by updating an ancestor.
       const lockPath = manifestPath && manifestPath.endsWith('package-lock.json')
         ? manifestPath : 'package-lock.json';
       if (!manifestCache.has(lockPath)) manifestCache.set(lockPath, readProjectFile(lockPath));
       const lockJson = manifestCache.get(lockPath);
-      return lockJson ? reach.classifyNpm({ lockJson, pkgName: pkg, patchedVersion }) : null;
+      if (!lockJson) return null;
+      return reach.classifyNpm({ lockJson, pkgName: pkg, patchedVersion }) === 'refresh'
+        ? 'refresh' : null;
     }
 
     if (eco === 'pip') {

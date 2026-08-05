@@ -27,7 +27,7 @@ interface Alert {
   url: string | null
   since: string | null
   /** How much of you this row needs — see FIX_LABEL in monitor-alerts.js. */
-  fix?: 'ready' | 'major' | 'refresh' | 'upstream' | 'blocked' | 'none' | 'inactive'
+  fix?: 'ready' | 'major' | 'refresh' | 'breaking' | 'upstream' | 'blocked' | 'none' | 'inactive'
   /** For a `refresh` row: the exact command that clears it. */
   command?: string | null
   prNumber?: number | null
@@ -45,6 +45,9 @@ const FIX_BADGE: Record<string, { label: string; color: string }> = {
   // that made the list feel unactionable: two of three such rows here were a
   // single command, and calling them decisions is what taught you to skip them.
   refresh: { label: 'run one command', color: 'var(--green)' },
+  // A fix exists, but reaching it means moving a parent across a major version.
+  // That is a real decision — the only one in this group that earns orange.
+  breaking: { label: 'breaking bump — review', color: 'var(--orange)' },
   // Deliberately not orange. Orange means "you must decide"; this needs nothing
   // from you until someone else ships a release, and dressing it as a pending
   // decision is what makes a list feel like unpaid debt.
@@ -140,7 +143,8 @@ export function MonitorTab() {
   // you owe anyone, and including it in a "needs you" total is how a number
   // stays stubbornly non-zero no matter what you do — which is how people stop
   // believing the number.
-  const needsYou = alerts.filter((a) => a.fix === 'major' || a.fix === 'blocked').length
+  const needsYou = alerts.filter(
+    (a) => a.fix === 'major' || a.fix === 'blocked' || a.fix === 'breaking').length
   const notRunning = projects.filter((p) => !p.running)
 
   return (

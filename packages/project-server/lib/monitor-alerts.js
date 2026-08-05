@@ -16,9 +16,9 @@
  * patched last week is a Monitor tab you learn to ignore.
  */
 
-/** Worst first. The Monitor tab groups on this, so the order is the UI's order. */
-const { refreshCommand } = require('./fix-reachability');
+const { refreshCommand, breakingCommand } = require('./fix-reachability');
 
+/** Worst first. The Monitor tab groups on this, so the order is the UI's order. */
 const SEVERITY_ORDER = ['critical', 'high', 'moderate', 'low', 'info'];
 
 /**
@@ -245,11 +245,19 @@ function withFixReadiness(alerts, prs, { autofixEnabled, reachability } = {}) {
       if (typeof reachability === 'function') {
         try { verdict = reachability(a); } catch { verdict = null; }
       }
-      fix = verdict === 'refresh' ? 'refresh' : verdict === 'upstream' ? 'upstream' : 'blocked';
+      // A 'breaking' verdict arrives as an object, because unlike the others it
+      // carries WHICH ancestor has to move and to what — a review needs a subject.
+      const name = verdict && typeof verdict === 'object' ? verdict.verdict : verdict;
+      fix = name === 'refresh' ? 'refresh'
+        : name === 'upstream' ? 'upstream'
+        : name === 'breaking' ? 'breaking'
+        : 'blocked';
+      // Name the command. "One command fixes this" without saying which one
+      // just moves the puzzle somewhere less convenient.
       if (fix === 'refresh') {
-        // Name the command. "One command fixes this" without saying which one
-        // just moves the puzzle somewhere less convenient.
         command = refreshCommand(a.ecosystem, a.pkg, a.manifestPath);
+      } else if (fix === 'breaking') {
+        command = breakingCommand(verdict && verdict.fix, a.manifestPath);
       }
     }
     return {
@@ -271,6 +279,7 @@ const FIX_LABEL = {
   ready: 'fix ready — merge',
   major: 'major bump — needs review',
   refresh: 'lockfile out of date — one command',
+  breaking: 'fix needs a breaking bump of a parent — review',
   upstream: 'blocked upstream — nothing to run',
   blocked: 'patch exists, no PR — could not read the lockfile',
   none: 'no fix available yet',
@@ -309,6 +318,10 @@ function deriveDependabotAlerts(alerts, project) {
         patchedVersion: a.security_vulnerability?.first_patched_version?.identifier || null,
         ecosystem: a.dependency?.package?.ecosystem || null,
         manifestPath: a.dependency?.manifest_path || null,
+        // Lets npm's audit report be matched to THIS advisory rather than just
+        // to the package — `fixAvailable` is per package, so an entry that does
+        // not mention our GHSA says nothing about our GHSA.
+        ghsaId: a.security_advisory?.ghsa_id || null,
         title: `${pkg} — ${a.security_advisory?.summary || 'security advisory'}`,
         // Runtime vs development is the first thing you want when triaging, and
         // it is the difference between "ships to users" and "build-time only".
@@ -408,7 +421,7 @@ function autofixDisabledAlert(project, repo, openCount) {
 // 'refresh' sits just above 'ready' — it is a single command, so it belongs
 // with the work you can clear rather than the work you must think about.
 const FIX_PRIORITY = {
-  major: 0, blocked: 1, none: 2, inactive: 2.5, refresh: 2.8, ready: 3, upstream: 4,
+  major: 0, breaking: 0.5, blocked: 1, none: 2, inactive: 2.5, refresh: 2.8, ready: 3, upstream: 4,
 };
 
 function sortAlerts(alerts) {
