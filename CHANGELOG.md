@@ -92,18 +92,6 @@ project-servers, and the answer was wider than the README claimed.
 No evidence any of this was exploited; it is reachable-in-principle, found by
 review, not by an incident.
 
-### Notes for forks
-
-- **`PUT /api/file` is stricter than it was, and has no in-tree caller.**
-  Nothing in the hub calls it — which is why the write restrictions above could
-  be drawn tightly without breaking a screen. If your fork writes through it,
-  the limits to check are: text extensions only, and no path segment in the
-  blocked set. Loosen `BLOCKED_SEGMENTS` or the extension test in
-  `lib/api/files.js` deliberately rather than reverting to a `startsWith` check.
-- **New containment guards must go through `assertInside` (`lib/path-guard.js`),
-  never `abs.startsWith(base)`.** The latter reads as correct and is not; this
-  release exists partly because four call sites were written that way.
-
 ### Added
 
 - **Advisory rows now say what they need from you.** Previously a row you could
@@ -159,8 +147,6 @@ review, not by an incident.
   correct for scheduled-job alerts, since GitHub only runs `schedule` workflows
   on the default branch.
 
-### Fixed
-
 - **Leaving the hub and coming back no longer drops you on Projects.** The home
   view never persisted its tab, so every return from a project reset it — which
   went unnoticed while Projects was where you wanted to be anyway, and became
@@ -193,6 +179,23 @@ restarted, that project is still reachable from any browser tab.
 `BUILD_STUDIO_ALLOWED_ORIGINS` to that origin before restarting, or the hub's
 SSE connections and terminals will be refused. The default covers the standard
 Electron setup, where nothing is needed.
+
+### Notes for forks
+
+- **New containment guards must go through `assertInside`
+  (`lib/path-guard.js`), never `abs.startsWith(base)`.** The latter reads as
+  correct and is not. The helper and its tests predate this release; four call
+  sites simply never used it, which is most of why this entry exists.
+- **`PUT /api/file` is stricter than it was, and has no in-tree caller.**
+  Nothing in the hub calls it — which is why the write restrictions could be
+  drawn tightly without breaking a screen. If your fork writes through it, the
+  limits are: text extensions only, and no path segment in `BLOCKED_SEGMENTS`.
+  Widen those constants deliberately rather than removing the guard.
+- **The CORS allowlist and the WebSocket check must stay in step.** They read
+  the same allowlist from `lib/allowed-origins.js` on purpose. If you add an
+  origin for one, you have added it for the other — and if you relax only the
+  CORS half, you have reopened nothing, while relaxing only the WebSocket half
+  reopens everything, since that socket is a shell.
 
 ---
 
@@ -246,6 +249,18 @@ could not be told about a failure you were not already watching.
   where it belongs. Nothing to configure; `ci_workflow` still narrows the light
   if you have set it.
 
+- **`deployment.ci_workflow` accepts a filename, a path, or the workflow's
+  display name.** All three now resolve: `deploy-pages.yml`,
+  `.github/workflows/deploy-pages.yml`, or `Deploy Pages`. Previously the value
+  was handed straight to `gh run list --workflow`, which accepts the first two
+  but not reliably the third; the value is now mapped through the repository's
+  real workflow list before anything is filtered.
+
+  Worth knowing because the two spellings are not derivable from each other — a
+  workflow displayed as "Deploy to Pages" can live in `deploy-pages.yml` — so if
+  you ever saw a blank CI light on a project with `ci_workflow` set, a mismatch
+  between the two was the likely cause and is no longer possible.
+
 - **`GET /api/deployment/ci-status` is served from cache.** It used to shell out
   to `gh` twice, synchronously, on every request. That was survivable while it
   only ran with the CI/CD tab open; now that CI state feeds the tab selector,
@@ -288,6 +303,10 @@ could not be told about a failure you were not already watching.
 `cd packages/desktop && node inject-resources.js`, then restart the app *and*
 the project-servers (the cached poller lives in the project-server).
 
+If you are pulling this day and 2026-08-05 together — which is likely, as they
+were published in one go — do the 2026-08-05 steps instead. They are the same
+rebuild plus a mandatory project-server restart, and they cover this section.
+
 macOS will ask permission the first time a notification fires.
 
 **In each managed project** — nothing to do, but two things are worth knowing.
@@ -305,6 +324,13 @@ advisories need Dependabot alerts enabled on the repository — see Known issues
   (GitHub's Dependabot `number`, never the package name) — keying on the
   package means acknowledging one advisory silently swallows the next one for
   that dependency, which is the one you most want to see.
+
+- **New API surface.** On each project-server: `GET /api/monitor/alerts`,
+  `GET /api/monitor/summary`, `POST /api/monitor/enable-alerts`. On the hub:
+  `GET /api/monitor` (fans out across projects) and
+  `POST /api/monitor/enable-alerts`. `GET /api/global-status` gained `ci` and
+  `alerts` fields on each project — both optional and independently fetched, so
+  a monitor failure cannot cost you the workflow status that route existed for.
 
 - **Never poll GitHub from a UI cadence.** `lib/github-cache.js` exists so the
   hub can poll every 6 seconds while GitHub is queried once per TTL. Reading
