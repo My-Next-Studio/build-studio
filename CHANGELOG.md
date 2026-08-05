@@ -327,6 +327,13 @@ Electron setup, where nothing is needed.
   only case it is ever called in — read the report off the rejected exec's
   stdout, not from a success path that will never run.
 
+- **Pass `--include=dev` to any npm command the project-server runs.** It is
+  spawned with `NODE_ENV=production`, which npm reads as `--omit=dev` — so an
+  audit reports *zero* vulnerabilities on a project whose advisories are all
+  devDependencies, and every dependent check silently degrades to "could not
+  tell" instead of failing. Build tooling is exactly where these advisories
+  live, so the omission is close to total.
+
 - **The CORS allowlist and the WebSocket check must stay in step.** They read
   the same allowlist from `lib/allowed-origins.js` on purpose. If you add an
   origin for one, you have added it for the other — and if you relax only the

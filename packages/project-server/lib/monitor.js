@@ -224,7 +224,17 @@ function createMonitor(config, deps = {}) {
   const auditCache = createCache({
     fetch: async () => {
       try {
-        const { stdout } = await execFileAsync('npm', ['audit', '--json'], {
+        // `--include=dev` is REQUIRED, not a preference. The project-server runs
+        // with NODE_ENV=production, and npm reads that as `--omit=dev`: the audit
+        // then reports zero vulnerabilities on a project whose every advisory is
+        // a devDependency, and every row silently falls back to "could not tell".
+        // Observed exactly that on first deploy — 15 advisories, 0 packages
+        // reported, because build tooling is where these advisories live.
+        //
+        // Dependabot reports dev advisories, so anything that classifies them
+        // must see them. Scope is conveyed by the row's own "development
+        // dependency" label, not by hiding it.
+        const { stdout } = await execFileAsync('npm', ['audit', '--json', '--include=dev'], {
           cwd: config.projectRoot, timeout: 60000, maxBuffer: 16 * 1024 * 1024,
         });
         return JSON.parse(stdout);
