@@ -21,6 +21,35 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-08-05 — The home view remembers which tab you were on
+
+### Fixed
+
+- **Leaving the hub and coming back no longer drops you on Projects.** The home
+  view never persisted its tab, so every return from a project reset it — which
+  went unnoticed while Projects was where you wanted to be anyway, and became
+  obvious as soon as there was a Monitor tab worth returning to. Per-project
+  dashboards have persisted their function and tab for a while; home now does
+  the same, in `localStorage` under `build-studio:home-tab`.
+
+  A stored tab that no longer exists falls back to Projects rather than
+  rendering nothing, and a first launch (`?onboarding=1`) still lands on
+  Projects whatever was stored.
+
+- **The Monitor tab no longer says "nothing to handle" before it has looked.**
+  Between mount and the first poll returning, an empty list was reported as
+  all-clear. It now says "checking…" until it actually knows.
+
+### Upgrade steps
+
+**In Build Studio** — hub-only change: `cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`, then restart the app. The
+project-servers can keep running.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-08-04 — A Monitor tab, and CI that tells you when it breaks
 
 Two monitoring gaps closed together, because both came down to the same missing

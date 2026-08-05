@@ -123,7 +123,12 @@ export function MonitorTab() {
           Alerts needing attention
         </div>
         <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-          {actionable.length === 0 ? 'nothing to handle' : `${actionable.length} open`}
+          {/* "nothing to handle" is a claim, and before the first poll returns
+              we have not earned it — an empty list we have not fetched yet
+              reads exactly like all-clear. Say we are still looking instead. */}
+          {!loaded ? 'checking…'
+            : actionable.length === 0 ? 'nothing to handle'
+            : `${actionable.length} open`}
         </div>
       </div>
 
