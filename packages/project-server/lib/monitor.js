@@ -210,6 +210,26 @@ function createMonitor(config, deps = {}) {
   const alertsCache = createCache({ fetch: fetchDependabot, ttlFor: () => TTL_ALERTS });
 
   /**
+   * What a plain `npm update` would land, as npm's own plan.
+   *
+   * Consulted only when `npm audit fix` has nothing to offer. `--json` is
+   * ignored by `npm update` (npm 11), so this is the human-readable plan and it
+   * gets parsed as text — see parseNpmUpdatePlan.
+   *
+   * Nothing here proposes widening a range: `npm update` moves only within what
+   * package.json already declares.
+   */
+  const updatePlanCache = createCache({
+    fetch: async () => {
+      const { stdout } = await execFileAsync(
+        'npm', ['update', '--dry-run', '--include=dev'],
+        { cwd: config.projectRoot, timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+      return String(stdout || '');
+    },
+    ttlFor: () => TTL_ALERTS,
+  });
+
+  /**
    * `npm audit --json` for this project.
    *
    * Exits NON-ZERO whenever any vulnerability is found — which is the only case
@@ -289,6 +309,14 @@ function createMonitor(config, deps = {}) {
   // same multi-megabyte package-lock.json thirty times on every poll.
   let manifestCache = new Map();
 
+  /** The project's package-lock.json, read once per derivation pass. */
+  function readLock(manifestPath) {
+    const lockPath = manifestPath && manifestPath.endsWith('package-lock.json')
+      ? manifestPath : 'package-lock.json';
+    if (!manifestCache.has(lockPath)) manifestCache.set(lockPath, readProjectFile(lockPath));
+    return manifestCache.get(lockPath);
+  }
+
   /**
    * Whether an advisory's patch is installable today. Returns null — meaning
    * "keep the vaguer label" — for any ecosystem or manifest we cannot read.
@@ -310,15 +338,35 @@ function createMonitor(config, deps = {}) {
         }
       }
 
+      // audit fix gave up (or said nothing). It only bumps packages along the
+      // advisory's own chain, so it misses a fix that arrives by updating an
+      // unrelated-looking parent already permitted by package.json — which is
+      // how `npm update tsx` cleared an esbuild advisory that audit fix could
+      // not touch. Ask what a plain `npm update` would land.
+      const planText = updatePlanCache.get().value;
+      if (planText) {
+        const planned = reach.parseNpmUpdatePlan(planText);
+        if (reach.classifyNpmFromUpdatePlan(planned, pkg, patchedVersion) === 'refresh') {
+          const lockJson = readLock(manifestPath);
+          let targets = [];
+          try {
+            if (lockJson) targets = reach.npmUpdateTargets(planned, JSON.parse(lockJson), pkg);
+          } catch { /* fall through to the untargeted command */ }
+          return {
+            verdict: 'refresh',
+            // Name the parents rather than suggesting a bare `npm update`, which
+            // would also move every other dependency in the project.
+            command: targets.length ? `npm update ${targets.join(' ')}` : 'npm update',
+          };
+        }
+      }
+
       // Audit unavailable or silent on this advisory. Fall back to the lockfile
       // range math, but honour ONLY its 'refresh' answer: that direction stays
       // sound (if every current parent already permits the patch, regenerating
       // the lockfile really does fix it), while its 'upstream' answer is the one
       // that was wrong — it cannot see a fix reachable by updating an ancestor.
-      const lockPath = manifestPath && manifestPath.endsWith('package-lock.json')
-        ? manifestPath : 'package-lock.json';
-      if (!manifestCache.has(lockPath)) manifestCache.set(lockPath, readProjectFile(lockPath));
-      const lockJson = manifestCache.get(lockPath);
+      const lockJson = readLock(manifestPath);
       if (!lockJson) return null;
       return reach.classifyNpm({ lockJson, pkgName: pkg, patchedVersion }) === 'refresh'
         ? 'refresh' : null;

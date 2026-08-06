@@ -286,6 +286,74 @@ function classifyNpmFromAuditFix(dryRun, pkgName, ghsaId) {
   return null;
 }
 
+// ─── What `npm update` would do ──────────────────────────────────────────────
+//
+// `npm audit fix` is not the last word, and believing it was left a real fix
+// reported as "blocked upstream" for a second time.
+//
+// audit fix only bumps packages it can reach along the ADVISORY's own dependency
+// chain. It will not update an unrelated-looking parent that merely happens to
+// carry a newer copy of the vulnerable package. Observed: esbuild 0.27.4 was
+// flagged, `npm audit fix` planned nothing — but `tsx` was declared `^4.21.0`,
+// and tsx 4.23.8 (already inside that range) requires `esbuild ~0.28.0`. One
+// `npm update tsx` moved esbuild to 0.28.1 and cleared the advisory.
+//
+// So when audit fix gives up, ask what `npm update` would do. It respects the
+// ranges already in package.json — nothing here proposes widening them — and
+// its plan is again the evidence, not a summary of one.
+//
+// `npm update --dry-run` ignores `--json` (verified on npm 11), so the plan
+// arrives as lines of `change <name> <from> => <to>` / `add <name> <version>`.
+
+/** Parse the plan into name → resulting version. Unrecognised lines are skipped. */
+function parseNpmUpdatePlan(text) {
+  const planned = new Map();
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    let m = /^change\s+(\S+)\s+(\S+)\s*=>\s*(\S+)$/.exec(line);
+    if (m) { planned.set(m[1], m[3]); continue; }
+    m = /^add\s+(\S+)\s+(\S+)$/.exec(line);
+    if (m) { planned.set(m[1], m[2]); }
+  }
+  return planned;
+}
+
+/**
+ * Would `npm update` land a version at or past the patch?
+ * @returns {'refresh'|null} null = no opinion, keep whatever the caller had
+ */
+function classifyNpmFromUpdatePlan(planned, pkgName, patchedVersion) {
+  if (!(planned instanceof Map) || !pkgName || !patchedVersion) return null;
+  const to = planned.get(pkgName);
+  const a = parseVersion(to);
+  const b = parseVersion(patchedVersion);
+  if (!a || !b) return null;
+  return compareVersions(a, b) >= 0 ? 'refresh' : null;
+}
+
+/** `node_modules/a/node_modules/b` → `b`; scoped names survive intact. */
+function packageNameFromLockKey(key) {
+  const i = String(key || '').lastIndexOf('node_modules/');
+  return i === -1 ? null : key.slice(i + 'node_modules/'.length) || null;
+}
+
+/**
+ * The narrowest command that does the job: the parents of the vulnerable
+ * package that this plan would actually move. Bare `npm update` would work too,
+ * but it also moves every other dependency in the project — a much larger
+ * action than the row is asking for, and not one to suggest casually.
+ */
+function npmUpdateTargets(planned, lock, pkgName) {
+  const ranges = npmRangesFor(lock, pkgName);
+  if (!ranges || !(planned instanceof Map)) return [];
+  const names = new Set();
+  for (const { owner } of ranges) {
+    const name = packageNameFromLockKey(owner);
+    if (name && planned.has(name)) names.add(name);
+  }
+  return [...names].sort();
+}
+
 /**
  * The command that actually resolves a `refresh`. Shown verbatim in the UI —
  * a badge saying "one command" without naming it just relocates the puzzle.
@@ -322,6 +390,10 @@ module.exports = {
   npmRangesFor,
   classifyNpm,
   classifyNpmFromAuditFix,
+  parseNpmUpdatePlan,
+  classifyNpmFromUpdatePlan,
+  npmUpdateTargets,
+  packageNameFromLockKey,
   classifyPip,
   pyprojectConstraint,
   refreshCommand,

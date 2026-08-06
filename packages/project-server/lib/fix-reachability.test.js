@@ -238,3 +238,61 @@ test('refreshCommand names the directory the manifest lives in', () => {
   assert.strictEqual(refreshCommand('npm', 'x', 'apps/web/package-lock.json'), 'cd apps/web && npm audit fix');
   assert.strictEqual(refreshCommand('cargo', 'x', 'Cargo.lock'), null, 'unknown ecosystems get no command');
 });
+
+// ─── `npm update` as the second opinion ──────────────────────────────────────
+// The gap that sent a real fix out as "blocked upstream": `npm audit fix` only
+// bumps along the advisory's own chain, so it missed that tsx ^4.21.0 — already
+// permitted by package.json — carries a patched esbuild at 4.23.8.
+
+const PLAN = `
+add @humanfs/types 0.15.0
+change tsx 4.21.0 => 4.23.8
+change esbuild 0.27.4 => 0.28.1
+remove get-tsconfig 4.14.0
+`;
+
+test('parses npm update\'s text plan (it ignores --json)', () => {
+  const { parseNpmUpdatePlan } = require('./fix-reachability');
+  const p = parseNpmUpdatePlan(PLAN);
+  assert.strictEqual(p.get('tsx'), '4.23.8');
+  assert.strictEqual(p.get('esbuild'), '0.28.1');
+  assert.strictEqual(p.get('@humanfs/types'), '0.15.0', 'add lines count too');
+  assert.strictEqual(p.has('get-tsconfig'), false, 'a removal is not a resulting version');
+});
+
+test('a plan that reaches the patch is a refresh; one that falls short is not', () => {
+  const { parseNpmUpdatePlan, classifyNpmFromUpdatePlan } = require('./fix-reachability');
+  const p = parseNpmUpdatePlan(PLAN);
+  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'esbuild', '0.28.1'), 'refresh');
+  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'esbuild', '0.29.0'), null,
+    'landing short of the patch is no fix at all');
+  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'undici', '7.29.0'), null,
+    'a package the plan never touches gets no verdict');
+});
+
+test('the suggested command names the parents, not a blanket npm update', () => {
+  // Bare `npm update` would also move every other dependency in the project.
+  const { parseNpmUpdatePlan, npmUpdateTargets } = require('./fix-reachability');
+  const lock = { packages: {
+    'node_modules/tsx': { dependencies: { esbuild: '~0.27.0' } },
+    'node_modules/vite': { dependencies: { esbuild: '^0.27.0 || ^0.28.0' } },
+  } };
+  // vite already permits the fix and so is not in the plan; only tsx moves.
+  assert.deepStrictEqual(
+    npmUpdateTargets(parseNpmUpdatePlan(PLAN), lock, 'esbuild'), ['tsx']);
+});
+
+test('nested lock keys resolve to the package name', () => {
+  const { packageNameFromLockKey } = require('./fix-reachability');
+  assert.strictEqual(packageNameFromLockKey('node_modules/tsx'), 'tsx');
+  assert.strictEqual(packageNameFromLockKey('node_modules/a/node_modules/b'), 'b');
+  assert.strictEqual(packageNameFromLockKey('node_modules/@scope/pkg'), '@scope/pkg');
+  assert.strictEqual(packageNameFromLockKey(''), null);
+});
+
+test('a malformed plan yields no opinion', () => {
+  const { parseNpmUpdatePlan, classifyNpmFromUpdatePlan } = require('./fix-reachability');
+  assert.strictEqual(parseNpmUpdatePlan('garbage\nlines\n').size, 0);
+  assert.strictEqual(classifyNpmFromUpdatePlan(null, 'x', '1.0.0'), null);
+  assert.strictEqual(classifyNpmFromUpdatePlan(new Map([['x', 'not-a-version']]), 'x', '1.0.0'), null);
+});

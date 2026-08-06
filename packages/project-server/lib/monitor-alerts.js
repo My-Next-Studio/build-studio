@@ -255,7 +255,11 @@ function withFixReadiness(alerts, prs, { autofixEnabled, reachability } = {}) {
       // Name the command. "One command fixes this" without saying which one
       // just moves the puzzle somewhere less convenient.
       if (fix === 'refresh') {
-        command = refreshCommand(a.ecosystem, a.pkg, a.manifestPath);
+        // A verdict may carry its own command when it knows something the
+        // generic one cannot — e.g. which parent to update, rather than the
+        // ecosystem's default incantation.
+        command = (verdict && typeof verdict === 'object' && verdict.command)
+          || refreshCommand(a.ecosystem, a.pkg, a.manifestPath);
       } else if (fix === 'breaking') {
         command = breakingCommand(verdict && verdict.fix, a.manifestPath);
       }
