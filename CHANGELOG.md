@@ -316,6 +316,12 @@ Electron setup, where nothing is needed.
   opts out loudly is safer here than a broad one that always answers. If you add
   an ecosystem, preserve that: return null rather than a plausible guess.
 
+- **A verdict needs attribution, not just evidence.** npm's update plan names
+  packages without paths, so it says nothing usable about a package installed at
+  several versions at once — which is normal, not exotic. `npmInstalledCopies`
+  exists to detect that, and the plan is consulted only when exactly one copy is
+  present. Any signal keyed on a bare package name deserves the same suspicion.
+
 - **Ask the package manager before reading its lockfile.** The npm path went the
   other way first and was wrong on every row: reading the lockfile answers "can
   the patch be installed given the parents' *current* versions", when the

@@ -346,11 +346,17 @@ function createMonitor(config, deps = {}) {
       const planText = updatePlanCache.get().value;
       if (planText) {
         const planned = reach.parseNpmUpdatePlan(planText);
-        if (reach.classifyNpmFromUpdatePlan(planned, pkg, patchedVersion) === 'refresh') {
-          const lockJson = readLock(manifestPath);
+        // The plan names packages without paths, so it can only be attributed
+        // when exactly one copy of the package is installed. readLock is needed
+        // up front to establish that — see classifyNpmFromUpdatePlan.
+        const lockJson = readLock(manifestPath);
+        let lock = null;
+        try { lock = lockJson ? JSON.parse(lockJson) : null; } catch { lock = null; }
+        const copies = lock ? reach.npmInstalledCopies(lock, pkg) : null;
+        if (reach.classifyNpmFromUpdatePlan(planned, pkg, patchedVersion, copies) === 'refresh') {
           let targets = [];
           try {
-            if (lockJson) targets = reach.npmUpdateTargets(planned, JSON.parse(lockJson), pkg);
+            if (lock) targets = reach.npmUpdateTargets(planned, lock, pkg);
           } catch { /* fall through to the untargeted command */ }
           return {
             verdict: 'refresh',

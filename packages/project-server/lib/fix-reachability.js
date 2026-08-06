@@ -319,11 +319,45 @@ function parseNpmUpdatePlan(text) {
 }
 
 /**
+ * Every installed copy of `pkgName`, with the version at each location.
+ *
+ * npm installs a package more than once whenever two parents want incompatible
+ * ranges, and the plan above names packages WITHOUT paths — so with several
+ * copies present, "change undici 7.24.8 => 7.29.0" cannot be attributed to one
+ * of them. Enumerating the copies is what makes that ambiguity detectable.
+ */
+function npmInstalledCopies(lock, pkgName) {
+  const packages = lock && lock.packages;
+  if (!packages || typeof packages !== 'object' || !pkgName) return null;
+  const suffix = `node_modules/${pkgName}`;
+  const copies = [];
+  for (const [key, meta] of Object.entries(packages)) {
+    if (key === suffix || key.endsWith(`/${suffix}`)) {
+      copies.push({ path: key, version: (meta && meta.version) || null });
+    }
+  }
+  return copies;
+}
+
+/**
  * Would `npm update` land a version at or past the patch?
+ *
+ * @param {Map} planned  from parseNpmUpdatePlan
+ * @param {Array|null} installedCopies  from npmInstalledCopies — REQUIRED, and
+ *        the verdict is withheld unless there is exactly one copy. This closes
+ *        a hole that nearly shipped: my-next-studio-web carried a hoisted
+ *        `undici@7.29.0` (patched) beside a nested
+ *        `miniflare/node_modules/undici@7.28.0` (vulnerable). A plan bumping the
+ *        hoisted copy would have read as fixing the advisory while the
+ *        vulnerable one sat untouched — a false "run one command" of exactly the
+ *        kind this module exists to prevent. With one copy there is nothing to
+ *        confuse; with several, npm's text plan simply does not carry enough
+ *        information, so the answer is no answer.
  * @returns {'refresh'|null} null = no opinion, keep whatever the caller had
  */
-function classifyNpmFromUpdatePlan(planned, pkgName, patchedVersion) {
+function classifyNpmFromUpdatePlan(planned, pkgName, patchedVersion, installedCopies) {
   if (!(planned instanceof Map) || !pkgName || !patchedVersion) return null;
+  if (!Array.isArray(installedCopies) || installedCopies.length !== 1) return null;
   const to = planned.get(pkgName);
   const a = parseVersion(to);
   const b = parseVersion(patchedVersion);
@@ -391,6 +425,7 @@ module.exports = {
   classifyNpm,
   classifyNpmFromAuditFix,
   parseNpmUpdatePlan,
+  npmInstalledCopies,
   classifyNpmFromUpdatePlan,
   npmUpdateTargets,
   packageNameFromLockKey,

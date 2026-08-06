@@ -263,10 +263,12 @@ test('parses npm update\'s text plan (it ignores --json)', () => {
 test('a plan that reaches the patch is a refresh; one that falls short is not', () => {
   const { parseNpmUpdatePlan, classifyNpmFromUpdatePlan } = require('./fix-reachability');
   const p = parseNpmUpdatePlan(PLAN);
-  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'esbuild', '0.28.1'), 'refresh');
-  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'esbuild', '0.29.0'), null,
+  const one = [{ path: 'node_modules/esbuild', version: '0.27.4' }];
+  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'esbuild', '0.28.1', one), 'refresh');
+  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'esbuild', '0.29.0', one), null,
     'landing short of the patch is no fix at all');
-  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'undici', '7.29.0'), null,
+  assert.strictEqual(classifyNpmFromUpdatePlan(p, 'undici', '7.29.0',
+    [{ path: 'node_modules/undici', version: '7.24.8' }]), null,
     'a package the plan never touches gets no verdict');
 });
 
@@ -293,6 +295,56 @@ test('nested lock keys resolve to the package name', () => {
 test('a malformed plan yields no opinion', () => {
   const { parseNpmUpdatePlan, classifyNpmFromUpdatePlan } = require('./fix-reachability');
   assert.strictEqual(parseNpmUpdatePlan('garbage\nlines\n').size, 0);
-  assert.strictEqual(classifyNpmFromUpdatePlan(null, 'x', '1.0.0'), null);
-  assert.strictEqual(classifyNpmFromUpdatePlan(new Map([['x', 'not-a-version']]), 'x', '1.0.0'), null);
+  const one = [{ path: 'node_modules/x', version: '0.9.0' }];
+  assert.strictEqual(classifyNpmFromUpdatePlan(null, 'x', '1.0.0', one), null);
+  assert.strictEqual(classifyNpmFromUpdatePlan(new Map([['x', 'not-a-version']]), 'x', '1.0.0', one), null);
+});
+
+// ─── Attribution: the hole that nearly shipped ───────────────────────────────
+
+test('npmInstalledCopies finds every copy, hoisted and nested', () => {
+  const { npmInstalledCopies } = require('./fix-reachability');
+  const lock = { packages: {
+    '': {},
+    'node_modules/undici': { version: '7.29.0' },
+    'node_modules/miniflare/node_modules/undici': { version: '7.28.0' },
+    'node_modules/@digitalbazaar/http-client/node_modules/undici': { version: '6.28.0' },
+    'node_modules/undici-types': { version: '1.0.0' },
+  } };
+  const copies = npmInstalledCopies(lock, 'undici');
+  assert.strictEqual(copies.length, 3, 'undici-types must not be mistaken for undici');
+  assert.deepStrictEqual(copies.map((c) => c.version).sort(), ['6.28.0', '7.28.0', '7.29.0']);
+});
+
+test('npmInstalledCopies handles scoped names', () => {
+  const { npmInstalledCopies } = require('./fix-reachability');
+  const lock = { packages: { 'node_modules/@babel/core': { version: '7.29.0' } } };
+  assert.strictEqual(npmInstalledCopies(lock, '@babel/core').length, 1);
+});
+
+test('several copies make the plan unattributable, so no claim is made', () => {
+  // The real shape: a hoisted undici@7.29.0 (already patched) beside a nested
+  // miniflare/node_modules/undici@7.28.0 (vulnerable). npm's plan names
+  // packages without paths, so "change undici => 7.29.0" could be either. A
+  // verdict here would have said "run one command" while the vulnerable copy
+  // sat untouched.
+  const { parseNpmUpdatePlan, classifyNpmFromUpdatePlan } = require('./fix-reachability');
+  const planned = parseNpmUpdatePlan('change undici 7.24.8 => 7.29.0\n');
+  const twoCopies = [
+    { path: 'node_modules/undici', version: '7.29.0' },
+    { path: 'node_modules/miniflare/node_modules/undici', version: '7.28.0' },
+  ];
+  assert.strictEqual(classifyNpmFromUpdatePlan(planned, 'undici', '7.29.0', twoCopies), null);
+  // One copy is unambiguous, and still answers.
+  assert.strictEqual(
+    classifyNpmFromUpdatePlan(planned, 'undici', '7.29.0',
+      [{ path: 'node_modules/undici', version: '7.24.8' }]), 'refresh');
+});
+
+test('a missing or unreadable copy list withholds the verdict', () => {
+  const { parseNpmUpdatePlan, classifyNpmFromUpdatePlan } = require('./fix-reachability');
+  const planned = parseNpmUpdatePlan('change esbuild 0.27.4 => 0.28.1\n');
+  assert.strictEqual(classifyNpmFromUpdatePlan(planned, 'esbuild', '0.28.1', null), null);
+  assert.strictEqual(classifyNpmFromUpdatePlan(planned, 'esbuild', '0.28.1', []), null);
+  assert.strictEqual(classifyNpmFromUpdatePlan(planned, 'esbuild', '0.28.1', undefined), null);
 });
