@@ -242,7 +242,21 @@ review, not by an incident.
 
 ### Fixed
 
-- **Push on a detached HEAD said "fatal: invalid refspec ''".** `git branch
+- **One file per status listing lost its first letter and sat in the wrong
+  box.** The CI/CD tab showed `ocs` for `docs/…` and `2e` for `e2e/…`, filed
+  under *staged* while actually being merely modified.
+
+  `git status --porcelain` is columnar — `XY <path>`, index status then worktree
+  status — so a leading space is data: `" M docs/a.md"` means *modified, not
+  staged*. The command's output was passed through a `.trim()` that is correct
+  for every other read in that module (a branch name, a rev count) and wrong
+  here. It stripped the leading space from the **first line only**, which is why
+  exactly one row misbehaved at a time: the line then read as index-status `M`,
+  landing in the staged list, and the fixed-width path offset ate one character.
+
+  Counts and the *Commit all changes* button were unaffected — the file was
+  still counted, just under the wrong heading — which is why this stayed a
+  cosmetic annoyance rather than causing a bad commit. "fatal: invalid refspec ''".** `git branch
   --show-current` is empty when HEAD is detached, and that empty string went
   straight into `git push origin ''`. The message named neither the cause nor
   the cure, and one managed project here hit it.

@@ -6,11 +6,64 @@ const { execSync, execFileSync } = require('child_process');
 // existing example-web codebase patterns. All inputs are from project config
 // (not user input). A future improvement could migrate to execFile.
 
+/**
+ * Parse `git status --porcelain` into counts and path lists.
+ *
+ * The subtlety, and the reason this is a named function with tests rather than
+ * four lines inline: **the format is columnar.** Each line is `XY <path>`, X
+ * being the index status and Y the worktree status, so a leading space is DATA
+ * — " M docs/a.md" means "modified, not staged" — and the path always begins at
+ * column 3.
+ *
+ * That made it quietly incompatible with a `.trim()` applied to the whole
+ * command output, which is right for every other read in this file (a branch
+ * name, a rev count) and wrong here. Trimming stripped the leading space from
+ * the FIRST line only, so exactly one file per status listing came out
+ * misparsed: " M docs/a.md" became "M docs/a.md", which then read as
+ * index-status 'M' — filed under STAGED rather than modified — and
+ * `slice(3)` ate its first letter, displaying "ocs/a.md". Hence a staged box
+ * showing "2e" for "e2e" and "ocs" for "docs", and only ever one row at a time.
+ *
+ * @param {string} output  raw, UNTRIMMED stdout
+ * @returns {object|null}  null when the tree is clean
+ */
+function parsePorcelain(output) {
+  // Only blank lines are dropped. A line of spaces is not valid porcelain, and
+  // dropping it here beats letting it through as a phantom staged file — which
+  // is what a trailing newline would otherwise produce, since `undefined !== ' '`.
+  const lines = String(output || '').split('\n').filter((l) => l.trim().length > 0);
+  if (lines.length === 0) return null;
+
+  // Renames arrive as "R  old -> new"; the new path is the one that exists.
+  const pathOf = (l) => {
+    const raw = l.slice(3);
+    const arrow = raw.indexOf(' -> ');
+    return arrow !== -1 ? raw.slice(arrow + 4) : raw;
+  };
+  const stagedLines = lines.filter((l) => l[0] !== ' ' && l[0] !== '?');
+  const unstagedLines = lines.filter((l) => l[1] === 'M' || l[1] === 'D');
+  const untrackedLines = lines.filter((l) => l.startsWith('??'));
+
+  return {
+    staged: stagedLines.length,
+    unstaged: unstagedLines.length,
+    untracked: untrackedLines.length,
+    stagedFiles: stagedLines.map(pathOf),
+    unstagedFiles: unstagedLines.map(pathOf),
+    untrackedFiles: untrackedLines.map(pathOf),
+  };
+}
+
 function createGitOps(config) {
   const { projectRoot, worktreesPath } = config;
 
   function exec(cmd, opts = {}) {
-    return execSync(cmd, { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'], ...opts }).toString().trim();
+    // `trim` is ours, not execSync's — pull it out before spreading the rest.
+    // Trimming is right for the single-value reads that dominate here (a branch
+    // name, a rev count), and WRONG for anything columnar. See parsePorcelain.
+    const { trim = true, ...execOpts } = opts;
+    const out = execSync(cmd, { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'], ...execOpts }).toString();
+    return trim ? out.trim() : out;
   }
 
   return {
@@ -102,26 +155,11 @@ function createGitOps(config) {
       };
       try {
         git.branch = exec('git branch --show-current');
-        const status = exec('git status --porcelain');
-        if (status) {
+        // trim:false is load-bearing — see parsePorcelain.
+        const parsed = parsePorcelain(exec('git status --porcelain', { trim: false }));
+        if (parsed) {
           git.clean = false;
-          const lines = status.split('\n');
-          // Porcelain format: XY <path>  where X=index status, Y=worktree status.
-          // Path starts at column 3. Renames look like "R  old -> new" — keep new.
-          const pathOf = (l) => {
-            const raw = l.slice(3);
-            const arrow = raw.indexOf(' -> ');
-            return arrow !== -1 ? raw.slice(arrow + 4) : raw;
-          };
-          const stagedLines = lines.filter(l => l[0] !== ' ' && l[0] !== '?');
-          const unstagedLines = lines.filter(l => l[1] === 'M' || l[1] === 'D');
-          const untrackedLines = lines.filter(l => l.startsWith('??'));
-          git.staged = stagedLines.length;
-          git.unstaged = unstagedLines.length;
-          git.untracked = untrackedLines.length;
-          git.stagedFiles = stagedLines.map(pathOf);
-          git.unstagedFiles = unstagedLines.map(pathOf);
-          git.untrackedFiles = untrackedLines.map(pathOf);
+          Object.assign(git, parsed);
         }
         try { git.ahead = parseInt(exec(`git rev-list --count origin/${git.branch}..${git.branch}`)) || 0; } catch (_) {}
         try { git.behind = parseInt(exec(`git rev-list --count ${git.branch}..origin/${git.branch}`)) || 0; } catch (_) {}
@@ -175,4 +213,4 @@ function createGitOps(config) {
   };
 }
 
-module.exports = { createGitOps };
+module.exports = { createGitOps, parsePorcelain };
