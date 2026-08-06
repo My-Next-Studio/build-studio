@@ -327,6 +327,42 @@ function classifyNpmFromAuditFix(dryRun, pkgName, ghsaId, opts = {}) {
   return null;
 }
 
+/**
+ * The plan lines npm prints ahead of its JSON report, if any.
+ * Same grammar as `npm update --dry-run` — see parseNpmUpdatePlan.
+ */
+function extractPlanText(stdout) {
+  const text = String(stdout || '');
+  const m = /^\{$/m.exec(text);
+  if (text.trimStart().startsWith('{')) return '';
+  return m ? text.slice(0, m.index) : text;
+}
+
+/**
+ * Does npm's own plan actually land a patched version of the vulnerable package?
+ *
+ * `fixAvailable: true` plus a non-empty plan is still not proof. In one project
+ * the audit-fix plan read `change undici 7.29.0 => 7.28.0` — a DOWNGRADE, into
+ * the very range the advisory names (`7.0.0 - 7.28.0`) — while npm reported the
+ * fix as available. Running it would have made that project strictly worse, and
+ * the row would have called it "run one command".
+ *
+ * @returns {'ok'|'regresses'|'unknown'} 'unknown' when the plan does not mention
+ *          the package (the fix may legitimately come from elsewhere in the
+ *          chain) or when several copies make the line unattributable.
+ */
+function planLandsPatched(planned, pkgName, patchedVersion, installedCopies) {
+  if (!(planned instanceof Map) || !pkgName || !patchedVersion) return 'unknown';
+  if (!planned.has(pkgName)) return 'unknown';
+  // Same attribution rule as classifyNpmFromUpdatePlan: the plan names packages
+  // without paths, so with several copies installed the line proves nothing.
+  if (!Array.isArray(installedCopies) || installedCopies.length !== 1) return 'unknown';
+  const to = parseVersion(planned.get(pkgName));
+  const patched = parseVersion(patchedVersion);
+  if (!to || !patched) return 'unknown';
+  return compareVersions(to, patched) >= 0 ? 'ok' : 'regresses';
+}
+
 // ─── What `npm update` would do ──────────────────────────────────────────────
 //
 // `npm audit fix` is not the last word, and believing it was left a real fix
@@ -466,6 +502,8 @@ module.exports = {
   classifyNpm,
   classifyNpmFromAuditFix,
   extractJsonReport,
+  extractPlanText,
+  planLandsPatched,
   parseNpmUpdatePlan,
   npmInstalledCopies,
   classifyNpmFromUpdatePlan,

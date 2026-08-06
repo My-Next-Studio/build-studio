@@ -283,7 +283,9 @@ function createMonitor(config, deps = {}) {
           }
           const report = reach.extractJsonReport(out);
           if (!report) throw new Error('npm audit produced no JSON report');
-          return report;
+          // The plan npm prints ahead of the report is kept: `fixAvailable` is
+          // not proof the plan lands a PATCHED version. See planLandsPatched.
+          return { report, planText: reach.extractPlanText(out) };
         },
         ttlFor: () => TTL_ALERTS,
       }),
@@ -375,7 +377,7 @@ function createMonitor(config, deps = {}) {
       // npm's own verdict first — it knows the registry, so it can see fixes
       // that arrive by bumping an ancestor rather than the package itself.
       const auditState = probes.audit.get();
-      const audit = auditState.value;
+      const audit = auditState.value && auditState.value.report;
       if (audit) {
         const r = reach.classifyNpmFromAuditFix(audit, pkg, alert.ghsaId, {
           installedVersionOf: (name) => {
@@ -386,6 +388,17 @@ function createMonitor(config, deps = {}) {
           },
         });
         if (r) {
+          // Before believing a fix, check npm's own plan actually lands a
+          // patched version — it has proposed a downgrade INTO the vulnerable
+          // range while reporting the fix as available.
+          if (r.verdict === 'refresh') {
+            let lock = null;
+            try { lock = JSON.parse(readLock(manifestPath) || 'null'); } catch { lock = null; }
+            const landed = reach.planLandsPatched(
+              reach.parseNpmUpdatePlan(auditState.value.planText || ''),
+              pkg, patchedVersion, lock ? reach.npmInstalledCopies(lock, pkg) : null);
+            if (landed === 'regresses') return 'upstream';
+          }
           if (r.verdict === 'breaking') return { verdict: 'breaking', fix: r.fix };
           return r.verdict;
         }

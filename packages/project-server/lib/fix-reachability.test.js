@@ -418,3 +418,33 @@ test('without an installed version to compare, the old behaviour stands', () => 
   };
   assert.strictEqual(classifyNpmFromAuditFix(dryRun, 'cookie', 'GHSA-x').verdict, 'breaking');
 });
+
+test('a plan that DOWNGRADES the vulnerable package is not a fix', () => {
+  // Real: valkomna/worker planned `change undici 7.29.0 => 7.28.0` — backwards,
+  // into the advisory's own range (7.0.0 - 7.28.0) — while npm reported
+  // fixAvailable: true. Running it would have made the project worse.
+  const { parseNpmUpdatePlan, planLandsPatched, extractPlanText } = require('./fix-reachability');
+  const stdout = 'change undici 7.29.0 => 7.28.0\nchange ws 8.18.0 => 8.21.0\n{\n "added": 4\n}\n';
+  const planned = parseNpmUpdatePlan(extractPlanText(stdout));
+  const one = [{ path: 'node_modules/undici', version: '7.29.0' }];
+  assert.strictEqual(planLandsPatched(planned, 'undici', '7.29.0', one), 'regresses');
+  assert.strictEqual(planLandsPatched(planned, 'ws', '8.21.0', [{ path: 'node_modules/ws' }]), 'ok');
+});
+
+test('planLandsPatched stays silent when it cannot attribute or is not mentioned', () => {
+  const { parseNpmUpdatePlan, planLandsPatched } = require('./fix-reachability');
+  const planned = parseNpmUpdatePlan('change undici 7.24.0 => 7.29.0\n');
+  const one = [{ path: 'node_modules/undici' }];
+  // Not mentioned — the fix may come from elsewhere in the chain.
+  assert.strictEqual(planLandsPatched(planned, 'cookie', '0.7.0', one), 'unknown');
+  // Several copies — the plan line cannot be attributed to one of them.
+  assert.strictEqual(planLandsPatched(planned, 'undici', '7.29.0',
+    [{ path: 'a' }, { path: 'b' }]), 'unknown');
+  assert.strictEqual(planLandsPatched(null, 'undici', '7.29.0', one), 'unknown');
+});
+
+test('extractPlanText returns the preamble, and nothing when JSON stands alone', () => {
+  const { extractPlanText } = require('./fix-reachability');
+  assert.match(extractPlanText('change a 1 => 2\n{\n"x":1\n}\n'), /change a 1 => 2/);
+  assert.strictEqual(extractPlanText('{"x":1}'), '');
+});
