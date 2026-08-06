@@ -232,6 +232,7 @@ function withFixReadiness(alerts, prs, { autofixEnabled, reachability } = {}) {
 
     let fix;
     let command = null;
+    let note = null;
     if (pr) {
       const bump = parseBumpTitle(pr.title);
       fix = bump && classifyBump(bump.from, bump.to) === 'major' ? 'major' : 'ready';
@@ -248,6 +249,10 @@ function withFixReadiness(alerts, prs, { autofixEnabled, reachability } = {}) {
       // A 'breaking' verdict arrives as an object, because unlike the others it
       // carries WHICH ancestor has to move and to what — a review needs a subject.
       const name = verdict && typeof verdict === 'object' ? verdict.verdict : verdict;
+      // A verdict may explain WHY it has no answer — e.g. npm cannot resolve
+      // the tree at all. That is a fact about the project, and far more useful
+      // than the bare "could not tell" it would otherwise degrade to.
+      if (verdict && typeof verdict === 'object' && verdict.note) note = verdict.note;
       fix = name === 'refresh' ? 'refresh'
         : name === 'upstream' ? 'upstream'
         : name === 'breaking' ? 'breaking'
@@ -268,6 +273,7 @@ function withFixReadiness(alerts, prs, { autofixEnabled, reachability } = {}) {
       ...a,
       fix,
       command,
+      note,
       prNumber: pr ? pr.number : null,
       prUrl: pr ? pr.url : null,
     };

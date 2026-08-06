@@ -343,3 +343,21 @@ test('the badge count excludes info, so an unconfigured project is not alarming'
   assert.equal(counts.actionable, 3);
   assert.equal(countBySeverity([]).actionable, 0);
 });
+
+test('a verdict may explain why it has no answer', () => {
+  // A broken probe degrading silently to "could not tell" is what made an inert
+  // feature look like a working one with unlucky data. The reason travels.
+  const [a] = withFixReadiness(
+    [{ pkg: 'undici', hasPatch: true, ecosystem: 'npm' }], [],
+    { reachability: () => ({ verdict: null, note: 'npm could not resolve this tree: ERESOLVE' }) });
+  assert.equal(a.fix, 'blocked');
+  assert.match(a.note, /ERESOLVE/);
+});
+
+test('a plain verdict carries no note', () => {
+  const [a] = withFixReadiness(
+    [{ pkg: 'undici', hasPatch: true, ecosystem: 'npm' }], [],
+    { reachability: () => 'upstream' });
+  assert.equal(a.fix, 'upstream');
+  assert.equal(a.note, null);
+});

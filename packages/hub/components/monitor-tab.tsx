@@ -30,6 +30,8 @@ interface Alert {
   fix?: 'ready' | 'major' | 'refresh' | 'breaking' | 'upstream' | 'blocked' | 'none' | 'inactive'
   /** For a `refresh` row: the exact command that clears it. */
   command?: string | null
+  /** Why no verdict was reached — e.g. npm cannot resolve this tree. */
+  note?: string | null
   prNumber?: number | null
   prUrl?: string | null
 }
@@ -296,6 +298,14 @@ function AlertRow({ alert, color, enableState, onEnable }: {
           }}>
             {alert.command}
           </code>
+        )}
+        {/* Why this row has no verdict. Shown because a probe that fails
+            silently looks exactly like a probe that ran and found nothing —
+            which is how a completely inert check passed for a working one. */}
+        {alert.note && (
+          <div style={{ fontSize: 11, color: 'var(--orange)', marginTop: 4 }}>
+            {alert.note}
+          </div>
         )}
         {enableError && (
           <div style={{ fontSize: 11, color: 'var(--red)', marginTop: 4 }}>

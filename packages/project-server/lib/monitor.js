@@ -42,6 +42,13 @@ const JUST_FINISHED_MS = 10 * 60 * 1000;
 
 const RUN_FIELDS = 'databaseId,status,conclusion,displayTitle,createdAt,updatedAt,event,workflowName,url';
 
+/** npm errors are pages long; a row can show one line of it. */
+function firstLine(msg) {
+  const line = String(msg || '').split('\n').map((l) => l.trim())
+    .find((l) => l && !/^Command failed/i.test(l));
+  return (line || String(msg || '')).slice(0, 160);
+}
+
 function ageMs(iso) {
   const t = Date.parse(iso || '');
   return Number.isFinite(t) ? Date.now() - t : Infinity;
@@ -210,61 +217,88 @@ function createMonitor(config, deps = {}) {
   const alertsCache = createCache({ fetch: fetchDependabot, ttlFor: () => TTL_ALERTS });
 
   /**
-   * What a plain `npm update` would land, as npm's own plan.
+   * npm probes, one pair per manifest DIRECTORY.
    *
-   * Consulted only when `npm audit fix` has nothing to offer. `--json` is
-   * ignored by `npm update` (npm 11), so this is the human-readable plan and it
-   * gets parsed as text — see parseNpmUpdatePlan.
+   * A repository is not necessarily one npm project. One managed project here
+   * carries six independent lockfiles — root, frontend, admin, backend, worker,
+   * e2e — and GitHub files a separate advisory per manifest. Running npm once at
+   * the repository root and applying its answer to all of them meant an advisory
+   * against `worker/package-lock.json` was judged against the ROOT's dependency
+   * tree: identical advisories came out `refresh` and `blocked` side by side
+   * depending on which tree happened to match, and the tab suggested a command
+   * that could not work. Every other project here has a single lockfile, which
+   * is why it stayed invisible.
    *
-   * Nothing here proposes widening a range: `npm update` moves only within what
-   * package.json already declares.
+   * So each directory gets its own probes, created on demand — a project with no
+   * npm advisories still runs nothing.
    */
-  const updatePlanCache = createCache({
-    fetch: async () => {
-      const { stdout } = await execFileAsync(
-        'npm', ['update', '--dry-run', '--include=dev'],
-        { cwd: config.projectRoot, timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
-      return String(stdout || '');
-    },
-    ttlFor: () => TTL_ALERTS,
-  });
+  const npmProbesByDir = new Map();
 
-  /**
-   * `npm audit --json` for this project.
-   *
-   * Exits NON-ZERO whenever any vulnerability is found — which is the only case
-   * we ever call it in — so the report has to be read off a rejected exec. The
-   * useful output is on stdout either way; only an empty stdout is a real
-   * failure.
-   *
-   * Behind a cache because it is a network call, and lazily triggered: `get()`
-   * is reached only from the npm branch of reachabilityOf, so a project with no
-   * npm advisories never runs it at all.
-   */
-  const auditCache = createCache({
-    fetch: async () => {
-      try {
-        // `--include=dev` is REQUIRED, not a preference. The project-server runs
-        // with NODE_ENV=production, and npm reads that as `--omit=dev`: the audit
-        // then reports zero vulnerabilities on a project whose every advisory is
-        // a devDependency, and every row silently falls back to "could not tell".
-        // Observed exactly that on first deploy — 15 advisories, 0 packages
-        // reported, because build tooling is where these advisories live.
-        //
-        // Dependabot reports dev advisories, so anything that classifies them
-        // must see them. Scope is conveyed by the row's own "development
-        // dependency" label, not by hiding it.
-        const { stdout } = await execFileAsync('npm', ['audit', 'fix', '--dry-run', '--json', '--include=dev'], {
-          cwd: config.projectRoot, timeout: 60000, maxBuffer: 16 * 1024 * 1024,
-        });
-        return JSON.parse(stdout);
-      } catch (e) {
-        if (e && typeof e.stdout === 'string' && e.stdout.trim()) return JSON.parse(e.stdout);
-        throw e;
-      }
-    },
-    ttlFor: () => TTL_ALERTS,
-  });
+  /** `worker/package-lock.json` → `worker`; `package-lock.json` → `''`. */
+  function manifestDir(manifestPath) {
+    if (!manifestPath || !manifestPath.includes('/')) return '';
+    return manifestPath.slice(0, manifestPath.lastIndexOf('/'));
+  }
+
+  function npmProbes(dir) {
+    if (npmProbesByDir.has(dir)) return npmProbesByDir.get(dir);
+
+    // `manifest_path` comes from GitHub — untrusted input deciding a working
+    // directory, so it goes through the same guard as any other path from
+    // outside. A directory with no lockfile is skipped rather than probed: npm
+    // in the wrong place produces a confident answer about the wrong project.
+    let cwd = null;
+    try {
+      const abs = dir ? assertInside(dir, config.projectRoot) : config.projectRoot;
+      if (fs.existsSync(path.join(abs, 'package-lock.json'))) cwd = abs;
+    } catch { cwd = null; }
+
+    const probes = cwd ? {
+      cwd,
+      // `npm audit fix --dry-run` rather than a plain audit: `fixAvailable` is
+      // not evidence that running the command changes anything. See
+      // classifyNpmFromAuditFix.
+      //
+      // `--include=dev` is REQUIRED, not a preference. The project-server runs
+      // with NODE_ENV=production, and npm reads that as `--omit=dev`: the audit
+      // then reports zero vulnerabilities on a project whose every advisory is a
+      // devDependency, and every row silently falls back to "could not tell".
+      //
+      // npm exits NON-ZERO whenever it finds anything — the only case this is
+      // ever called in — so the report is read off the rejected exec's stdout.
+      audit: createCache({
+        fetch: async () => {
+          try {
+            const { stdout } = await execFileAsync(
+              'npm', ['audit', 'fix', '--dry-run', '--json', '--include=dev'],
+              { cwd, timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
+            return JSON.parse(stdout);
+          } catch (e) {
+            if (e && typeof e.stdout === 'string' && e.stdout.trim()) return JSON.parse(e.stdout);
+            throw e;
+          }
+        },
+        ttlFor: () => TTL_ALERTS,
+      }),
+      // What a plain `npm update` would land, consulted only when audit fix has
+      // nothing to offer. `--json` is ignored by `npm update` (npm 11), so this
+      // is the human-readable plan, parsed as text. Nothing here proposes
+      // widening a range: `npm update` moves only within what package.json
+      // already declares.
+      updatePlan: createCache({
+        fetch: async () => {
+          const { stdout } = await execFileAsync(
+            'npm', ['update', '--dry-run', '--include=dev'],
+            { cwd, timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+          return String(stdout || '');
+        },
+        ttlFor: () => TTL_ALERTS,
+      }),
+    } : null;
+
+    npmProbesByDir.set(dir, probes);
+    return probes;
+  }
 
   /** CI state for the CI/CD tab — push runs only. Never blocks. */
   function getCi() {
@@ -327,9 +361,14 @@ function createMonitor(config, deps = {}) {
     if (!pkg || !patchedVersion) return null;
 
     if (eco === 'npm') {
+      // Probes for THIS advisory's manifest directory, not the repository root.
+      const probes = npmProbes(manifestDir(manifestPath));
+      if (!probes) return null;
+
       // npm's own verdict first — it knows the registry, so it can see fixes
       // that arrive by bumping an ancestor rather than the package itself.
-      const audit = auditCache.get().value;
+      const auditState = probes.audit.get();
+      const audit = auditState.value;
       if (audit) {
         const r = reach.classifyNpmFromAuditFix(audit, pkg, alert.ghsaId);
         if (r) {
@@ -343,7 +382,8 @@ function createMonitor(config, deps = {}) {
       // unrelated-looking parent already permitted by package.json — which is
       // how `npm update tsx` cleared an esbuild advisory that audit fix could
       // not touch. Ask what a plain `npm update` would land.
-      const planText = updatePlanCache.get().value;
+      const planState = probes.updatePlan.get();
+      const planText = planState.value;
       if (planText) {
         const planned = reach.parseNpmUpdatePlan(planText);
         // The plan names packages without paths, so it can only be attributed
@@ -365,6 +405,15 @@ function createMonitor(config, deps = {}) {
             command: targets.length ? `npm update ${targets.join(' ')}` : 'npm update',
           };
         }
+      }
+
+      // Both probes failed — npm cannot resolve this tree at all, which is a
+      // fact about the project rather than about the advisory. Say so: a broken
+      // probe silently degrading to "could not tell" is what made a whole
+      // inert feature look like a working one with unlucky data.
+      const probeError = auditState.error || planState.error;
+      if (!audit && !planText && probeError) {
+        return { verdict: null, note: `npm could not resolve this tree: ${firstLine(probeError)}` };
       }
 
       // Audit unavailable or silent on this advisory. Fall back to the lockfile
