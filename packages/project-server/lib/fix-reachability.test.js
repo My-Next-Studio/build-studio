@@ -348,3 +348,73 @@ test('a missing or unreadable copy list withholds the verdict', () => {
   assert.strictEqual(classifyNpmFromUpdatePlan(planned, 'esbuild', '0.28.1', []), null);
   assert.strictEqual(classifyNpmFromUpdatePlan(planned, 'esbuild', '0.28.1', undefined), null);
 });
+
+// ─── npm's JSON is not always alone on stdout ────────────────────────────────
+
+test('the JSON report is found behind a human-readable plan', () => {
+  // `npm audit fix --dry-run --json` prints its plan first when it has changes
+  // to propose. A bare JSON.parse throws, the probe dies, and every row in that
+  // directory degrades to "could not tell" — observed with 19 lines of preamble.
+  const { extractJsonReport } = require('./fix-reachability');
+  const stdout = 'add rolldown 1.2.3\nchange vite 5.4.21 => 8.2.1\n{\n  "added": 10,\n  "audit": { "vulnerabilities": {} }\n}\n';
+  const r = extractJsonReport(stdout);
+  assert.strictEqual(r.added, 10);
+});
+
+test('JSON alone still parses, and garbage yields null', () => {
+  const { extractJsonReport } = require('./fix-reachability');
+  assert.strictEqual(extractJsonReport('{"added":1}').added, 1);
+  assert.strictEqual(extractJsonReport('  {"added":2}  ').added, 2);
+  assert.strictEqual(extractJsonReport('no json at all\n'), null);
+  assert.strictEqual(extractJsonReport(''), null);
+  assert.strictEqual(extractJsonReport(null), null);
+  assert.strictEqual(extractJsonReport('{ truncated'), null);
+});
+
+test('a fix that DOWNGRADES a package is not offered as a fix', () => {
+  // Real: a `cookie` advisory whose fixAvailable proposed @sveltejs/kit@0.0.30
+  // against 2.70.2 installed. isSemVerMajor is true for a backwards jump just
+  // as for a forwards one, so without this the row would have advised
+  // `npm install @sveltejs/kit@0.0.30` — which would wreck the project.
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
+  const dryRun = {
+    added: 10, removed: 5, changed: 4,
+    audit: { vulnerabilities: { cookie: {
+      name: 'cookie',
+      via: [{ name: 'cookie', url: 'https://github.com/advisories/GHSA-pxg6-pf52-xh8x' }],
+      fixAvailable: { name: '@sveltejs/kit', version: '0.0.30', isSemVerMajor: true },
+    } } },
+  };
+  const opts = { installedVersionOf: (n) => (n === '@sveltejs/kit' ? '2.70.2' : null) };
+  assert.deepStrictEqual(
+    classifyNpmFromAuditFix(dryRun, 'cookie', 'GHSA-pxg6-pf52-xh8x', opts),
+    { verdict: 'upstream' });
+});
+
+test('a genuine forward major bump is still a reviewable fix', () => {
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
+  const dryRun = {
+    added: 1, removed: 0, changed: 1,
+    audit: { vulnerabilities: { cookie: {
+      name: 'cookie',
+      via: [{ name: 'cookie', url: 'https://github.com/advisories/GHSA-x' }],
+      fixAvailable: { name: '@sveltejs/kit', version: '3.0.0', isSemVerMajor: true },
+    } } },
+  };
+  const opts = { installedVersionOf: () => '2.70.2' };
+  const r = classifyNpmFromAuditFix(dryRun, 'cookie', 'GHSA-x', opts);
+  assert.strictEqual(r.verdict, 'breaking');
+  assert.deepStrictEqual(r.fix, { name: '@sveltejs/kit', version: '3.0.0' });
+});
+
+test('without an installed version to compare, the old behaviour stands', () => {
+  const { classifyNpmFromAuditFix } = require('./fix-reachability');
+  const dryRun = {
+    added: 1, removed: 0, changed: 1,
+    audit: { vulnerabilities: { cookie: {
+      name: 'cookie', via: [{ name: 'cookie', url: 'https://github.com/advisories/GHSA-x' }],
+      fixAvailable: { name: 'kit', version: '0.0.30', isSemVerMajor: true },
+    } } },
+  };
+  assert.strictEqual(classifyNpmFromAuditFix(dryRun, 'cookie', 'GHSA-x').verdict, 'breaking');
+});

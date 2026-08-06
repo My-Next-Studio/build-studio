@@ -268,15 +268,22 @@ function createMonitor(config, deps = {}) {
       // ever called in — so the report is read off the rejected exec's stdout.
       audit: createCache({
         fetch: async () => {
+          // npm exits NON-ZERO whenever it finds anything, and may print a
+          // human-readable plan ahead of the JSON — so the report is dug out of
+          // stdout either way. See extractJsonReport.
+          let out;
           try {
-            const { stdout } = await execFileAsync(
+            const r = await execFileAsync(
               'npm', ['audit', 'fix', '--dry-run', '--json', '--include=dev'],
               { cwd, timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
-            return JSON.parse(stdout);
+            out = r.stdout;
           } catch (e) {
-            if (e && typeof e.stdout === 'string' && e.stdout.trim()) return JSON.parse(e.stdout);
-            throw e;
+            if (!(e && typeof e.stdout === 'string' && e.stdout.trim())) throw e;
+            out = e.stdout;
           }
+          const report = reach.extractJsonReport(out);
+          if (!report) throw new Error('npm audit produced no JSON report');
+          return report;
         },
         ttlFor: () => TTL_ALERTS,
       }),
@@ -370,7 +377,14 @@ function createMonitor(config, deps = {}) {
       const auditState = probes.audit.get();
       const audit = auditState.value;
       if (audit) {
-        const r = reach.classifyNpmFromAuditFix(audit, pkg, alert.ghsaId);
+        const r = reach.classifyNpmFromAuditFix(audit, pkg, alert.ghsaId, {
+          installedVersionOf: (name) => {
+            try {
+              const l = JSON.parse(readLock(manifestPath) || 'null');
+              return (l && l.packages && l.packages[`node_modules/${name}`] || {}).version || null;
+            } catch { return null; }
+          },
+        });
         if (r) {
           if (r.verdict === 'breaking') return { verdict: 'breaking', fix: r.fix };
           return r.verdict;

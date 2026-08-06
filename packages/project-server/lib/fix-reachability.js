@@ -244,7 +244,33 @@ function classifyPip({ pyprojectText, pkgName, patchedVersion }) {
  *        mention our advisory tells us nothing about our advisory.
  * @returns {{verdict:'refresh'|'breaking'|'upstream', fix?:object}|null}
  */
-function classifyNpmFromAuditFix(dryRun, pkgName, ghsaId) {
+/**
+ * Pull npm's JSON report out of stdout that may be prefixed with a text plan.
+ *
+ * `npm audit fix --dry-run --json` does not always emit JSON alone: when it has
+ * changes to propose it prints the human-readable plan FIRST and the JSON
+ * report after it. `JSON.parse(stdout)` then throws, the probe fails, and every
+ * row in that directory quietly degrades to "could not tell" — which is exactly
+ * what happened on a project with nineteen lines of plan ahead of the report.
+ *
+ * The report always begins with `{` alone on a line; the plan never contains
+ * such a line.
+ */
+function extractJsonReport(stdout) {
+  const text = String(stdout || '');
+  if (!text.trim()) return null;
+  const m = /^\{$/m.exec(text);
+  const start = text.trimStart().startsWith('{') ? text.indexOf('{') : (m ? m.index : -1);
+  if (start === -1) return null;
+  try { return JSON.parse(text.slice(start)); } catch { return null; }
+}
+
+/**
+ * @param {object} [opts]
+ * @param {(name:string) => string|null} [opts.installedVersionOf]  lets a
+ *        proposed fix be checked for being a DOWNGRADE — see below.
+ */
+function classifyNpmFromAuditFix(dryRun, pkgName, ghsaId, opts = {}) {
   if (!dryRun || typeof dryRun !== 'object') return null;
   const vulns = dryRun.audit && dryRun.audit.vulnerabilities;
   if (!vulns || typeof vulns !== 'object') return null;
@@ -276,6 +302,21 @@ function classifyNpmFromAuditFix(dryRun, pkgName, ghsaId) {
   if (!willChange) return { verdict: 'upstream' };
 
   if (fa && typeof fa === 'object') {
+    // npm's "fix" is sometimes a DOWNGRADE, and a spectacular one. Observed:
+    // a `cookie` advisory whose fixAvailable proposed
+    // `@sveltejs/kit@0.0.30` — against 2.70.2 installed. Rendered as
+    // "breaking bump — review" with `npm install @sveltejs/kit@0.0.30`, that is
+    // advice which would destroy the project, and isSemVerMajor is true for a
+    // backwards jump exactly as it is for a forwards one.
+    //
+    // A fix that moves a package backwards is not a fix anyone wants; the
+    // honest reading is that no forward fix exists yet.
+    const installed = typeof opts.installedVersionOf === 'function'
+      ? opts.installedVersionOf(fa.name) : null;
+    const to = parseVersion(fa.version);
+    const from = parseVersion(installed);
+    if (to && from && compareVersions(to, from) < 0) return { verdict: 'upstream' };
+
     // { name, version, isSemVerMajor } — a fix exists but reaching it means
     // moving an ancestor across a major boundary. Not a refresh, not a wait.
     return fa.isSemVerMajor
@@ -424,6 +465,7 @@ module.exports = {
   npmRangesFor,
   classifyNpm,
   classifyNpmFromAuditFix,
+  extractJsonReport,
   parseNpmUpdatePlan,
   npmInstalledCopies,
   classifyNpmFromUpdatePlan,
