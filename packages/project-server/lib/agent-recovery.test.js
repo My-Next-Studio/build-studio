@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts, inResumeGrace, allAgentsOf } = require('./agent-recovery');
+const { isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts, inResumeGrace, allAgentsOf, isRevived } = require('./agent-recovery');
 
 const MIN2 = 2 * 60 * 1000;
 
@@ -116,4 +116,45 @@ test('allAgentsOf yields both views when the mirror is populated', () => {
 test('allAgentsOf tolerates an empty or absent workflow', () => {
   assert.deepEqual(allAgentsOf(null), []);
   assert.deepEqual(allAgentsOf({}), []);
+});
+
+// ─── Revival: the verdict is about a process, and a human can change that ────
+
+const MIN = 60 * 1000;
+
+test('an agent revived from the live terminal is detected', () => {
+  // The fazon fix_execution case: pane fell back to a shell, agent marked dead,
+  // owner answered the blocking question in the terminal, agent carried on.
+  assert.equal(isRevived({ paneCommand: 'claude', idleMs: 5 * 1000 }), true);
+  assert.equal(isRevived({ paneCommand: 'node', idleMs: 30 * 1000 }), true);
+});
+
+test('a pane still sitting at a shell prompt is not revived', () => {
+  assert.equal(isRevived({ paneCommand: 'zsh', idleMs: 1000 }), false);
+  assert.equal(isRevived({ paneCommand: '-zsh', idleMs: 1000 }), false);
+  assert.equal(isRevived({ paneCommand: 'bash', idleMs: 1000 }), false);
+});
+
+test('a real process that has gone silent is not revived', () => {
+  // Both signals are required — a live-looking pane command with no output
+  // could be a hung process, and revival would re-arm the stall machinery.
+  assert.equal(isRevived({ paneCommand: 'claude', idleMs: 5 * MIN }), false);
+});
+
+test('a missing window cannot be revived', () => {
+  assert.equal(isRevived({ paneCommand: null, idleMs: 0 }), false);
+  assert.equal(isRevived({ paneCommand: '', idleMs: 0 }), false);
+  assert.equal(isRevived({ paneCommand: undefined, idleMs: 0 }), false);
+});
+
+test('revival and death are exact opposites on the same inputs', () => {
+  // Whatever one calls alive, the other must not call dead — otherwise the
+  // watchdog oscillates, flipping the card every tick.
+  for (const paneCommand of ['claude', 'codex', 'node', 'zsh', '-bash']) {
+    for (const idleMs of [0, 30 * 1000, 3 * MIN, 30 * MIN]) {
+      const revived = isRevived({ paneCommand, idleMs });
+      const cls = classifyAgentProcess({ paneCommand, idleMs, hasLiveChild: false });
+      if (revived) assert.equal(cls, 'alive', `${paneCommand}@${idleMs} revived but classified ${cls}`);
+    }
+  }
 });

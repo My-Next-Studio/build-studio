@@ -579,11 +579,27 @@ function startServer(projectRoot, opts = {}) {
             changed = true;
           }
 
-          // An agent already in 'error' has had its verdict; the only thing that
-          // can change it is the limit reclassification above. Nothing below
-          // applies to it, and re-running the dead/stall judgement would just
-          // rewrite the same error.
-          if (agent.status === 'error') continue;
+          // An agent already in 'error' has had its verdict, and re-running the
+          // dead/stall judgement would just rewrite the same error — EXCEPT when
+          // the fact underneath it has changed. A human answering a blocking
+          // prompt in the live terminal revives an agent the watchdog wrote off,
+          // and nothing used to notice: the card kept showing an error and kept
+          // offering Recover/Approve, either of which moves the step and gets the
+          // agent's eventual report rejected as belonging to a closed one.
+          if (agent.status === 'error') {
+            if (agentRecovery.isRevived({
+              paneCommand: tmuxOps.paneCommand(target),
+              idleMs,
+              deadConfirmMs: AGENT_DEAD_CONFIRM_MS,
+            })) {
+              console.log(`[watchdog] ${agent.role} is alive again — clearing the dead-process error`);
+              agent.status = 'running';
+              agent.error = undefined;
+              agent.revivedAt = new Date().toISOString();
+              changed = true;
+            }
+            continue;
+          }
 
           // Just fired a resume — let the CLI boot and start repainting before
           // any further dead/stall judgement (the 30s tick would double-fire).

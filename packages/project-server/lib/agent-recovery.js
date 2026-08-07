@@ -66,6 +66,40 @@ function classifyAgentProcess({ paneCommand, idleMs, deadConfirmMs = 2 * 60 * 10
 }
 
 /**
+ * Has an agent previously judged dead come back to life?
+ *
+ * The dead/stall verdict is normally final — re-running it would only rewrite
+ * the same error. But it is a verdict about a process, and a human can change
+ * that fact from outside: answering a prompt in the live terminal, or restarting
+ * the CLI by hand, revives an agent the watchdog has already written off.
+ *
+ * Observed on a fazon fix_execution run: the pane fell back to a shell, the
+ * agent was marked `error` ("process exited... after 20m of work"), the owner
+ * answered the blocking question in the terminal, and the agent carried on
+ * working — while the card still showed an error and offered Recover and
+ * Approve, both of which would have moved the step and caused the agent's
+ * eventual report to be REJECTED as belonging to a closed step.
+ *
+ * Revival needs BOTH signals, because either alone is weak: a non-shell pane
+ * command could be a transient tool child, and recent log output could be a
+ * dying process's last gasp. Together they mean a real agent process is running
+ * AND producing output right now.
+ *
+ * Being wrong here is cheap and self-correcting in a way the old behaviour was
+ * not: a falsely revived agent is re-judged dead on the next tick, whereas a
+ * falsely dead one stays wrong until a human notices.
+ *
+ * @param {string|null} p.paneCommand  tmux #{pane_current_command}
+ * @param {number} p.idleMs            ms since the agent's log last changed
+ * @param {number} [p.deadConfirmMs]
+ */
+function isRevived({ paneCommand, idleMs, deadConfirmMs = 2 * 60 * 1000 }) {
+  if (!paneCommand) return false;            // window gone — nothing to revive
+  if (isShellCommand(paneCommand)) return false;  // still sitting at a prompt
+  return idleMs < deadConfirmMs;             // ...and actively producing output
+}
+
+/**
  * Can a dead agent be auto-resumed?
  * Requires a captured CLI session id + resume script (claude-only — codex has
  * no resume) and remaining attempts.
@@ -137,6 +171,7 @@ function allAgentsOf(wf) {
 }
 
 module.exports = {
+  isRevived,
   isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts,
   inResumeGrace, allAgentsOf,
 };

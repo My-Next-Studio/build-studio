@@ -66,6 +66,29 @@ answered by a counter that had been dead for months.
   claimed use, which is a different thing. Worth knowing before drawing
   conclusions from the numbers.
 
+### Fixed
+
+- **An agent you revive from the live terminal now clears its own error.** The
+  watchdog's dead-process verdict was final: once an agent was marked `error`,
+  nothing re-examined it. But that verdict is about a process, and a human can
+  change the fact underneath it — answering a blocking prompt in the terminal
+  revives an agent that has already been written off.
+
+  Seen on a fix_execution run: the pane fell back to a shell, the agent was
+  marked *"process exited… after 20m of work"*, the owner answered the question
+  in the terminal, and the agent carried on working — while the card still
+  showed an error and still offered **Recover** and **Approve**. Both move the
+  step, and once the step moves the agent's eventual report is refused as
+  belonging to a closed one, discarding the work in flight.
+
+  The watchdog now clears the error and returns the agent to `running` when the
+  pane shows a real agent process **and** the log is actively producing output.
+  Both signals are required: a non-shell pane command alone could be a transient
+  tool child, and recent output alone could be a dying process's last gasp.
+  Getting this wrong is self-correcting — a falsely revived agent is re-judged
+  on the next tick — whereas the old behaviour stayed wrong until someone
+  noticed.
+
 ### Upgrade steps
 
 **In Build Studio** — project-server only: `cd packages/desktop && node
