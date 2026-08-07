@@ -9,6 +9,7 @@ const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, read
 const { deriveNeedsAttention } = require('../needs-attention');
 const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
 const agentRecovery = require('../agent-recovery');
+const learningScope = require('../learning-scope');
 const limitBlock = require('../limit-block');
 const memoryGuard = require('../memory-guard');
 const transcriptRecovery = require('../transcript-recovery');
@@ -946,6 +947,16 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
     return [...new Set([...words, ...techTerms])];
   }
 
+  // What this project is built with. Read once per server lifetime — a repo's
+  // stack changes about as often as it is rewritten, and a restart re-reads it.
+  let projectStacksCache = null;
+  function projectStacks() {
+    if (projectStacksCache) return projectStacksCache;
+    projectStacksCache = learningScope.detectProjectStacks(
+      learningScope.collectStackEvidence(projectRoot, fs));
+    return projectStacksCache;
+  }
+
   function buildLearningsContext(role, taskDescription) {
     const domains = ROLE_DOMAIN_MAP[role.toLowerCase()] || [];
     if (domains.length === 0) return { text: '', injected: [] };
@@ -971,7 +982,12 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
       ...builtinLearnings.map(l => ({ ...l, source: 'builtin' })),
     ];
 
-    if (allLearnings.length === 0) return '';
+    // Drop framework trivia that cannot apply here. General learnings — the
+    // ones that actually get applied — are never filtered. See learning-scope.js.
+    const stacks = projectStacks();
+    const scoped = allLearnings.filter((l) => learningScope.isLearningEligible(l.tags, stacks));
+
+    if (scoped.length === 0) return { text: '', injected: [] };
 
     // If we have a task description, score and rank by relevance
     // Otherwise, include all (capped)
@@ -980,25 +996,25 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
 
     if (keywords.length > 0) {
       // Score each learning
-      for (const l of allLearnings) {
+      for (const l of scoped) {
         l.relevance = scoreLearningRelevance(l, keywords);
       }
       // Relevance is the ONLY admission ticket. The old `|| severity === 'high'`
       // bypass admitted every high-severity entry in the role's domains
       // regardless of the task — the main source of prompt flooding.
-      selected = allLearnings
+      selected = scoped
         .filter(l => l.relevance > 0)
         .sort((a, b) => b.relevance - a.relevance)
         .slice(0, maxEntries);
       // Safety net: nothing matched → the 2 highest-severity entries only.
       if (selected.length === 0) {
-        selected = allLearnings
+        selected = scoped
           .filter(l => l.severity === 'high')
           .slice(0, 2);
       }
     } else {
       // No keywords — include all, prioritize high severity
-      selected = allLearnings
+      selected = scoped
         .sort((a, b) => {
           const sev = { high: 3, medium: 2, low: 1 };
           return (sev[b.severity] || 0) - (sev[a.severity] || 0);
@@ -1041,9 +1057,48 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
 
   function loadLearningsStats() {
     try {
-      if (fs.existsSync(LEARNINGS_STATS_PATH)) return JSON.parse(fs.readFileSync(LEARNINGS_STATS_PATH, 'utf8'));
+      if (fs.existsSync(LEARNINGS_STATS_PATH)) {
+        return migrateLegacyStats(JSON.parse(fs.readFileSync(LEARNINGS_STATS_PATH, 'utf8')));
+      }
     } catch {}
     return { entries: {} };
+  }
+
+  /**
+   * Retire `timesCited` and `recurrences`.
+   *
+   * Both come from the keyword-citation era, which "cited" 67% of injections on
+   * coincidence, and NEITHER has been written since self-reporting replaced it.
+   * They read as live metrics — a `recurrences: 5536` total invites the
+   * conclusion that recurrence is being measured, when nothing measures it. A
+   * dead counter that looks alive is worse than no counter.
+   *
+   * The values are not thrown away: they move under `legacy` on the entry, and
+   * the whole file is backed up once before the first rewrite.
+   */
+  function migrateLegacyStats(stats) {
+    if (!stats || !stats.entries || stats.legacyRetiredAt) return stats || { entries: {} };
+    let touched = false;
+    for (const entry of Object.values(stats.entries)) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (entry.timesCited === undefined && entry.recurrences === undefined) continue;
+      entry.legacy = {
+        note: 'keyword-citation era; not written since self-reporting replaced it',
+        timesCited: entry.timesCited,
+        recurrences: entry.recurrences,
+      };
+      delete entry.timesCited;
+      delete entry.recurrences;
+      touched = true;
+    }
+    if (touched) {
+      try {
+        const backup = LEARNINGS_STATS_PATH.replace(/\.json$/, `.pre-legacy-retire.json`);
+        if (!fs.existsSync(backup)) fs.copyFileSync(LEARNINGS_STATS_PATH, backup);
+      } catch {}
+    }
+    stats.legacyRetiredAt = new Date().toISOString();
+    return stats;
   }
 
   function saveLearningsStats(stats) {
@@ -1306,6 +1361,17 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
         stats.entries[key] = { title: l.title, severity: l.severity, domain: l.domain, timesInjected: 0, timesApplied: 0, injectionsSinceApplied: 0, lastSeen: null, lastApplied: null };
       }
       const entry = stats.entries[key];
+      // Per-project counters. The global rate answers "is the system working";
+      // only this answers "is it working in the project I am actually in",
+      // which is the question that decides whether to keep feeding it.
+      const projectKey = (config && config.name) || 'unknown';
+      if (!entry.byProject) entry.byProject = {};
+      if (!entry.byProject[projectKey]) {
+        entry.byProject[projectKey] = { timesInjected: 0, timesApplied: 0, lastSeen: null, lastApplied: null };
+      }
+      const perProject = entry.byProject[projectKey];
+      perProject.timesInjected++;
+      perProject.lastSeen = new Date().toISOString();
       // Legacy fields from the keyword era (timesCited/recurrences) are left
       // untouched on old entries; new counters start from this deploy.
       if (entry.timesApplied === undefined) entry.timesApplied = 0;
@@ -1322,6 +1388,8 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
         entry.timesApplied++;
         entry.injectionsSinceApplied = 0;
         entry.lastApplied = entry.lastSeen;
+        perProject.timesApplied++;
+        perProject.lastApplied = entry.lastSeen;
       } else {
         entry.injectionsSinceApplied++;
       }

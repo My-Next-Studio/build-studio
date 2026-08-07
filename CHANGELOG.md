@@ -21,6 +21,61 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-08-07 — Make the learnings system measurable per project
+
+A review of the knowledge/learning system asked three questions: is it used,
+can we tell where, and does it stop issues recurring. The first had an answer
+(5.8% of injections are applied), the second did not, and the third was being
+answered by a counter that had been dead for months.
+
+### Added
+
+- **Per-project learning counters.** `learnings-stats.json` now records
+  `byProject` alongside the global totals, so "is this earning its keep in the
+  project I am actually working in" becomes answerable. The global rate says
+  whether the system works at all; only this says where.
+
+### Changed
+
+- **Stack-specific learnings no longer reach projects without that stack.** The
+  injection budget is six entries per prompt, and the entries consuming it
+  hardest were framework trivia in the wrong place: `Svelte bind:value…` at 831
+  injections and **zero** applications, `@next/mdx auto-pipeline…` at 711/0,
+  `__NEXT_PRIVATE_STANDALONE_CONFIG…` at 665/0. Fifty-eight Swift-tagged
+  entries sat in the shared pool, eligible for an Electron/TypeScript project
+  where none could ever apply.
+
+  A learning with no stack tag is a general engineering principle and is
+  **always** eligible — those are the entries that actually get applied, at
+  18-29%. Only a learning declaring a stack the project lacks is dropped, and
+  if the project's stack cannot be determined nothing is dropped at all.
+  Withholding a relevant learning is a silent regression that resurfaces weeks
+  later as a repeated mistake; showing an irrelevant one costs a sixth of a
+  prompt. Measured on this installation: 22% of the eligible pool filtered for
+  an Electron project, 4% for an iOS one, and **no project loses any of its own
+  captured learnings**.
+
+- **`timesCited` and `recurrences` are retired.** Both date from the
+  keyword-citation era — which "cited" 67% of injections on coincidence — and
+  neither has been written since self-reporting replaced it. A
+  `recurrences: 5536` total reads like a live measurement of prevented
+  recurrence, and nothing measures that. They now sit under `legacy` on each
+  entry, and the stats file is backed up once before the first rewrite.
+
+  **Recurrence prevention is still not measured.** Self-reporting captures
+  claimed use, which is a different thing. Worth knowing before drawing
+  conclusions from the numbers.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only: `cd packages/desktop && node
+inject-resources.js --sync-only`, then restart the project-servers.
+
+**In each managed project** — nothing to do. Stack detection is automatic, and
+the legacy-counter migration runs on first read.
+
+---
+
 ## 2026-08-05 — Close the project-server to other browser tabs
 
 ### Security
