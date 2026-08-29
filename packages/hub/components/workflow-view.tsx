@@ -140,6 +140,8 @@ interface Workflow {
   defaultBranch?: string
   developerCli?: AgentCli
   reviewerCli?: AgentCli
+  /** Execution role chosen at start; absent means roles.execution[0]. */
+  builderRole?: string
   autoAdvance?: boolean
   autoAdvanceStrict?: boolean
   /** When true with autoAdvance on execution, auto-skip past demo_review. */
@@ -245,6 +247,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   const types = allowedTypes || ['review', 'execution', 'kickoff']
   const [wfType, setWfType] = useState<string>(types[0])
   const [input, setInput] = useState('')
+  // Which execution role builds a monolithic run. '' = the project default
+  // (roles.execution[0]), which is exactly the pre-picker behaviour.
+  const [execRoles, setExecRoles] = useState<{ role: string; command?: string }[]>([])
+  const [builderRole, setBuilderRole] = useState<string>('')
   const [selectedStep, setSelectedStep] = useState<string | null>(null)
   const [logText, setLogText] = useState<string>('')
   const [viewingLog, setViewingLog] = useState<string | null>(null)
@@ -303,6 +309,15 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   useEffect(() => {
     api.get('/config/cli').then((d: { cli?: { default?: string; groups?: Record<string, { cli?: string | null }> | null } }) => {
       if (d.cli) setUsageProviders(providersFromCliConfig(d.cli))
+    }).catch(() => {})
+  }, [api])
+
+  // The project's execution roster, for the builder picker. Fetched once —
+  // roles change only when config.yaml does, and the picker degrades to "not
+  // shown" if this fails, which is the pre-picker behaviour.
+  useEffect(() => {
+    api.get('/roles').then((d: { roles?: { role: string; category?: string; command?: string }[] }) => {
+      setExecRoles((d.roles || []).filter(r => r.category === 'execution').map(r => ({ role: r.role, command: r.command })))
     }).catch(() => {})
   }, [api])
 
@@ -546,6 +561,9 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     const body: Record<string, string | boolean> = { type: wfType }
     if (wfType !== 'onboarding') body.input = input.trim()
     if (override) body.override = true
+    // Only sent when the owner picked one. Absent means execution[0], which is
+    // what every run did before the picker existed.
+    if (wfType === 'execution' && builderRole) body.builderRole = builderRole
     // Per-run CLI pickers were removed (2026-07-21): agent CLI/model/effort is
     // set per role on the project's Agents tab (or the global Model tab).
     // api.post returns the parsed body (incl. {error}) and does NOT throw on non-2xx,
@@ -786,9 +804,53 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             )}
           </div>
         )}
+        {/* Builder role — which execution role implements this PRD.
+            Shown only when the project has more than one to choose from; with a
+            single execution role there is nothing to pick and the row would be
+            noise. Default '' = roles.execution[0], the pre-picker behaviour. */}
+        {wfType === 'execution' && !wf && execRoles.length > 1 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
+              Builder role
+            </div>
+            <select
+              value={builderRole}
+              onChange={e => setBuilderRole(e.target.value)}
+              style={{
+                width: '100%', padding: '6px 10px', borderRadius: 4,
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+                color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12,
+                outline: 'none',
+              }}
+            >
+              <option value="">Default — {execRoles[0].role}</option>
+              {execRoles.map(r => (
+                <option key={r.role} value={r.role}>{r.role}</option>
+              ))}
+            </select>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+              A monolithic run builds the whole PRD under one role, and that role&apos;s
+              command file carries its domain rules. Picking the wrong track is silent —
+              nothing errors, the story is just built with the wrong lens.
+            </div>
+          </div>
+        )}
         {wfType === 'onboarding' && (
           <div style={{ marginBottom: 16, padding: '8px 10px', background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: 4, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
             Synthesizes vision, ADR-001, project-state, and a baseline PRD from existing files. No input needed — owner sign-off gates the first commit.
+          </div>
+        )}
+
+        {/* Which lens built this run. Recorded because "which role implemented
+            this?" is otherwise answerable only from tmux logs, and it is the
+            first question worth asking when a story comes out wrong. */}
+        {wf && wf.type === 'execution' && wf.builderRole && (
+          <div style={{
+            marginBottom: 16, padding: '6px 10px', borderRadius: 4,
+            background: 'var(--surface2)', border: '1px solid var(--border)',
+            fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+          }}>
+            Builder role: <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{wf.builderRole}</span>
           </div>
         )}
 

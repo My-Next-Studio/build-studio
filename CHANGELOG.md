@@ -21,6 +21,85 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-08-29 — Pick the builder role per run, instead of by config-file order
+
+### Added
+
+- **A Builder role picker on the execution start view.** A monolithic run
+  implements the whole PRD under one execution role, and until now *which* role
+  was decided by array position: the planning shortcut read
+  `roles.execution[0]`, with a hardcoded role-name fallback left over from the
+  example project it was written against. Nothing about the PRD participated.
+
+  A project with more than one implementation track therefore had to reorder its
+  `roles.execution` before each run and put it back afterwards. Forgetting
+  produced no error — a role will build another track's story perfectly happily,
+  with the wrong domain rules and the wrong ADRs, and it surfaces only as
+  diffuse quality loss.
+
+  That is not hypothetical: it happened while this was still a proposal. A
+  native mobile foundation story — build system, UI toolkit, platform sources —
+  was built under a *different* platform's role, because that role was
+  `execution[0]` and the right role was not in the roster at all. The agent
+  carried 239 lines of the wrong platform's guidance while writing the other
+  platform's code, and the run passed code review. A human reading the dashboard
+  noticed; no check did.
+
+  The picker appears only when a project has more than one execution role, and
+  defaults to `roles.execution[0]` — so a run started without touching it
+  behaves exactly as before.
+
+- **`wf.builderRole` is recorded and shown on the run.** "Which lens built
+  this?" was previously answerable only from tmux logs, and it is the first
+  question worth asking when a story comes out wrong.
+
+### Changed
+
+- **A `builderRole` that cannot be resolved now fails the start request** rather
+  than falling back to `roles.execution[0]`. The fallback is right for a bugfix
+  item's frontmatter `role:` — a best-effort hint where a typo should not stop a
+  run — and wrong for an explicit choice, where building under a role the owner
+  did not pick is the exact failure the picker exists to remove. The error names
+  the project's execution roles. A review-only role is refused for the same
+  reason: role lookup treats a category as a preference rather than a filter, so
+  it would otherwise resolve and launch with no branch prefix.
+
+- **Monolithic PRD runs and bugfix runs now share one role-resolution path.**
+  Both go through `resolveBuilderRole`; the inline `execution[0]` read and its
+  hardcoded fallback are gone.
+
+### Known issues
+
+- **A run has more than one lens, and only the builder's is recorded.** The
+  `fix_execution` step derives its role independently, from the fix planner's
+  output, and the fix-planner prompt deliberately instructs it *not* to default
+  to whichever role ran `task_execution` — it routes by the files a fix touches.
+  That is correct behaviour, but it means recording one role per run is
+  incomplete; it should be per step. Noted in `docs/plans/per-run-builder-role-picker.md`.
+
+- **The role order still matters in both directions.** Until a PRD can name its
+  own track (Part 2 of that plan), whichever role sits first still builds any
+  run started without a picker selection — so a roster reordered for one track
+  will silently mis-build the next story from another.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both changed:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+Then restart the Electron app and any running project-servers.
+
+**In each managed project** — nothing to do. The picker defaults to the current
+behaviour. If a project has more than one implementation track, adding the
+missing role to `roles.execution` (with its own command file) is what makes the
+picker useful — but nothing breaks without it.
+
+---
+
 ## 2026-08-29 — Re-reviewers actually get the diff this time
 
 ### Fixed

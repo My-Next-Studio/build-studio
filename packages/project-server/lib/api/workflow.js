@@ -233,6 +233,33 @@ function resolveBuilderRole(config, item) {
   return (config.roles && config.roles.execution && config.roles.execution[0]) || null;
 }
 
+/**
+ * Validate an EXPLICIT builder-role choice made when a run was started.
+ *
+ * Deliberately stricter than resolveBuilderRole. That function's fallback to
+ * execution[0] is right for a bugfix's frontmatter `role:` — a best-effort hint
+ * where a typo should not stop a run. It is wrong for a picker selection:
+ * silently building under a role the owner did not choose is precisely the
+ * failure the picker exists to remove, and it would do it while the UI claimed
+ * otherwise.
+ *
+ * `findRole` treats a category as a preference rather than a filter, so a match
+ * has to be confirmed against the execution list — a review-only role must not
+ * be selectable as the builder.
+ *
+ * @returns {{role: object}|{error: string}}
+ */
+function validateBuilderRole(config, name) {
+  const execution = (config.roles && config.roles.execution) || [];
+  if (execution.length === 0) return { error: 'this project has no roles.execution configured' };
+  const { findRole } = require('../config');
+  const matched = name ? findRole(config, String(name), 'execution') : null;
+  if (!matched || !execution.some(r => r.role === matched.role)) {
+    return { error: `builderRole must be one of: ${execution.map(r => r.role).join(', ')}` };
+  }
+  return { role: matched };
+}
+
 // Build the synthetic single-task plan entry for a bugfix. The bug body is the
 // spec; the discipline block enforces repro-test-first. `role` is a resolved
 // role object; task.role holds its canonical name so launchTaskImpl re-resolves it.
@@ -3249,7 +3276,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
   }
 
   router.post('/workflow/start', (req, res) => {
-    const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, override: startOverride } = req.body;
+    const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, builderRole: startBuilderRole, override: startOverride } = req.body;
     if (!type) return res.status(400).json({ error: 'type required' });
     if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return res.status(400).json({ error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
     if (startDeveloperCli && !VALID_CLIS.includes(startDeveloperCli)) {
@@ -3270,6 +3297,14 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       if (requested && requested !== 'auto' && !enabledClis.includes(requested)) {
         return res.status(400).json({ error: `CLI '${requested}' is not enabled on this installation (enabled: ${enabledClis.join(', ')}). Adjust enabled_clis in ~/.build-studio/config.json.` });
       }
+    }
+    // Which role builds this run. Rejected rather than defaulted: see
+    // validateBuilderRole. Absent = today's behaviour (execution[0]).
+    let resolvedBuilderRole = null;
+    if (startBuilderRole) {
+      const picked = validateBuilderRole(config, startBuilderRole);
+      if (picked.error) return res.status(400).json({ error: picked.error });
+      resolvedBuilderRole = picked.role.role;
     }
     // PRD-001: onboarding needs no input (the project itself is the input).
     // kickoff/review/execution still require input as today.
@@ -3564,6 +3599,10 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       // Legacy per-run CLI knobs: stored ONLY when an explicit value arrives
       // (old hub/API callers). New runs leave them unset so the step group
       // uses the project's per-role selectors (cli.developer_cli/reviewer_cli).
+      // Which execution role builds this run. Stored as the canonical role NAME
+      // so the launcher re-resolves it the same way a bugfix's `role:` is
+      // resolved — one resolution path, not two.
+      ...(resolvedBuilderRole ? { builderRole: resolvedBuilderRole } : {}),
       ...(startDeveloperCli ? { developerCli: startDeveloperCli } : {}),
       ...(startReviewerCli
         ? { reviewerCli: resolveReviewerCliAtStart(startReviewerCli, startDeveloperCli || (config.cli && config.cli.default) || 'claude', enabledClis) }
@@ -6695,6 +6734,26 @@ Report **Approved: yes** once every relevant cell has a test (or a justified MAN
           });
         }
         const prdId = (wf.input || 'PRD').replace(/\s+/g, '-');
+        // WHICH ROLE BUILDS THIS PRD.
+        //
+        // This used to read `config.roles.execution[0]` inline, with a literal
+        // `'iOS Dev'` fallback left over from the example project it was written
+        // against — so the choice was made by array position and nothing about
+        // the PRD participated in it. A project with more than one track had to
+        // reorder its config before each run and put it back afterwards, and
+        // forgetting produced no error: a role builds another track's story
+        // perfectly happily, with the wrong domain rules and the wrong ADRs.
+        //
+        // Now it goes through the same resolver a bugfix's `role:` uses, so
+        // `wf.builderRole` (set at start) and the execution[0] default share one
+        // path instead of two.
+        const monoBuilder = resolveBuilderRole(config, { role: wf.builderRole });
+        if (!monoBuilder) {
+          wf.steps.planning.status = 'blocked';
+          wf.steps.planning.error = 'Monolithic planning cannot pick a builder: this project has no roles.execution configured.';
+          state.saveWorkflow(wf);
+          return res.status(400).json({ error: wf.steps.planning.error, workflow: wf });
+        }
         wf.taskPlan = {
           validation: 'passed',
           monolithic: true,
@@ -6703,7 +6762,7 @@ Report **Approved: yes** once every relevant cell has a test (or a justified MAN
             name: `Implement ${prdId} end-to-end`,
             title: `Implement ${prdId} end-to-end`,
             description: `Read the PRD in full at ${wf.prdPath}. Implement every acceptance criterion and surface the PRD specifies, in one pass. Use the pre-implementation tests at the project's test directory (committed before task_execution started) as your unit-test scaffolding — un-skip them as you implement the corresponding production code. Add UI / integration test coverage for any gesture / interaction ACs. Commit per logical chunk (per surface or per feature group is fine — your judgment on granularity); the dashboard's commit ribbon will show each commit as a milestone. When all ACs are implemented and the relevant test suite passes, POST feedback summarizing what you built, what's tested, and any residual concerns.`,
-            roles: ((config.roles.execution || [])[0]?.role ? [config.roles.execution[0].role] : ['iOS Dev']),
+            roles: [monoBuilder.role],
             acs_covered: ['all'],
             dependencies: [],
             estimated_size: 'large',
@@ -9483,6 +9542,7 @@ module.exports = {
   nextStepInSequence,
   validateBugfixStart,
   resolveBuilderRole,
+  validateBuilderRole,
   buildBugfixTask,
   markPrdDoneContent,
   collectMissingAcArtifacts,
