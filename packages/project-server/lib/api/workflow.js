@@ -17,6 +17,7 @@ const exitRecovery = require('../exit-recovery');
 const agentSkills = require('../agent-skills');
 const gateBlocked = require('../gate-blocked');
 const qaSuite = require('../qa-suite-run');
+const { suggestBuilderRole } = require('../builder-role-hint');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
 
@@ -3299,12 +3300,15 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       }
     }
     // Which role builds this run. Rejected rather than defaulted: see
-    // validateBuilderRole. Absent = today's behaviour (execution[0]).
+    // validateBuilderRole. Absent = the PRD's own `**Role:**` line if it has
+    // one (applied further down, once the PRD is resolved), else execution[0].
     let resolvedBuilderRole = null;
+    let builderRoleSource = null;
     if (startBuilderRole) {
       const picked = validateBuilderRole(config, startBuilderRole);
       if (picked.error) return res.status(400).json({ error: picked.error });
       resolvedBuilderRole = picked.role.role;
+      builderRoleSource = 'picker';
     }
     // PRD-001: onboarding needs no input (the project itself is the input).
     // kickoff/review/execution still require input as today.
@@ -3444,6 +3448,34 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       }
 
       const prdExists = fs.existsSync(path.join(projectRoot, prdPath));
+
+      // The PRD names its own track (Part 2). Applied only when the caller did
+      // not pick explicitly, so the picker always wins — and only for execution
+      // runs, which are the ones that have a builder at all.
+      //
+      // A hint that does not resolve FAILS the start rather than being ignored.
+      // The alternative is starting under a silently different role than the
+      // document names, which is the failure this feature exists to remove; a
+      // typo in a header line is cheap to fix and the error names the roster.
+      if (type === 'execution' && !resolvedBuilderRole && prdExists) {
+        let hint = null;
+        try {
+          hint = suggestBuilderRole({
+            prdText: fs.readFileSync(path.join(projectRoot, prdPath), 'utf8'),
+            item: story || null,
+          });
+        } catch (_) { /* unreadable PRD is caught by the gates above */ }
+        if (hint) {
+          const picked = validateBuilderRole(config, hint.value);
+          if (picked.error) {
+            return res.status(400).json({
+              error: `The ${hint.source === 'prd' ? 'PRD' : 'backlog item'} names builder role "${hint.value}", which this project does not have. ${picked.error}`,
+            });
+          }
+          resolvedBuilderRole = picked.role.role;
+          builderRoleSource = hint.source;
+        }
+      }
 
       if (type === 'review') {
         steps = {
@@ -3602,7 +3634,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       // Which execution role builds this run. Stored as the canonical role NAME
       // so the launcher re-resolves it the same way a bugfix's `role:` is
       // resolved — one resolution path, not two.
-      ...(resolvedBuilderRole ? { builderRole: resolvedBuilderRole } : {}),
+      ...(resolvedBuilderRole ? { builderRole: resolvedBuilderRole, builderRoleSource } : {}),
       ...(startDeveloperCli ? { developerCli: startDeveloperCli } : {}),
       ...(startReviewerCli
         ? { reviewerCli: resolveReviewerCliAtStart(startReviewerCli, startDeveloperCli || (config.cli && config.cli.default) || 'claude', enabledClis) }
@@ -3860,6 +3892,55 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       defaultBranch,
       onDefaultBranch: !!branch && branch === defaultBranch,
       dirty,
+    });
+  });
+
+  // What the documents say this run should build under, so the start view can
+  // preselect the picker and show a mismatch before the run rather than after.
+  //
+  // Best-effort by design: no status gates, no 404s. The authoritative checks
+  // run at start; this only answers "what would be preselected", and a caller
+  // typing a half-finished id must get a quiet null rather than a red error.
+  router.get('/workflow/builder-role', (req, res) => {
+    const input = String(req.query.input || '').trim();
+    const execution = (config.roles && config.roles.execution) || [];
+    const out = { suggested: null, source: null, raw: null, resolves: null, roles: execution.map(r => r.role) };
+    if (!input) return res.json(out);
+
+    let prdPath = null;
+    let story = null;
+    try {
+      const { readItem, isValidId } = require('../backlog');
+      const relDocsPath = path.relative(projectRoot, docsPath) || 'docs';
+      if (isValidId(input)) {
+        try { story = readItem(projectRoot, relDocsPath, input); } catch (_) { story = null; }
+      }
+      if (story && typeof story.prd === 'string' && story.prd.trim()) prdPath = story.prd.trim();
+      if (!prdPath) {
+        const prdsDir = path.join(docsPath, 'prds');
+        if (fs.existsSync(prdsDir)) {
+          const match = fs.readdirSync(prdsDir).find(f => f.toUpperCase().includes(input.toUpperCase().replace(/\s+/g, '-')));
+          if (match) prdPath = `docs/prds/${match}`;
+        }
+      }
+    } catch (_) { /* best effort */ }
+
+    let prdText = '';
+    if (prdPath) {
+      try { prdText = fs.readFileSync(path.join(projectRoot, prdPath), 'utf8'); } catch (_) {}
+    }
+    const hint = suggestBuilderRole({ prdText, item: story });
+    if (!hint) return res.json(out);
+    const picked = validateBuilderRole(config, hint.value);
+    res.json({
+      ...out,
+      suggested: picked.role ? picked.role.role : null,
+      source: hint.source,
+      raw: hint.value,
+      // false = the document names a role this project does not have. The start
+      // request will refuse it; saying so here turns that into a fixable
+      // message instead of a surprise at the moment of starting.
+      resolves: !picked.error,
     });
   });
 

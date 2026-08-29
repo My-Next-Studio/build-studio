@@ -25,6 +25,29 @@ that move underneath you without your having edited anything.
 
 ### Added
 
+- **A PRD can name its own implementation track.** Add a `**Role:**` line to the
+  PRD's header block and every execution run of it builds under that role — from
+  the workflow view, the backlog tab, or a raw API call:
+
+  ```markdown
+  **Status:** Draft
+  **Owner:** PM
+  **Role:** Android Dev
+  ```
+
+  The value accepts a role name, its skill, or the slash form (`Android Dev`,
+  `android_dev`, `/android_dev`) — the same matching a backlog item's `role:`
+  already gets. A backlog item's `role:` is used when the PRD says nothing.
+
+  The start view reads it as you type the input and **preselects** the picker,
+  so the choice is confirmed at a gate you already attend rather than being an
+  extra step to remember. An explicit pick always wins, and the view says so
+  when the two disagree instead of quietly overriding.
+
+  **Only the PRD's header is read** — everything before the first `##`. PRD
+  bodies routinely discuss roles, and letting a sentence set the builder would
+  reintroduce the same silent misrouting through a different door.
+
 - **A Builder role picker on the execution start view.** A monolithic run
   implements the whole PRD under one execution role, and until now *which* role
   was decided by array position: the planning shortcut read
@@ -68,6 +91,13 @@ that move underneath you without your having edited anything.
   Both go through `resolveBuilderRole`; the inline `execution[0]` read and its
   hardcoded fallback are gone.
 
+- **A PRD naming a role the project does not have refuses the start**, rather
+  than being ignored and built under the default. Ignoring it starts the run
+  under a silently different role than the document names — the failure this
+  whole change exists to remove. The error names the project's roster, and the
+  start view flags the same condition before you click. This can only affect a
+  PRD that has a `**Role:**` line, so nothing existing changes.
+
 ### Known issues
 
 - **A run has more than one lens, and only the builder's is recorded.** The
@@ -77,10 +107,11 @@ that move underneath you without your having edited anything.
   That is correct behaviour, but it means recording one role per run is
   incomplete; it should be per step. Noted in `docs/plans/per-run-builder-role-picker.md`.
 
-- **The role order still matters in both directions.** Until a PRD can name its
-  own track (Part 2 of that plan), whichever role sits first still builds any
-  run started without a picker selection — so a roster reordered for one track
-  will silently mis-build the next story from another.
+- **The role order still matters for PRDs that do not name a track.** Whichever
+  role sits first builds any run started without a selection, so a roster
+  reordered for one track will silently mis-build the next story from another.
+  Adding `**Role:**` to a PRD closes that for that PRD; nothing yet tells a PM
+  to write the line, so it has to be added by hand for now.
 
 ### Upgrade steps
 
@@ -94,9 +125,18 @@ cd packages/desktop && node inject-resources.js
 Then restart the Electron app and any running project-servers.
 
 **In each managed project** — nothing to do. The picker defaults to the current
-behaviour. If a project has more than one implementation track, adding the
-missing role to `roles.execution` (with its own command file) is what makes the
-picker useful — but nothing breaks without it.
+behaviour and no existing PRD has a `**Role:**` line, so nothing moves on its
+own.
+
+Two things are worth doing where a project has more than one implementation
+track, in this order:
+
+1. Make sure every track has a role in `roles.execution` with its own command
+   file. A track with no role is the case that bites hardest — the run builds
+   under whichever unrelated role happens to be first.
+2. Add `**Role:** <role name>` to the header of PRDs whose track is not the one
+   sitting at `roles.execution[0]`. Once a project's in-flight PRDs carry it,
+   the reorder-the-roster ritual can be retired for that project.
 
 ---
 

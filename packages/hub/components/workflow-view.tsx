@@ -142,6 +142,8 @@ interface Workflow {
   reviewerCli?: AgentCli
   /** Execution role chosen at start; absent means roles.execution[0]. */
   builderRole?: string
+  /** Where builderRole came from: the picker, the PRD, or the backlog item. */
+  builderRoleSource?: 'picker' | 'prd' | 'item'
   autoAdvance?: boolean
   autoAdvanceStrict?: boolean
   /** When true with autoAdvance on execution, auto-skip past demo_review. */
@@ -251,6 +253,13 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // (roles.execution[0]), which is exactly the pre-picker behaviour.
   const [execRoles, setExecRoles] = useState<{ role: string; command?: string }[]>([])
   const [builderRole, setBuilderRole] = useState<string>('')
+  // What the PRD (or the backlog item) says the track is. Preselects the picker;
+  // `resolves: false` means the document names a role this project lacks, which
+  // the start request will refuse — better said here than at the click.
+  const [roleHint, setRoleHint] = useState<{ suggested: string | null; source: string | null; raw: string | null; resolves: boolean | null } | null>(null)
+  // Set once the owner touches the picker, so a later hint fetch cannot
+  // overwrite a deliberate choice.
+  const [builderRoleTouched, setBuilderRoleTouched] = useState(false)
   const [selectedStep, setSelectedStep] = useState<string | null>(null)
   const [logText, setLogText] = useState<string>('')
   const [viewingLog, setViewingLog] = useState<string | null>(null)
@@ -320,6 +329,24 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
       setExecRoles((d.roles || []).filter(r => r.category === 'execution').map(r => ({ role: r.role, command: r.command })))
     }).catch(() => {})
   }, [api])
+
+  // Ask what the PRD names as its track, and preselect it. Debounced because
+  // this fires per keystroke in the input; the endpoint is best-effort and
+  // answers null for a half-typed id rather than erroring.
+  useEffect(() => {
+    const q = input.trim()
+    if (wfType !== 'execution' || !!wf || !q) { setRoleHint(null); return }
+    const t = setTimeout(() => {
+      api.get(`/workflow/builder-role?input=${encodeURIComponent(q)}`)
+        .then((d: { suggested?: string | null; source?: string | null; raw?: string | null; resolves?: boolean | null }) => {
+          setRoleHint(d?.raw ? { suggested: d.suggested ?? null, source: d.source ?? null, raw: d.raw, resolves: d.resolves ?? null } : null)
+          // Preselect, but never over a choice the owner already made.
+          if (d?.suggested && !builderRoleTouched) setBuilderRole(d.suggested)
+        })
+        .catch(() => setRoleHint(null))
+    }, 350)
+    return () => clearTimeout(t)
+  }, [input, wfType, wf, api, builderRoleTouched])
 
   const load = useCallback(async () => {
     const data = await api.get('/workflow')
@@ -815,7 +842,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             </div>
             <select
               value={builderRole}
-              onChange={e => setBuilderRole(e.target.value)}
+              onChange={e => { setBuilderRoleTouched(true); setBuilderRole(e.target.value) }}
               style={{
                 width: '100%', padding: '6px 10px', borderRadius: 4,
                 background: 'var(--surface2)', border: '1px solid var(--border)',
@@ -828,11 +855,34 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                 <option key={r.role} value={r.role}>{r.role}</option>
               ))}
             </select>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
-              A monolithic run builds the whole PRD under one role, and that role&apos;s
-              command file carries its domain rules. Picking the wrong track is silent —
-              nothing errors, the story is just built with the wrong lens.
-            </div>
+            {roleHint && roleHint.resolves === false ? (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)', marginTop: 6, lineHeight: 1.5 }}>
+                The {roleHint.source === 'prd' ? 'PRD' : 'backlog item'} names builder role{' '}
+                <span style={{ fontWeight: 600 }}>{roleHint.raw}</span>, which this project does not
+                have. Starting will be refused — fix the document&apos;s <code>Role:</code> line, or add
+                the role to <code>roles.execution</code>.
+              </div>
+            ) : roleHint && roleHint.suggested ? (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+                {builderRole === roleHint.suggested ? (
+                  <>Preselected from the {roleHint.source === 'prd' ? 'PRD' : 'backlog item'}, which names{' '}
+                    <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>{roleHint.suggested}</span>.</>
+                ) : (
+                  <span style={{ color: 'var(--orange)' }}>
+                    You have picked <span style={{ fontWeight: 600 }}>{builderRole || execRoles[0]?.role}</span>, but the{' '}
+                    {roleHint.source === 'prd' ? 'PRD' : 'backlog item'} names{' '}
+                    <span style={{ fontWeight: 600 }}>{roleHint.suggested}</span>. Your choice wins.
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+                A monolithic run builds the whole PRD under one role, and that role&apos;s
+                command file carries its domain rules. Picking the wrong track is silent —
+                nothing errors, the story is just built with the wrong lens. Add a{' '}
+                <code>**Role:**</code> line to the PRD header to have this preselected.
+              </div>
+            )}
           </div>
         )}
         {wfType === 'onboarding' && (
@@ -851,6 +901,9 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
           }}>
             Builder role: <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{wf.builderRole}</span>
+            {wf.builderRoleSource && wf.builderRoleSource !== 'picker' && (
+              <span style={{ color: 'var(--muted)' }}> — from the {wf.builderRoleSource === 'prd' ? 'PRD' : 'backlog item'}</span>
+            )}
           </div>
         )}
 
