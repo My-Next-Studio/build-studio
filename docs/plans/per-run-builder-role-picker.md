@@ -1,7 +1,7 @@
 # Plan: pick the builder role per execution run, not by config-file order
 
-> **Status: Parts 1 and 2 implemented 2026-08-29** (proposed 2026-08-23). Part 3
-> is partially done and needs rework; see *Status by part* below.
+> **Status: implemented 2026-08-29** (proposed 2026-08-23). All three parts;
+> see *Status by part* for what each turned out to mean.
 >
 > Owner request: when the PRD being executed is an app story, the run should
 > build under the mobile role; a web story under Frontend/Backend — chosen at
@@ -124,20 +124,29 @@ Decisions taken during implementation:
 - **A picker choice always wins**, and the view says so when the two disagree
   rather than quietly overriding — the disagreement is information.
 
-### Part 3 — persist the choice · **partially implemented**
+### Part 3 — report which lens produced the code · **implemented 2026-08-29**
 
-`wf.builderRole` is recorded and surfaced in the run header, so "which lens
-built this?" has an answer in the UI rather than in tmux logs.
+Scoped differently from the original proposal, which said "persist the choice"
+and treated the builder role as a run-level property. It is not one.
 
-**What remains, and it is not what the original plan assumed.** The plan treated
-the builder role as a run-level property. It is not: the `fix_execution` step
-derives its role independently, by counting role names in the *fix planner's*
-output, and the fix-planner prompt explicitly instructs *"Do not default to
-whichever role ran the previous task_execution"* — it routes by the files a fix
-will touch. That is deliberate and correct (a cross-cutting fix belongs to the
-role that owns the files), but it means a run genuinely has more than one lens.
-Recording one name per run is therefore incomplete: **Part 3 should record the
-resolved role per step, not per run.**
+`fix_execution` derives its role independently, by counting role names in the
+*fix planner's* output, and the fix-planner prompt explicitly instructs *"Do not
+default to whichever role ran the previous task_execution"* — it routes by the
+files a fix will touch. That is deliberate and correct: a cross-cutting fix
+belongs to the role that owns those files. So a run genuinely has more than one
+lens, and recording one name per run would have named the builder while
+silently implying the fixes shared it.
+
+`lib/run-roles.js` therefore reports **per step**, derived from the agents that
+actually ran rather than stored — a second copy is one more thing that can
+disagree with reality. The run header lists each implementation step's roles and
+says when they differ, framing the difference as expected rather than as a
+warning. `wf.builderRole` remains, meaning what it says: what was *chosen*.
+
+One implementation trap worth recording: `task_execution`'s agents live in
+`wf.taskExecution.taskStates[i].agents`, and `wf.steps.task_execution.agents` is
+a mirror that only `updateStepAgents` fills — routinely empty mid-run. Reading
+the step and not the task states loses the builder entirely.
 
 ## Explicitly out of scope
 
@@ -169,8 +178,10 @@ resolved role per step, not per run.**
    hand-maintained obligation *in both directions*. Sequence: add the line to
    the in-flight PRDs, then flip the roster to a stable order and delete the
    ritual from the config comment.
-3. **Part 3's rework** — recording the resolved role per step rather than per
-   run (see above).
+3. **Fine-grained runs** — the planner assigns roles per task and ignores the
+   picker entirely, which is right. Whether a PRD's `**Role:**` line should
+   constrain the planner's choices, or stay purely a monolithic-builder hint, is
+   untested either way.
 
 ## Verification
 

@@ -72,9 +72,21 @@ that move underneath you without your having edited anything.
   defaults to `roles.execution[0]` — so a run started without touching it
   behaves exactly as before.
 
-- **`wf.builderRole` is recorded and shown on the run.** "Which lens built
-  this?" was previously answerable only from tmux logs, and it is the first
-  question worth asking when a story comes out wrong.
+- **The run header now reports which role implemented what, per step.** "Which
+  lens produced this code?" was previously answerable only from tmux logs, and
+  it is the first question worth asking when a story comes out wrong.
+
+  It is deliberately not a single answer. `task_execution` builds under the
+  builder role, but `fix_execution` derives its own from the **fix planner**,
+  which is explicitly instructed *not* to inherit the builder's — it routes by
+  the files a fix will touch. A cross-cutting fix genuinely belongs to the role
+  that owns those files, so a run having two lenses is correct behaviour rather
+  than drift. Reporting only the builder would have named the first lens and
+  silently implied the fixes shared it; the header now lists each step's roles
+  and says so when they differ.
+
+  Derived from the agents that actually ran, never stored — a second copy is one
+  more thing that can disagree with reality.
 
 ### Changed
 
@@ -99,13 +111,6 @@ that move underneath you without your having edited anything.
   PRD that has a `**Role:**` line, so nothing existing changes.
 
 ### Known issues
-
-- **A run has more than one lens, and only the builder's is recorded.** The
-  `fix_execution` step derives its role independently, from the fix planner's
-  output, and the fix-planner prompt deliberately instructs it *not* to default
-  to whichever role ran `task_execution` — it routes by the files a fix touches.
-  That is correct behaviour, but it means recording one role per run is
-  incomplete; it should be per step. Noted in `docs/plans/per-run-builder-role-picker.md`.
 
 - **The role order still matters for PRDs that do not name a track.** Whichever
   role sits first builds any run started without a selection, so a roster

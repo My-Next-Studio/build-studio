@@ -3095,6 +3095,10 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       }));
     res.json({
       workflow: wf, projectWorkflowSteps, preset: config.preset, pathologySignals, findings, needsAttention,
+      // Which lens actually implemented what. Derived, not stored — the agents
+      // already carry their roles, and a run has more than one lens by design
+      // (the fix loop retargets deliberately). See lib/run-roles.js.
+      runRoles: require('../run-roles').runRoleSummary(wf),
       limitBlocked: limitBlocked.length ? limitBlocked : null,
       maxReviewRounds: config.max_review_rounds || DEFAULT_MAX_REVIEW_ROUNDS,
     });

@@ -246,6 +246,11 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   const [findings, setFindings] = useState<Finding[]>([])
   const [findingOverrides, setFindingOverrides] = useState<Record<string, Finding['status']>>({})
   const [projectWorkflowSteps, setProjectWorkflowSteps] = useState<Record<string, string[]> | null>(null)
+  /** Which role implemented what — derived server-side (project-server/lib/run-roles.js). */
+  const [runRoles, setRunRoles] = useState<{
+    chosen: string | null; source: string | null; ran: string[]; divergent: boolean
+    perStep: { step: string; roles: string[] }[]
+  } | null>(null)
   const types = allowedTypes || ['review', 'execution', 'kickoff']
   const [wfType, setWfType] = useState<string>(types[0])
   const [input, setInput] = useState('')
@@ -371,6 +376,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // (after preset + overrides). Used below to filter the timeline so that
     // e.g. static-site projects don't show device_testing.
     if (data.projectWorkflowSteps) setProjectWorkflowSteps(data.projectWorkflowSteps)
+    setRunRoles(data.runRoles || null)
     if (data.workflow) {
       setWfType(data.workflow.type)
       setInput(data.workflow.input)
@@ -891,18 +897,36 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
           </div>
         )}
 
-        {/* Which lens built this run. Recorded because "which role implemented
-            this?" is otherwise answerable only from tmux logs, and it is the
-            first question worth asking when a story comes out wrong. */}
-        {wf && wf.type === 'execution' && wf.builderRole && (
+        {/* WHICH LENS PRODUCED THIS CODE.
+            Not a single answer: the fix loop derives its own role from the fix
+            planner and is deliberately told not to inherit the builder's, so a
+            run genuinely has more than one. Showing only the builder would name
+            the first lens and silently imply the fixes shared it. */}
+        {wf && (wf.type === 'execution' || wf.type === 'bugfix') && runRoles && (runRoles.chosen || runRoles.ran.length > 0) && (
           <div style={{
             marginBottom: 16, padding: '6px 10px', borderRadius: 4,
             background: 'var(--surface2)', border: '1px solid var(--border)',
             fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+            display: 'flex', flexDirection: 'column', gap: 3,
           }}>
-            Builder role: <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{wf.builderRole}</span>
-            {wf.builderRoleSource && wf.builderRoleSource !== 'picker' && (
-              <span style={{ color: 'var(--muted)' }}> — from the {wf.builderRoleSource === 'prd' ? 'PRD' : 'backlog item'}</span>
+            {runRoles.chosen && (
+              <div>
+                Builder role: <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{runRoles.chosen}</span>
+                {runRoles.source && runRoles.source !== 'picker' && (
+                  <span style={{ color: 'var(--muted)' }}> — from the {runRoles.source === 'prd' ? 'PRD' : 'backlog item'}</span>
+                )}
+              </div>
+            )}
+            {runRoles.perStep.map(s => (
+              <div key={s.step} style={{ color: 'var(--muted)' }}>
+                {s.step}: <span style={{ color: 'var(--text-dim)' }}>{s.roles.join(', ')}</span>
+              </div>
+            ))}
+            {runRoles.divergent && (
+              <div style={{ color: 'var(--muted)', lineHeight: 1.5 }}>
+                More than one role implemented this run. That is normal — the fix loop
+                routes by the files a fix touches, not by who built it.
+              </div>
             )}
           </div>
         )}
