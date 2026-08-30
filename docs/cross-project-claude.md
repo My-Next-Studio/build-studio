@@ -157,6 +157,31 @@ the same workflow.
 — but the phase boundaries and gates still apply. The gates exist so nothing is
 skipped, not to create ceremony.
 
+## PRD builder role (multi-track projects)
+
+A monolithic execution run builds the whole PRD under **one** execution role,
+and that role's command file carries its domain rules, ADRs and toolchain
+habits. On a project with more than one implementation track (web + mobile,
+iOS + Android, …), the PRD must say which one it belongs to — add a `**Role:**`
+line to the header block, above the first `##` section:
+
+```markdown
+**Status:** Draft
+**Owner:** PM
+**Role:** iOS Dev
+```
+
+The value is one of the project's `roles.execution` entries; role name, skill,
+or slash form all resolve (`iOS Dev`, `ios_dev`, `/ios_dev`). Only the header is
+read — a mention in the body does not count, deliberately, so prose about roles
+cannot redirect a run.
+
+Without the line, the builder is whichever role sits first in `roles.execution`,
+and choosing wrong is **silent**: the run produces plausible code against the
+wrong guidance and passes review. Projects that set
+`execution.require_builder_role` refuse to start an execution run whose PRD
+omits it. Single-track projects need nothing here.
+
 ## Companion Specs Convention (ENFORCED)
 
 Every PRD MUST contain a **Companion Specs delivery table** as a top-level

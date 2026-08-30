@@ -88,6 +88,27 @@ that move underneath you without your having edited anything.
   Derived from the agents that actually ran, never stored — a second copy is one
   more thing that can disagree with reality.
 
+### Added
+
+- **An optional start gate: `execution.require_builder_role`.** When set, an
+  execution run whose PRD does not name its builder role is refused, with the
+  usual `{"override": true}` escape hatch and an error naming the project's
+  roles. It closes the gap the picker leaves open — a PRD that says nothing is
+  indistinguishable from a single-track project, and falls through to
+  `roles.execution[0]`.
+
+  **Default off, and self-limiting when on.** The gate is skipped entirely on a
+  project with fewer than two execution roles: there is nothing to choose,
+  `execution[0]` is unambiguously right, and demanding the line would block
+  every run for nothing. A project that later adds a second role starts
+  enforcing automatically — which is when the question becomes real. Projects
+  whose PRDs are not written by `/pm` have nobody to add the line, which is the
+  other reason this is opt-in rather than the default.
+
+- **`/pm` now writes the line.** The PM base role and the cross-project
+  conventions both document the `**Role:**` header, when it is required, and
+  why getting it wrong is silent rather than loud.
+
 ### Changed
 
 - **A `builderRole` that cannot be resolved now fails the start request** rather
@@ -132,6 +153,18 @@ Then restart the Electron app and any running project-servers.
 **In each managed project** — nothing to do. The picker defaults to the current
 behaviour and no existing PRD has a `**Role:**` line, so nothing moves on its
 own.
+
+**To turn on the start gate**, add to a project's `.build-studio/config.yaml`:
+
+```yaml
+execution:
+  require_builder_role: true
+```
+
+It does nothing until the project has two or more execution roles, so setting it
+everywhere is safe. Once it is active, the next execution run whose PRD lacks a
+`**Role:**` line is refused — with an override — so add the lines first if you
+would rather not meet the gate mid-flight.
 
 Two things are worth doing where a project has more than one implementation
 track, in this order:

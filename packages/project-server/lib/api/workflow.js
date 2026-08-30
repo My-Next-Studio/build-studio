@@ -3519,6 +3519,37 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
           // {override:true} escape hatch pattern used by every other gate in
           // this file — a deliberate owner call to proceed anyway must stay
           // possible, just not the silent default.
+          // The PRD must name the role that builds it, when the project asks
+          // for that. Off by default — see config.js DEFAULTS.execution.
+          //
+          // The gate is about the LINE being there, not about whether it
+          // resolves: an unresolvable value already fails above, unconditionally
+          // and with a better message. What this adds is "the PM did not say",
+          // which is otherwise indistinguishable from "this project has one
+          // track" and silently falls through to roles.execution[0].
+          //
+          // Self-limiting: skipped when the project has fewer than two
+          // execution roles. With one role there is nothing to choose,
+          // execution[0] is unambiguously right, and demanding the line would
+          // block every run in exchange for nothing. A project that later adds
+          // a second role starts enforcing automatically — which is exactly
+          // when the question becomes real.
+          const execRoleNames = ((config.roles && config.roles.execution) || []).map(r => r.role);
+          if (!startOverride
+              && (config.execution && config.execution.require_builder_role)
+              && execRoleNames.length > 1
+              && !resolvedBuilderRole) {
+            const roleList = execRoleNames;
+            return res.status(400).json({
+              error: `Cannot start execution: ${prdPath} does not name the role that should build it, and this project requires it (execution.require_builder_role).\n\n`
+                + `Add a header line to the PRD, above the first "##" section:\n\n    **Role:** ${roleList[0] || '<execution role>'}\n\n`
+                + `Available: ${roleList.join(', ') || '(none configured)'}. `
+                + `You can also pick one for this run only, or retry with {"override": true} to build under ${roleList[0] || 'the default role'}.`,
+              needsBuilderRole: true,
+              roles: roleList,
+              canOverride: true,
+            });
+          }
           if (!startOverride) {
             const prdContent = fs.readFileSync(path.join(projectRoot, prdPath), 'utf8');
             const incomplete = findIncompleteRequiredSpecs(prdContent);

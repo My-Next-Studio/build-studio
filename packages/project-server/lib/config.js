@@ -50,6 +50,18 @@ const DEFAULTS = {
   //            every response and keeps working until it is met. Claude-only,
   //            monolithic-only; ignored for Codex/OpenCode builders and fine-grained.
   builder_strategy: 'role',
+  // execution: start-gate policy for execution runs.
+  //   require_builder_role — refuse to start unless the PRD names the role that
+  //   should build it (a `**Role:**` header line resolving to one of
+  //   roles.execution). Overridable per start with {override:true}.
+  //
+  //   DEFAULT OFF, deliberately. The gate only earns its keep on a project with
+  //   several implementation tracks whose PRDs are written by /pm. A
+  //   single-track project has one execution role and nothing to choose, and a
+  //   project whose PRDs are hand-written or come from elsewhere has nobody to
+  //   add the line — for both, this would be a hard block on every run in
+  //   exchange for nothing. Opt in per project.
+  execution: { require_builder_role: false },
   worktree_env_files: [],
   // Execution-phase recall gates (project-agnostic; see docs). All hot-reloaded.
   // coverage_matrix: ADVISORY post-implementation coverage check (non-blocking).
@@ -242,6 +254,7 @@ function loadConfig(projectRoot) {
     step_groups: normalizeStepGroups(
       local.step_groups || raw.step_groups || loadHubConfig().step_groups || null,
     ),
+    execution: { ...DEFAULTS.execution, ...(raw.execution || {}) },
     deployment: { ...DEFAULTS.deployment, ...(raw.deployment || {}) },
     functions: { ...DEFAULTS.functions, ...(raw.functions || {}) },
     bugfix: { ...DEFAULTS.bugfix, ...(raw.bugfix || {}) },

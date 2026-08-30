@@ -106,3 +106,34 @@ test('the review cap has one source, so the loop and the UI cannot disagree', ()
   assert.deepEqual(hardcoded, [], `hardcoded review-cap fallbacks: ${hardcoded.join(', ')}`);
   assert.ok((src.match(/config\.max_review_rounds \|\| DEFAULT_MAX_REVIEW_ROUNDS/g) || []).length >= 3);
 });
+
+// ── execution.require_builder_role ───────────────────────────────────────────
+//
+// The gate that refuses an execution start unless the PRD names its builder.
+// Default OFF is the load-bearing part: it only earns its keep on a project
+// with several implementation tracks whose PRDs are written by /pm. Turning it
+// on by default would hard-block every run on single-track projects, and on
+// projects whose PRDs are hand-written and have nobody to add the line.
+
+test('require_builder_role defaults to off', () => {
+  const root = makeProject('name: x\nport: 3999\n');
+  try {
+    assert.equal(loadConfig(root).execution.require_builder_role, false);
+  } finally { clean(root) }
+});
+
+test('a project can opt in', () => {
+  const root = makeProject('name: x\nport: 3999\nexecution:\n  require_builder_role: true\n');
+  try {
+    assert.equal(loadConfig(root).execution.require_builder_role, true);
+  } finally { clean(root) }
+});
+
+test('an unrelated execution key does not drop the default', () => {
+  // Object-merge, not replace — a project setting some future execution.* knob
+  // must not silently turn the gate's default into undefined.
+  const root = makeProject('name: x\nport: 3999\nexecution:\n  something_else: 1\n');
+  try {
+    assert.equal(loadConfig(root).execution.require_builder_role, false);
+  } finally { clean(root) }
+});
