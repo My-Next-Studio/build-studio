@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const { stripAnsi, renderPipePaneLog } = require('../tmux');
 const opencodeTelemetry = require('../opencode-telemetry');
+const codexTelemetry = require('../codex-telemetry');
+const tokenPricing = require('../token-pricing');
 const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
 const { deriveNeedsAttention } = require('../needs-attention');
 const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
@@ -1302,11 +1304,12 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
 
   state.registerCompletionHook(updateProjectStateCost);
 
-  // Cost per 1M tokens (USD) — Sonnet 4.x and Opus 4.x pricing
-  const TOKEN_COSTS = {
-    opus:   { input: 15, output: 75, cacheCreate: 18.75, cacheRead: 1.5 },
-    sonnet: { input: 3,  output: 15, cacheCreate: 3.75,  cacheRead: 0.3 },
-  };
+  // Pricing moved to lib/token-pricing.js. The table that lived here had two
+  // keys — `opus` and `sonnet`, at Opus 4.x rates — and resolved with
+  // `TOKEN_COSTS[model] || TOKEN_COSTS.sonnet`. Every model id actually in use
+  // (`claude-opus-5[1m]`, `gpt-5.6-sol`, `openrouter/…`) matched neither, so
+  // every agent everywhere was priced at Sonnet 4.x and nobody noticed. An
+  // unknown model now prices to null instead of to the cheapest row.
 
   /**
    * Token usage for ONE agent.
@@ -1372,15 +1375,10 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
 
       if (!found) return null;
 
-      const rates = TOKEN_COSTS[modelShortName] || TOKEN_COSTS.sonnet;
-      const costUSD = (
-        inputTokens  * rates.input       +
-        outputTokens * rates.output      +
-        cacheCreate  * rates.cacheCreate +
-        cacheRead    * rates.cacheRead
-      ) / 1_000_000;
-
-      return { inputTokens, outputTokens, cacheCreate, cacheRead, costUSD: Math.round(costUSD * 10000) / 10000 };
+      // null when the model is not in the rate table — the caller renders that
+      // as "not priced" rather than summing it as zero.
+      const cost = tokenPricing.costUSD(modelShortName, { inputTokens, outputTokens, cacheRead, cacheCreate });
+      return { inputTokens, outputTokens, cacheCreate, cacheRead, costUSD: cost, model: modelShortName || null };
     } catch (_) {
       return null;
     }
@@ -1405,6 +1403,38 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
     };
   }
 
+  // ── Codex telemetry ───────────────────────────────────────────────────────
+  // The third CLI had no usage at all: computeTokenUsage needs a session id and
+  // only Claude gets one at launch, so every Codex agent reported nothing. That
+  // blind spot follows role assignment — where a project runs its monolithic
+  // builder on Codex, the most expensive step in the run had no cost attached.
+  //
+  // `codex exec` cannot be given a session id, but it prints the one it chose,
+  // and the launcher already pipes the pane to <window>-<wfid>.log. See
+  // lib/codex-telemetry.js for why that beats matching on a time window.
+  function captureCodexTelemetry(wf, agent) {
+    try {
+      if (!agent || agent.cli !== 'codex' || !agent.window || agent.tokenUsage) return;
+      const logFile = path.join(logsPath, `${agent.window}-${wf.id}.log`);
+      const got = codexTelemetry.captureFromLog(logFile);
+      if (!got) return;   // unreadable id or missing rollout: no usage beats a guess
+      const u = got.usage;
+      agent.cliSessionId = agent.cliSessionId || got.sessionId;
+      agent.tokenUsage = {
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        cacheCreate: u.cacheCreate,
+        cacheRead: u.cacheRead,
+        reasoningTokens: u.reasoningTokens,
+        // Price on the model the ROLLOUT reports, not agent.model — the latter
+        // is the literal "codex" for these agents and prices to nothing.
+        costUSD: tokenPricing.costUSD(u.model || agent.model, u),
+        model: u.model || agent.model || null,
+        source: 'codex-rollout',
+      };
+    } catch (_) { /* telemetry is advisory — never break a completion path */ }
+  }
+
   function captureOpencodeTelemetry(wf, agent, findAgent) {
     try {
       if (!agent || agent.cli !== 'opencode' || !agent.window) return;
@@ -1422,16 +1452,21 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   // feedback POST (error/stalled) — their events files hold real usage too.
   function sweepOpencodeTelemetry(wf) {
     try {
+      // Both non-Claude CLIs, and both for the same reason: an agent that ended
+      // WITHOUT posting feedback (errored, stalled, reaped) never reached the
+      // per-completion capture, but its files hold real usage all the same.
       for (const [stepName, step] of Object.entries(wf.steps || {})) {
         for (const a of (step.agents || [])) {
-          if (!a || a.cli !== 'opencode' || !a.window) continue;
-          captureOpencodeTelemetry(wf, a, (f) => (f.steps?.[stepName]?.agents || []).find(x => x.window === a.window));
+          if (!a || !a.window) continue;
+          if (a.cli === 'opencode') captureOpencodeTelemetry(wf, a, (f) => (f.steps?.[stepName]?.agents || []).find(x => x.window === a.window));
+          if (a.cli === 'codex') captureCodexTelemetry(wf, a);
         }
       }
       for (const [k, ts] of Object.entries(wf.taskExecution?.taskStates || {})) {
         for (const a of (ts.agents || [])) {
-          if (!a || a.cli !== 'opencode' || !a.window) continue;
-          captureOpencodeTelemetry(wf, a, (f) => (f.taskExecution?.taskStates?.[k]?.agents || []).find(x => x.window === a.window));
+          if (!a || !a.window) continue;
+          if (a.cli === 'opencode') captureOpencodeTelemetry(wf, a, (f) => (f.taskExecution?.taskStates?.[k]?.agents || []).find(x => x.window === a.window));
+          if (a.cli === 'codex') captureCodexTelemetry(wf, a);
         }
       }
     } catch (_) {}
@@ -3789,6 +3824,10 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     }
     // FU-1: harvest the opencode events stream into tokenUsage + kick actual-model resolution.
     captureOpencodeTelemetry(wf, agent, (f) => (f.steps?.[wf.currentStep]?.agents || []).find(a => normalizeRole(a.role) === normalizeRole(role)));
+    // Codex: read the session id out of its own banner, then its rollout.
+    // MUST run before reapAgentWindow — the pane log is the only link, and
+    // reaping the window is what stops it being written.
+    captureCodexTelemetry(wf, agent);
     // Telemetry is harvested from files, not the pane — safe to close it now.
     reapAgentWindow(wf, agent);
     const feedbackEntry = { role, feedback, round: wf.round, step: wf.currentStep, at: new Date().toISOString() };
@@ -4000,33 +4039,27 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     function sumWorkflow(wf) {
       if (!wf) return;
       const prdId = wf.input || wf.id || 'unknown';
-      if (!byPrd[prdId]) byPrd[prdId] = { prdId, tokens: 0, costUSD: 0 };
+      // `unpriced` is reported, not hidden. An agent whose model is not in the
+      // rate table now yields costUSD: null, and adding null to a running total
+      // gives NaN — which would poison a whole project's figure invisibly.
+      // Skipping it silently is barely better: the total then reads LOWER the
+      // less of the run is understood. Counting the gap is what makes the
+      // number safe to compare across projects.
+      if (!byPrd[prdId]) byPrd[prdId] = { prdId, tokens: 0, costUSD: 0, unpricedAgents: 0 };
+      const add = (u) => {
+        if (!u) return;
+        byPrd[prdId].tokens += (Number(u.inputTokens) || 0) + (Number(u.outputTokens) || 0);
+        if (Number.isFinite(Number(u.costUSD))) byPrd[prdId].costUSD += Number(u.costUSD);
+        else byPrd[prdId].unpricedAgents += 1;
+      };
       for (const step of Object.values(wf.steps || {})) {
-        // Accumulated tokens from previous agent cycles
-        if (step.cumulativeTokens) {
-          byPrd[prdId].tokens  += step.cumulativeTokens.inputTokens + step.cumulativeTokens.outputTokens;
-          byPrd[prdId].costUSD += step.cumulativeTokens.costUSD;
-        }
-        // Current agents not yet captured
-        for (const agent of (step.agents || [])) {
-          if (agent.tokenUsage) {
-            byPrd[prdId].tokens  += agent.tokenUsage.inputTokens + agent.tokenUsage.outputTokens;
-            byPrd[prdId].costUSD += agent.tokenUsage.costUSD;
-          }
-        }
+        add(step.cumulativeTokens);                       // earlier agent cycles
+        for (const agent of (step.agents || [])) add(agent.tokenUsage);
       }
       // task_execution agents live under wf.taskExecution.taskStates
       for (const ts of Object.values(wf.taskExecution?.taskStates || {})) {
-        if (ts.cumulativeTokens) {
-          byPrd[prdId].tokens  += ts.cumulativeTokens.inputTokens + ts.cumulativeTokens.outputTokens;
-          byPrd[prdId].costUSD += ts.cumulativeTokens.costUSD;
-        }
-        for (const agent of (ts.agents || [])) {
-          if (agent.tokenUsage) {
-            byPrd[prdId].tokens  += agent.tokenUsage.inputTokens + agent.tokenUsage.outputTokens;
-            byPrd[prdId].costUSD += agent.tokenUsage.costUSD;
-          }
-        }
+        add(ts.cumulativeTokens);
+        for (const agent of (ts.agents || [])) add(agent.tokenUsage);
       }
     }
 
@@ -4580,6 +4613,20 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       const step = wf.steps[wf.currentStep];
       if (!step) return res.status(400).json({ error: 'no step to relaunch' });
       console.log(`[workflow] Relaunching step=${wf.currentStep}`);
+      // Stop a server-run test suite first.
+      //
+      // It is OUR child, not an agent, so the tmux window sweep below never
+      // touches it. Left alone it keeps running while the relaunched step tries
+      // to start its own — and the new run's in-flight guard then declines and
+      // falls back to letting the agent run the tests, so a relaunch would
+      // quietly downgrade the step AND orphan a 10-minute xcodebuild holding the
+      // simulator against every other project.
+      if (step.suiteRun && step.suiteRun.status === 'running') {
+        console.warn(`[qa-suite] relaunch of ${wf.currentStep} — stopping the running suite (pid ${step.suiteRun.pid})`);
+        qaSuite.killGroup(step.suiteRun.pid, 'SIGTERM');
+        step.suiteRun.status = 'cancelled';
+        step.suiteRun.finishedAt = new Date().toISOString();
+      }
       // Kill any running agent windows for this step (including duplicates from failed relaunches)
       if (step.agents) {
         const { execFileSync } = require('child_process');

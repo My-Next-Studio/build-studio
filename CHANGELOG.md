@@ -21,6 +21,79 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-05 — Codex agents report their cost, and unpriced models say so
+
+### Fixed
+
+- **Codex agents recorded no token usage at all.** Usage is read from an agent's
+  own session transcript, keyed on a session id — and only Claude agents get one
+  at launch, so every Codex agent reported nothing. The blind spot followed role
+  assignment rather than being spread evenly: where a project runs its
+  monolithic builder on Codex, the most expensive step in the run was the one
+  with no cost attached.
+
+  `codex exec` cannot be given a session id, but it prints the one it chose, and
+  the launcher already pipes the pane to a log. That id now locates the rollout
+  file, whose running totals give real input, output, reasoning, cache-read and
+  cache-write counts. Measured on one historical code-review agent: **508,160
+  cache-read tokens** that had been invisible.
+
+  Deliberately *not* matched by time window. That is the attribution bug this
+  repo already paid for — it charged each of six concurrent reviewers for all
+  six plus the owner's own terminal session, overstating a round by 4.3x. When
+  the id or the rollout cannot be found, the agent reports no usage rather than
+  a plausible number.
+
+- **Every agent, on every CLI, was priced as Sonnet 4.x.** The rate table had
+  two keys, `opus` and `sonnet`, holding Opus 4.x prices, and resolved with
+  `TOKEN_COSTS[model] || TOKEN_COSTS.sonnet`. No model id in actual use —
+  `claude-opus-5[1m]`, `gpt-5.6-sol`, `openrouter/…` — matched either key, so
+  everything silently fell through to the cheapest row, naming a model that was
+  not being used. On one execution run that understated the true figure by about
+  1.7x.
+
+  Pricing now lives in `lib/token-pricing.js` with per-model rates including a
+  **cache-read column**, which matters more than the rest combined: a measured
+  run showed 28.4M cache-read tokens against 173K of output, a ratio near 200:1.
+
+### Changed
+
+- **An unpriced model now yields `costUSD: null`, not a guessed number.** There
+  is no fallback rate. Project totals count those agents in a new
+  `unpricedAgents` field instead of adding them as zero — a total that reads
+  lower the less of a run is understood is the same failure as pricing it
+  wrongly, only quieter.
+
+- **Codex usage is priced on the model its rollout reports**, not on
+  `agent.model` — the latter stores the literal string `codex` for these agents,
+  which prices to nothing. This also gives the honest answer when the serving
+  model differs from the configured one.
+
+### Known issues
+
+- Historical `tokenUsage` recorded before 2026-08-22 came from the old
+  time-window attribution and is unreliable — Codex agents from that era carry
+  numbers derived from *Claude* transcripts in the same directory. Any
+  aggregation over old snapshots should exclude it; the `source` field on newly
+  captured usage distinguishes what was measured properly.
+
+### Upgrade steps
+
+**In Build Studio** — project-server change only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the Electron app and any running project-servers.
+
+**In each managed project** — nothing to do. Capture is automatic for Codex
+agents from the next run. If a project uses a model not in the rate table, its
+agents report tokens with `costUSD: null` and are counted in `unpricedAgents`;
+add the model to `RATES` in `lib/token-pricing.js` to price it.
+
+---
+
 ## 2026-08-29 — Pick the builder role per run, instead of by config-file order
 
 ### Added
