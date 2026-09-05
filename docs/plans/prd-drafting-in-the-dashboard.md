@@ -96,6 +96,68 @@ wrong lens, plausible output, nothing errors. That failure has already been paid
 for once at the builder level. It is the strongest argument for cutting at phase
 boundaries rather than never cutting.
 
+## LLM-agnostic by construction
+
+Build Studio supports three agent CLIs and a fork may use any of them, so
+drafting cannot be a Claude-only feature. It depends on two capabilities —
+**resuming a session** and **invoking a skill** — and both turn out to be
+universal. Verified against the installed CLIs:
+
+| | session id | resume | skills |
+|---|---|---|---|
+| claude | **pinned at launch** (`--session-id`) | `--resume <id>` | `~/.claude/skills/` + project `.claude/skills/` |
+| codex | assigned; printed in its banner | `codex resume <id> [PROMPT]` | `~/.codex/skills/` |
+| opencode | assigned | `--session <id>`, or `--continue` for the last | `~/.config/opencode/skills/` |
+
+Three differences, all mechanical:
+
+- **Acquiring the session id.** Claude lets us choose one; the other two assign
+  it and we read it back. That read-back already exists for Codex — the
+  telemetry work parses the id out of the pane log to find its rollout, and
+  drafting needs the same value for the same reason.
+- **The resume invocation** differs per CLI. `codex resume` conveniently takes
+  the follow-up prompt as an argument, which is exactly the drafting shape.
+- **Where a skill is installed.** The **SKILL.md format is identical** across all
+  three — same frontmatter, same body — so the file this plan depends on is
+  already portable. Only the directory differs.
+
+All three belong in `shared/cli.js`, which is already the single source of truth
+for the claude/codex/opencode switch and is where every other per-CLI spelling
+lives.
+
+**The real gap is distribution, not capability.** `draft_prd` is installed today
+into each project's `.claude/skills/`, which only Claude Code reads. A Codex or
+OpenCode user gets the Draft button and no skill behind it. Build Studio already
+scaffolds skills into projects; it needs to place them for whichever CLIs are
+enabled, not only for Claude.
+
+### Configured, not picked per run
+
+Workflow runs get a per-run CLI picker because each run is independent. Drafting
+is the opposite: it is one continuing conversation, and switching model
+mid-conversation is not a feature. So it is **configuration**, in the same
+`{cli, model, effort}` slot shape the rest of the cli block already uses:
+
+```yaml
+cli:
+  drafting:
+    cli: claude
+    model: claude-opus-5[1m]
+    effort: medium
+```
+
+A sibling of `cli.groups`, not a member of it: groups are keyed by *step group*,
+and drafting is not a step. Reusing the slot shape means it inherits the
+existing validation and can appear in the Model tab beside the others.
+
+**Changing it is a session boundary.** Switching CLI or model — at a new model
+release, say — should offer to start a fresh drafting session rather than
+resuming the old one under a different mind. That is the same reason the owner
+wants consistency in the first place: a conversation half-reasoned by one model
+and half by another is worse than either. It also gives the "visible and
+cuttable boundary" above a natural, meaningful trigger instead of an arbitrary
+one.
+
 ## Other considerations
 
 - **Abandonment.** A session walked away from leaves the item in limbo. Rule:
@@ -117,12 +179,20 @@ boundaries rather than never cutting.
 
 Each is useful on its own, and each proves the next.
 
-1. **Draft button → interactive session.** Launches `claude` in a tmux window
-   outside the workflow slot, pastes the skill invocation, opens the terminal
-   panel. No continuity. Proves the plumbing end to end.
+1. **Draft button → interactive session.** Launches the configured CLI in a tmux
+   window outside the workflow slot, delivers the skill invocation, opens the
+   terminal panel. No continuity. Proves the plumbing end to end.
 2. **Session persistence.** Store the drafting session id per project, resume
-   it, show age and usage, offer "start fresh".
-3. **Delta re-grounding** on resume.
+   it, show age and usage, offer "start fresh". This is where the per-CLI
+   resume spellings land in `shared/cli.js`.
+3. **Skill distribution** to whichever CLIs a project has enabled, so the Draft
+   button is not Claude-only in practice.
+4. **Delta re-grounding** on resume.
+
+Increment 1 can ship Claude-first without foreclosing the rest, provided the
+launch goes through the CLI switch rather than hard-coding `claude` — the
+mistake would be building the button against one CLI's spellings and
+retrofitting later.
 
 ## Explicitly out of scope
 
@@ -147,6 +217,15 @@ Each is useful on its own, and each proves the next.
 4. **Whether drafting sessions appear in the scorecard**, and if so under which
    role — they are a joint product of the agent and the owner, which none of the
    existing rows are.
+5. **What a CLI or model change does to a live session.** Offering a fresh
+   session is proposed above, but forcing one is also defensible, and so is
+   resuming under the new model with a visible marker on the PRD that it
+   happened mid-conversation.
+6. **Whether OpenCode's inability to pin a session id at launch matters here.**
+   Reading it back after the fact is enough for resumption, but it means a
+   session that dies before announcing itself is unrecoverable — the same
+   asymmetry the telemetry work hit, where an unlinkable agent yields null
+   rather than a guess.
 
 ## Verification
 
