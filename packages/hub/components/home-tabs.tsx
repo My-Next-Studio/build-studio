@@ -5,14 +5,17 @@ import { HomeContent } from '@/components/home-content'
 import { DemosTab } from '@/components/demos-tab'
 import { ModelTab } from '@/components/model-tab'
 import { MonitorTab } from '@/components/monitor-tab'
+import { ScorecardTab } from '@/components/scorecard-tab'
 import { ProjectWithStatus } from '@/lib/types'
 
 // The home / cross-project view. Project management (today's content) lives in
 // the Projects tab; the Demos tab is the cross-project demo-video workshop;
 // the Model tab holds the global agent defaults + the account-usage widget;
-// the Monitor tab lists cross-project alerts that need handling.
+// the Monitor tab lists cross-project alerts that need handling; the
+// Scorecard tab compares each role's behaviour ACROSS projects, which is what
+// separates a weak model from a stale per-project command file.
 
-const HOME_TABS = ['projects', 'demos', 'model', 'monitor'] as const
+const HOME_TABS = ['projects', 'demos', 'model', 'monitor', 'scorecard'] as const
 type HomeTab = typeof HOME_TABS[number]
 
 // Mirrors the per-project persistence in project-dashboard.tsx, which keeps a
@@ -79,7 +82,9 @@ export function HomeTabs({ projects, showOnboarding }: { projects: ProjectWithSt
           ? <DemosTab />
           : tab === 'model'
             ? <ModelTab />
-            : <MonitorTab />}
+            : tab === 'monitor'
+              ? <MonitorTab />
+              : <ScorecardTab />}
     </div>
   )
 }
