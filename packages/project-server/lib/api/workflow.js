@@ -4042,15 +4042,28 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     let records = agentScorecard.readLog(config.statePath);
     let seeded = 0;
     if (String(req.query.seed || '') === '1') {
+      // Read the snapshot files directly rather than via state.restoreSnapshot:
+      // that helper is built for actually restoring a run and stamps
+      // `updatedAt = now`, which would date every seeded record to today and
+      // quietly destroy the one thing history is for.
+      const snapshotsDir = path.join(config.statePath, 'snapshots');
       const seen = new Set();
-      for (const snap of state.listSnapshots()) {
+      let files = [];
+      try { files = fs.readdirSync(snapshotsDir).filter((f) => f.endsWith('.json')); } catch (_) { files = []; }
+      for (const file of files) {
         try {
-          const wf = state.restoreSnapshot(snap.name);
+          const wf = JSON.parse(fs.readFileSync(path.join(snapshotsDir, file), 'utf8'));
           if (!wf || !wf.id || seen.has(wf.id)) continue;   // one row per RUN, not per snapshot
           seen.add(wf.id);
           records = records.concat(agentScorecard.agentRecords(wf, project));
           seeded += 1;
-        } catch (_) { /* a corrupt snapshot is not worth failing the report */ }
+        } catch (e) {
+          // Named, not swallowed. A silent catch here is what made the first
+          // version of this return zero rows with no clue why — it called
+          // listSnapshots()' entries `.name` when the field is `.file`, threw
+          // on every iteration, and reported an empty scorecard as success.
+          console.warn(`[scorecard] skipping snapshot ${file}: ${e.message}`);
+        }
       }
     }
     const deduped = agentScorecard.dedupe(records);

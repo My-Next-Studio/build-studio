@@ -84,6 +84,19 @@ interface WorkflowStep {
   /** 'monolithic' when one agent takes every fix task in a single pass. Absent
    *  on the sequential path, where per-task counters are real. */
   strategy?: string
+  /** A test suite the SERVER is running for this step (project-server/lib/qa-suite-run.js).
+   *  While it runs the step has no agents at all — the agent starts after, with
+   *  the results in its prompt. Without this the UI shows "Waiting for
+   *  agents..." for the whole run, which reads as a stall. */
+  suiteRun?: {
+    status: string
+    command?: string
+    logPath?: string
+    durationMs?: number
+    timeoutMs?: number
+    progress?: { casesPassed?: number; casesFailed?: number; elapsedMs?: number }
+    counts?: { executed?: number | null; failures?: number | null; casesPassed?: number; casesFailed?: number }
+  }
   completedTasks?: { id?: number; name: string; status: string }[]
   currentTask?: { id?: number; name: string; description: string; roles: string[] }
 }
@@ -1959,6 +1972,7 @@ function StepDetail({
           notes={notes}
           setNotes={setNotes}
           onAdvance={onAdvance}
+          suiteRun={step?.suiteRun}
         />
       )}
 
@@ -2192,7 +2206,7 @@ function TaskBoard({ wf, onSkipBlocked, onViewLog }: { wf: Workflow; onSkipBlock
 }
 
 function StepActions({
-  activeKey, wfType: _wfType, allDone, hasBlockingIssues, notes, setNotes, onAdvance,
+  activeKey, wfType: _wfType, allDone, hasBlockingIssues, notes, setNotes, onAdvance, suiteRun,
 }: {
   activeKey: string
   wfType: string
@@ -2201,6 +2215,7 @@ function StepActions({
   notes: string
   setNotes: (v: string) => void
   onAdvance: (action?: string, extra?: Record<string, unknown>) => void
+  suiteRun?: WorkflowStep['suiteRun']
 }) {
   const dis = !allDone
 
@@ -2221,11 +2236,43 @@ function StepActions({
   const isOldFixStep = activeKey === 'fix_review' || activeKey === 'fix_qa' || activeKey === 'fix_security'
   const isDemoReview = activeKey === 'demo_review'
 
+  // The server runs the test suite for this step before launching any agent, so
+  // there are genuinely no agents to wait for yet. Saying "Waiting for
+  // agents..." through a 10-minute xcodebuild reads as a stall — it is the
+  // reason this run got reported as stuck when it was mid-suite at 1,189 passing
+  // test cases.
+  const suiteLive = suiteRun && suiteRun.status === 'running'
+  const suiteSecs = Math.round(((suiteRun?.progress?.elapsedMs) || 0) / 1000)
+  const suiteMins = suiteSecs >= 60 ? `${Math.floor(suiteSecs / 60)}m ${suiteSecs % 60}s` : `${suiteSecs}s`
+
   let label = allDone ? 'All agents done:' : 'Waiting for agents...'
   if (allDone && hasBlockingIssues) label = 'Blocking issues found:'
+  if (suiteLive) label = 'Running the test suite — the QA agent starts when it finishes:'
 
   return (
     <ActionArea label={label}>
+      {suiteLive && (
+        <div style={{
+          marginBottom: 8, padding: '6px 10px', borderRadius: 4,
+          background: 'var(--surface2)', border: '1px solid var(--border)',
+          fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+          display: 'flex', flexDirection: 'column', gap: 3,
+        }}>
+          <div>
+            <span style={{ color: 'var(--green)', fontWeight: 600 }}>{suiteRun?.progress?.casesPassed ?? 0}</span> passed
+            {(suiteRun?.progress?.casesFailed ?? 0) > 0 && (
+              <> · <span style={{ color: 'var(--red)', fontWeight: 600 }}>{suiteRun?.progress?.casesFailed}</span> failed</>
+            )}
+            <span style={{ color: 'var(--muted)' }}> · {suiteMins} elapsed</span>
+            {suiteRun?.timeoutMs ? (
+              <span style={{ color: 'var(--muted)' }}> · limit {Math.round(suiteRun.timeoutMs / 60000)}m</span>
+            ) : null}
+          </div>
+          {suiteRun?.logPath && (
+            <div style={{ color: 'var(--muted)', wordBreak: 'break-all' }}>{suiteRun.logPath}</div>
+          )}
+        </div>
+      )}
       <textarea
         value={notes}
         onChange={e => setNotes(e.target.value)}
@@ -2408,7 +2455,17 @@ function StepActions({
 
         {/* Relaunch — always available, re-runs the current step from scratch */}
         <button
-          onClick={() => { if (confirm('Relaunch this step? Running agents will be stopped and the step will restart.')) onAdvance('relaunch') }}
+          onClick={() => {
+            // Tell the truth about what is actually running. During a
+            // server-run suite there are no agents to stop, and the thing that
+            // IS running is a test suite that will be killed — a generic
+            // "running agents will be stopped" reads as harmless here and is
+            // wrong in both halves.
+            const msg = suiteLive
+              ? `Relaunch this step?\n\nA test suite is running server-side (${suiteRun?.progress?.casesPassed ?? 0} passed, ${suiteMins} elapsed). It will be STOPPED and started again from scratch.`
+              : 'Relaunch this step? Running agents will be stopped and the step will restart.'
+            if (confirm(msg)) onAdvance('relaunch')
+          }}
           className="wf-btn secondary"
           style={{ marginLeft: 'auto' }}
         >

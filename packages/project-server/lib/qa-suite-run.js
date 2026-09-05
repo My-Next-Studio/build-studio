@@ -339,7 +339,14 @@ function startSuiteRun({ cwd, args, logPath, timeoutMs, env, onProgress }) {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (killTimer) clearTimeout(killTimer);
       if (child.pid) activeRuns.delete(child.pid);
-      out.end();
+      // Resolve only once the log is actually ON DISK. `end()` is asynchronous,
+      // so resolving beside it hands the caller a logPath whose tail — the
+      // `** TEST FAILED **` banner and the final summary, i.e. the two lines
+      // most worth reading — may not be written yet. The caller's very next act
+      // is to put that path in front of an agent.
+      out.end(() => finish(code, signal));
+    });
+    const finish = (code, signal) => {
       const counts = parseTestCounts(tail);
       resolve({
         status: timedOut ? 'timeout' : 'completed',
@@ -350,7 +357,7 @@ function startSuiteRun({ cwd, args, logPath, timeoutMs, env, onProgress }) {
         counts: { ...counts, casesPassed, casesFailed },
         failureExcerpt: failureExcerpt(tail),
       });
-    });
+    };
   });
 
   return {
