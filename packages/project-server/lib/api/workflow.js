@@ -7,6 +7,7 @@ const { stripAnsi, renderPipePaneLog } = require('../tmux');
 const opencodeTelemetry = require('../opencode-telemetry');
 const codexTelemetry = require('../codex-telemetry');
 const tokenPricing = require('../token-pricing');
+const agentScorecard = require('../agent-scorecard');
 const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
 const { deriveNeedsAttention } = require('../needs-attention');
 const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
@@ -711,6 +712,15 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
       // FU-1 final sweep: harvest opencode telemetry for agents that ended
       // without posting feedback (error/stalled) before the workflow closes.
       sweepOpencodeTelemetry(wf);
+      // Append this run to the durable scorecard log. MUST follow the sweep —
+      // it reads the usage the sweep just attached, and a record written first
+      // would permanently show those agents as unmeasured.
+      //
+      // Its own log rather than the snapshots, because snapshots are capped at
+      // ten FILES per project: one multi-step run fills the cap and evicts every
+      // earlier run, so history depends on how many steps recent runs happened
+      // to have. See lib/agent-scorecard.js.
+      agentScorecard.appendRun(config.statePath, wf, config.name || path.basename(projectRoot));
       const projectName = config.name || path.basename(projectRoot);
       const { path: dailyPath, yyyy, mm, dd, hhmm } = obsidianDailyPath();
 
@@ -4015,6 +4025,43 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       // request will refuse it; saying so here turns that into a fixable
       // message instead of a surprise at the moment of starting.
       resolves: !picked.error,
+    });
+  });
+
+  // Per-(role, step) performance for this project. The hub fans this out across
+  // the registry — the comparison of one role ACROSS projects is the product,
+  // since that is what separates "this model is weak" from "this project's
+  // command file is stale".
+  //
+  // `seed=1` back-fills from surviving snapshots. Offered once, for a project
+  // that has not completed a run since this shipped, and explicitly partial:
+  // snapshots keep only the last ten files, so what comes back is whatever
+  // history happened to survive rather than the project's real record.
+  router.get('/workflow/scorecard', (req, res) => {
+    const project = config.name || path.basename(projectRoot);
+    let records = agentScorecard.readLog(config.statePath);
+    let seeded = 0;
+    if (String(req.query.seed || '') === '1') {
+      const seen = new Set();
+      for (const snap of state.listSnapshots()) {
+        try {
+          const wf = state.restoreSnapshot(snap.name);
+          if (!wf || !wf.id || seen.has(wf.id)) continue;   // one row per RUN, not per snapshot
+          seen.add(wf.id);
+          records = records.concat(agentScorecard.agentRecords(wf, project));
+          seeded += 1;
+        } catch (_) { /* a corrupt snapshot is not worth failing the report */ }
+      }
+    }
+    const deduped = agentScorecard.dedupe(records);
+    res.json({
+      project,
+      rows: agentScorecard.aggregate(deduped),
+      agents: deduped.length,
+      seededFromSnapshots: seeded,
+      // Stated so a reader knows why early rows look thin, rather than
+      // concluding the agents are cheap.
+      usageTrustedFrom: agentScorecard.USAGE_TRUSTED_FROM,
     });
   });
 

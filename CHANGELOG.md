@@ -23,6 +23,36 @@ that move underneath you without your having edited anything.
 
 ## 2026-09-05 — Codex agents report their cost, and unpriced models say so
 
+### Added
+
+- **A per-(role, step) scorecard, and a durable log behind it.** Every completed
+  run now appends one record per agent to `.build-studio/scorecard.jsonl`, and
+  `GET /api/workflow/scorecard` aggregates it: agents, runs, findings by
+  severity, tokens, cost, median duration, CLIs and models per row.
+
+  The question it exists to answer is comparative. A role's per-project command
+  file is the thing that adapts it, and that file is hand-written and never
+  evaluated — so a role needing 2.5 rounds to converge in one project and 1.1 in
+  another is a configuration problem, and until now nothing could see it.
+
+  **Its own log, not the snapshots.** Snapshots were the obvious source and the
+  wrong one: they are capped at ten *files* per project and written per step
+  transition, so one multi-step run fills the cap and evicts every earlier run.
+  Measured here, 90 snapshot files held **12 distinct workflows**. A metric whose
+  history depends on how many steps recent runs happened to have is not a
+  metric. `?seed=1` back-fills from whatever snapshots survive, and says how many
+  it found so thin history is not mistaken for a thin project.
+
+  **No composite score.** Weighing cache reads against finding counts against
+  duration would invent a precision the inputs do not have. Rows carry raw
+  signals; comparing one role across projects is the analysis.
+
+  Three states a single "cost" column would have flattened are counted
+  separately — **priced**, **measured but unpriced**, and **unmeasured** (usage
+  recorded before the 2026-08-22 attribution fix, which overstated one round by
+  4.3x and, for Codex agents, was derived from Claude transcripts entirely).
+  Those older numbers are treated as absent rather than averaged in.
+
 ### Fixed
 
 - **Codex agents recorded no token usage at all.** Usage is read from an agent's
