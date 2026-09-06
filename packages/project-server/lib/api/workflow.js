@@ -1322,6 +1322,25 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   // unknown model now prices to null instead of to the cheapest row.
 
   /**
+   * The directory Claude Code keeps a cwd's transcripts in.
+   *
+   * It slugifies the working directory by replacing BOTH `/` and `.` with `-`.
+   * This used to replace only `/`, which is correct for a project root and
+   * wrong for every agent that runs in a worktree: `tmp/.worktrees/qa-tests-X`
+   * became `tmp-.worktrees-qa-tests-X` where Claude wrote `tmp--worktrees-...`
+   * (two dashes — one from the slash, one from the dot).
+   *
+   * The lookup then found no directory and the agent reported no usage at all.
+   * It failed silently and selectively: agents launched in the project root
+   * were measured, agents in worktrees were invisible — which is qa_tests,
+   * fix agents, and every task_execution on a project that uses worktrees. 34
+   * such transcript directories existed on this machine when it was found.
+   */
+  function claudeProjectSlug(agentCwd) {
+    return String(agentCwd || '').replace(/[/.]/g, '-');
+  }
+
+  /**
    * Token usage for ONE agent.
    *
    * `sessionId` is what makes the answer an agent's own. Without it this fell
@@ -1344,9 +1363,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   function computeTokenUsage(startedAt, completedAt, agentCwd, modelShortName, sessionId) {
     try {
       const os = require('os');
-      // Derive Claude project slug from cwd: replace leading '/' with '-', rest '/' → '-'
-      const slug = agentCwd.replace(/\//g, '-');
-      const claudeDir = path.join(os.homedir(), '.claude', 'projects', slug);
+      const claudeDir = path.join(os.homedir(), '.claude', 'projects', claudeProjectSlug(agentCwd));
       if (!fs.existsSync(claudeDir)) return null;
       if (!sessionId) return null;
 

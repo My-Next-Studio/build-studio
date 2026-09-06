@@ -198,3 +198,60 @@ test('appending an empty workflow writes nothing', () => {
   assert.equal(appendRun(dir, { id: 'x', steps: {} }, 'p'), 0);
   assert.deepEqual(readLog(dir), []);
 });
+
+// ── the synthesised planner ──────────────────────────────────────────────────
+
+test('an agent that never launched is not counted', () => {
+  // Monolithic planning writes a planner record with a role, a window and
+  // feedback, but no CLI, cwd or start time — it synthesises the plan instead
+  // of running an agent. Counted, it shows as a permanently unmeasured row and
+  // inflates the gap column with something that by design never ran.
+  const wf = {
+    id: 'wf-p', updatedAt: AFTER,
+    steps: {
+      planning: { agents: [{ role: 'Planner', window: 'planner', status: 'done', feedback: 'Planning shortcut: monolithic.' }] },
+      code_review: { agents: [{ role: 'Code Reviewer', status: 'done', startedAt: AFTER }] },
+    },
+  }
+  const roles = agentRecords(wf, 'p').map(r => r.role)
+  assert.deepEqual(roles, ['Code Reviewer'], 'the synthesised planner must not appear')
+})
+
+test('a real planner agent IS counted', () => {
+  // Fine-grained runs launch one. The discriminator is the start time, not the
+  // role name — excluding by role would hide a genuinely expensive planner.
+  const wf = { id: 'wf-p2', updatedAt: AFTER, steps: { planning: { agents: [{ role: 'Planner', window: 'planner', status: 'done', startedAt: AFTER }] } } }
+  assert.deepEqual(agentRecords(wf, 'p').map(r => r.role), ['Planner'])
+})
+
+// ── which round an agent ran in ──────────────────────────────────────────────
+
+test('the round comes from the agent, not from the run', () => {
+  // A run that ended at round 4 used to stamp 4 on every agent, including
+  // reviewers that ran once in round 1 — making the column wrong for almost
+  // every row. The launcher suffixes the window with -r<n> after round 1.
+  const wf = {
+    id: 'wf-r', round: 4, updatedAt: AFTER,
+    steps: {
+      reviewing: { agents: [
+        { role: 'Brand', window: 'brand', status: 'done', startedAt: AFTER },
+        { role: 'QA', window: 'qa-r3', status: 'done', startedAt: AFTER },
+      ] },
+    },
+  }
+  const byRole = Object.fromEntries(agentRecords(wf, 'p').map(r => [r.role, r.round]))
+  assert.equal(byRole.Brand, 1, 'no suffix means round 1, even in a round-4 run')
+  assert.equal(byRole.QA, 3)
+})
+
+test('maxRound per row reflects the rounds that role actually ran in', () => {
+  const wf = {
+    id: 'wf-r2', round: 5, updatedAt: AFTER,
+    steps: { reviewing: { agents: [
+      { role: 'QA', window: 'qa', status: 'done', startedAt: AFTER },
+      { role: 'QA', window: 'qa-r2', status: 'done', startedAt: AFTER },
+    ] } },
+  }
+  const [row] = aggregate(agentRecords(wf, 'p'))
+  assert.equal(row.maxRound, 2, 'the role ran in rounds 1 and 2, not 5')
+})
