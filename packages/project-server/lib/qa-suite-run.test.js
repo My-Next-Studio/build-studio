@@ -324,3 +324,61 @@ test('real values that merely contain angle-free punctuation still build', () =>
   assert.ok(args.includes('-only-testing:FazonTests'));
   assert.ok(args.includes('-only-testing:FazonUITests/DebugLogRingCrossLaunchTests'));
 });
+
+// ── a suite that failed without running anything ─────────────────────────────
+//
+// Live case (2026-09-05): a pinned simulator in a stale CoreSimulator state —
+// `Failed to prepare device … Invalid connectionUUID` — failed in 38s with exit
+// 65, a `** TEST FAILED **` banner and not one test executed. The agent was told
+// "0 passed, 0 failed" and "TEST FAILED", which reads as a code failure. It
+// reported the gate correctly anyway, by its own diligence rather than because
+// the report said so.
+
+const { ranNoTests } = require('./qa-suite-run');
+
+const NEVER_RAN = { executed: null, failures: null, casesPassed: 0, casesFailed: 0, succeeded: false };
+
+test('a failed run with nothing executed is recognised', () => {
+  assert.equal(ranNoTests(NEVER_RAN), true);
+});
+
+test('a genuinely red suite is NOT treated as "never ran"', () => {
+  // The distinction the whole thing turns on: this one goes to the fix loop.
+  assert.equal(ranNoTests({ executed: 2, failures: 1, casesPassed: 1, casesFailed: 1, succeeded: false }), false);
+  assert.equal(ranNoTests({ executed: null, failures: null, casesPassed: 0, casesFailed: 3, succeeded: false }), false);
+});
+
+test('a passing suite and an unfinished one are not "never ran"', () => {
+  assert.equal(ranNoTests({ executed: 5, failures: 0, casesPassed: 5, casesFailed: 0, succeeded: true }), false);
+  // A timeout kill: no verdict banner. Already reported as a gate failure.
+  assert.equal(ranNoTests({ executed: null, failures: null, casesPassed: 40, casesFailed: 0, succeeded: null }), false);
+  assert.equal(ranNoTests(null), false);
+});
+
+test('the section says nothing ran, and refuses to pick the cause', () => {
+  // A build break also executes nothing and IS the devs' problem, so naming the
+  // cause here would guess. The honest report is "nothing ran, here is what
+  // xcodebuild said" plus where each kind should go.
+  const s = formatSuiteSection({
+    ...OK_RUN, counts: NEVER_RAN,
+    failureExcerpt: 'Testing failed:\n\tDeskRhythm encountered an error (Failed to prepare device …)',
+  });
+  assert.match(s, /WITHOUT running a single test/);
+  assert.match(s, /Gate could not run/);          // the environment route
+  assert.match(s, /build broke/i);                 // the devs route
+  assert.match(s, /Failed to prepare device/);     // xcodebuild's own reason
+  assert.doesNotMatch(s, /Per-case tally/, 'a tally of zero is not a result');
+});
+
+test('failureExcerpt keeps the "Testing failed" reason, which every other pattern missed', () => {
+  const log = [
+    'CopySwiftLibs /Users/x/DerivedData/…',
+    'Testing failed:',
+    "\tDeskRhythm encountered an error (Failed to prepare device 'iPhone 17 Pro' for impending launch.)",
+    '** TEST FAILED **',
+  ].join('\n');
+  const ex = failureExcerpt(log);
+  assert.match(ex, /Testing failed:/);
+  assert.match(ex, /Failed to prepare device/);
+  assert.doesNotMatch(ex, /CopySwiftLibs/);
+});

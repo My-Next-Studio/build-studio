@@ -152,8 +152,40 @@ function failureExcerpt(text, maxLines = 60) {
     /^Test Case .*' failed \(/.test(l)
     || /error:/i.test(l)
     || /\*\* TEST (FAILED|BUILD FAILED) \*\*/.test(l)
-    || /Executed \d+ tests?, with \d+ failure/.test(l));
+    || /Executed \d+ tests?, with \d+ failure/.test(l)
+    // xcodebuild's own summary of WHY, which it prints as `Testing failed:`
+    // followed by an indented reason. For a run that never reached a test —
+    // a device that would not prepare, a runtime that would not boot — that
+    // reason line is the only actionable content in the whole log, and every
+    // other pattern here misses it.
+    || /^Testing failed:/.test(l)
+    || /^\s+\S.*\b(encountered an error|Failed to prepare device|Unable to boot|Simulator device)\b/.test(l));
   return interesting.slice(-maxLines).join('\n');
+}
+
+/**
+ * Did the suite fail WITHOUT running anything?
+ *
+ * A red suite and a suite that never started both end in `** TEST FAILED **`,
+ * and both report zero passing cases — but they mean opposite things. One is a
+ * defect for the devs; the other is an environment fault nobody can fix by
+ * changing code, and routing it to the fix loop wastes a full round.
+ *
+ * The distinguishing fact is that no test was EXECUTED: no per-target summary,
+ * and not a single case either way. Seen live when a pinned simulator was in a
+ * stale CoreSimulator state — `Failed to prepare device … Invalid connectionUUID`
+ * — which failed in 38 seconds with a verdict banner and no tests.
+ *
+ * This deliberately does not try to name the cause. A build break also executes
+ * nothing and IS the devs' problem, so the honest report is "nothing ran, here
+ * is what xcodebuild said" rather than a guess about which kind it was.
+ */
+function ranNoTests(counts) {
+  if (!counts) return false;
+  return counts.succeeded === false
+    && (counts.executed === null || counts.executed === undefined)
+    && !counts.casesPassed
+    && !counts.casesFailed;
 }
 
 /**
@@ -419,6 +451,27 @@ function formatSuiteSection(run) {
     return lines.join('\n');
   }
 
+  if (ranNoTests(c)) {
+    lines.push(
+      '**The suite failed WITHOUT running a single test.** No target reported a summary and no test',
+      'case passed or failed, so this is not a red suite — nothing was executed.',
+      '',
+      'Two things look like this, and they go to different places:',
+      '',
+      '- **The build broke** (compile error, missing symbol) — a real defect. Report it as a normal',
+      '  failure so it reaches the fix loop.',
+      '- **The environment failed** (simulator would not prepare or boot, toolchain, device state) —',
+      '  no developer can fix it by changing code. Report it on a `**Gate could not run:**` line.',
+      '',
+      'Read the lines below and the log to decide which. Do NOT report a test count either way —',
+      'there is no result to report.',
+    );
+    if (run.failureExcerpt) {
+      lines.push('', '### What xcodebuild said', '', '```', run.failureExcerpt.slice(0, 6000), '```');
+    }
+    return lines.join('\n');
+  }
+
   if (c.executed !== null && c.executed !== undefined) {
     lines.push(`**Executed ${c.executed} tests, with ${c.failures} failures.**`);
   }
@@ -453,6 +506,7 @@ module.exports = {
   displayCommand,
   parseTestCounts,
   failureExcerpt,
+  ranNoTests,
   isPidAlive,
   killGroup,
   killAllActive,
