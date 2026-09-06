@@ -89,6 +89,8 @@ interface WorkflowStep {
    *  the results in its prompt. Without this the UI shows "Waiting for
    *  agents..." for the whole run, which reads as a stall. */
   suiteRun?: {
+    /** 'preparing' (booting the pinned simulator) | 'running' | 'completed'
+     *  | 'timeout' | 'unavailable' | 'cancelled' | 'error' | 'interrupted' */
     status: string
     command?: string
     logPath?: string
@@ -2241,13 +2243,21 @@ function StepActions({
   // agents..." through a 10-minute xcodebuild reads as a stall — it is the
   // reason this run got reported as stuck when it was mid-suite at 1,189 passing
   // test cases.
-  const suiteLive = suiteRun && suiteRun.status === 'running'
+  // 'preparing' is the simulator boot, before xcodebuild is spawned. It counts
+  // as live: the step has no agents either way, so excluding it would put the
+  // "Waiting for agents..." dead air back for the duration of a boot.
+  const suitePreparing = suiteRun && suiteRun.status === 'preparing'
+  const suiteLive = suiteRun && (suiteRun.status === 'running' || suitePreparing)
   const suiteSecs = Math.round(((suiteRun?.progress?.elapsedMs) || 0) / 1000)
   const suiteMins = suiteSecs >= 60 ? `${Math.floor(suiteSecs / 60)}m ${suiteSecs % 60}s` : `${suiteSecs}s`
 
   let label = allDone ? 'All agents done:' : 'Waiting for agents...'
   if (allDone && hasBlockingIssues) label = 'Blocking issues found:'
-  if (suiteLive) label = 'Running the test suite — the QA agent starts when it finishes:'
+  if (suiteLive) {
+    label = suitePreparing
+      ? 'Preparing the simulator — the suite starts once it has booted:'
+      : 'Running the test suite — the QA agent starts when it finishes:'
+  }
 
   return (
     <ActionArea label={label}>
@@ -2258,6 +2268,9 @@ function StepActions({
           fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
           display: 'flex', flexDirection: 'column', gap: 3,
         }}>
+          {suitePreparing ? (
+            <div style={{ color: 'var(--muted)' }}>Booting the pinned simulator…</div>
+          ) : (
           <div>
             <span style={{ color: 'var(--green)', fontWeight: 600 }}>{suiteRun?.progress?.casesPassed ?? 0}</span> passed
             {(suiteRun?.progress?.casesFailed ?? 0) > 0 && (
@@ -2268,6 +2281,7 @@ function StepActions({
               <span style={{ color: 'var(--muted)' }}> · limit {Math.round(suiteRun.timeoutMs / 60000)}m</span>
             ) : null}
           </div>
+          )}
           {suiteRun?.logPath && (
             <div style={{ color: 'var(--muted)', wordBreak: 'break-all' }}>{suiteRun.logPath}</div>
           )}

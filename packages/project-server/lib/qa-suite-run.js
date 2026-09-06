@@ -241,6 +241,99 @@ function discoverProjectAndScheme({ projectRoot, simulator }) {
 }
 
 /**
+ * The simulator the destination names.
+ *
+ * `-destination` carries either a pinned UDID or a device name; projects here
+ * prefer the UDID because name lookup is strict and a locale-suffixed name
+ * ("iPhone 15 en_US") does not match what a human would type.
+ */
+function parseDestination(destination) {
+  const s = String(destination || '');
+  const id = s.match(/(?:^|,)\s*id\s*=\s*([0-9A-Fa-f-]{8,})/);
+  if (id) return { udid: id[1].toUpperCase(), name: null };
+  const name = s.match(/(?:^|,)\s*name\s*=\s*([^,]+)/);
+  if (name) return { udid: null, name: name[1].trim() };
+  return { udid: null, name: null };
+}
+
+/** State of one simulator, or null when it is not in the device list. */
+function simulatorState(target, run = defaultRun) {
+  if (!target || (!target.udid && !target.name)) return null;
+  let out;
+  try {
+    out = run('xcrun', ['simctl', 'list', 'devices', '-j'], { encoding: 'utf8', timeout: 60000 });
+  } catch (_) { return null; }
+  let parsed;
+  try { parsed = JSON.parse(out); } catch (_) { return null; }
+  for (const list of Object.values((parsed && parsed.devices) || {})) {
+    for (const d of list || []) {
+      const hit = target.udid ? String(d.udid || '').toUpperCase() === target.udid : d.name === target.name;
+      if (hit) return { udid: d.udid, name: d.name, state: d.state, available: d.isAvailable !== false };
+    }
+  }
+  return null;
+}
+
+function defaultRun(cmd, args, opts) { return execFileSync(cmd, args, opts); }
+
+/**
+ * Make sure the pinned simulator is up before xcodebuild reaches for it.
+ *
+ * WHY THE SERVER DOES THIS NOW
+ *
+ * xcodebuild boots a simulator itself in the normal case, so this was never
+ * needed while the AGENT ran the suite — and the agent's role file carries the
+ * simulator hygiene rules. Hoisting the run to the server moved the work but
+ * left the hygiene behind. Seen live (2026-09-05): the pinned device sat
+ * Shutdown while a different one was Booted, CoreSimulator's connection state
+ * was stale, and the run died in 38 seconds with `Failed to prepare device …
+ * Invalid connectionUUID` — a full round trip lost to a device nobody had
+ * booted.
+ *
+ * DELIBERATELY NARROW. It touches ONE device: the one this project pinned.
+ * `simctl shutdown all` and `erase` are forbidden here for the same reason the
+ * role docs forbid them to agents — the device set is shared with every other
+ * project on the machine, and a blunt reset would kill another project's
+ * in-flight run. An already-booted device is left exactly as it is; rebooting a
+ * healthy simulator would be its own outage.
+ *
+ * Failure is reported, never worked around. A device that will not boot is an
+ * environment fault, and starting xcodebuild anyway just converts a clear
+ * message into a confusing one 38 seconds later.
+ *
+ * @returns {Promise<{ok:true, action:string, device?:object}|{ok:false, reason:string}>}
+ */
+async function preflightSimulator(destination, { run = defaultRun, bootTimeoutMs = 180000 } = {}) {
+  const target = parseDestination(destination);
+  if (!target.udid && !target.name) {
+    // Not a simulator destination we can reason about (a device, a generic
+    // platform). Leave it to xcodebuild rather than guessing.
+    return { ok: true, action: 'skipped-unparseable' };
+  }
+  const dev = simulatorState(target, run);
+  if (!dev) return { ok: false, reason: `no simulator matching ${target.udid || target.name} is in the device list` };
+  if (dev.available === false) return { ok: false, reason: `simulator ${dev.name} (${dev.udid}) is unavailable — its runtime is probably not installed` };
+  if (dev.state === 'Booted') return { ok: true, action: 'already-booted', device: dev };
+
+  try {
+    run('xcrun', ['simctl', 'boot', dev.udid], { encoding: 'utf8', timeout: 120000 });
+  } catch (e) {
+    // Already-booted races here harmlessly; anything else is a real failure.
+    if (!/Unable to boot device in current state: Booted/i.test(String(e.message || ''))) {
+      return { ok: false, reason: `could not boot ${dev.name} (${dev.udid}): ${String(e.message || e).split('\n')[0]}` };
+    }
+  }
+  try {
+    // Boot is asynchronous; without this the suite can still reach a
+    // half-started device, which is the failure being prevented.
+    run('xcrun', ['simctl', 'bootstatus', dev.udid, '-b'], { encoding: 'utf8', timeout: bootTimeoutMs });
+  } catch (e) {
+    return { ok: false, reason: `${dev.name} (${dev.udid}) did not finish booting: ${String(e.message || e).split('\n')[0]}` };
+  }
+  return { ok: true, action: 'booted', device: dev };
+}
+
+/**
  * Every run this process started, so a shutdown can take them with it.
  *
  * The runs are spawned into their own process GROUP (see startSuiteRun), which
@@ -507,6 +600,9 @@ module.exports = {
   parseTestCounts,
   failureExcerpt,
   ranNoTests,
+  parseDestination,
+  simulatorState,
+  preflightSimulator,
   isPidAlive,
   killGroup,
   killAllActive,

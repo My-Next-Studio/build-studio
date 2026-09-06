@@ -382,3 +382,116 @@ test('failureExcerpt keeps the "Testing failed" reason, which every other patter
   assert.match(ex, /Failed to prepare device/);
   assert.doesNotMatch(ex, /CopySwiftLibs/);
 });
+
+// ── simulator pre-flight ─────────────────────────────────────────────────────
+//
+// xcodebuild boots a simulator itself in the normal case, so this was never
+// needed while the AGENT ran the suite and carried the hygiene rules in its role
+// file. Hoisting the run to the server moved the work and left the hygiene
+// behind: on 2026-09-05 the pinned device sat Shutdown while a different one was
+// Booted, and the run died in 38s with `Failed to prepare device … Invalid
+// connectionUUID`.
+
+const { parseDestination, simulatorState, preflightSimulator } = require('./qa-suite-run');
+
+const DEVICES = (state = 'Shutdown', available = true) => JSON.stringify({
+  devices: {
+    'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [
+      { udid: 'AAAA1111-2222-3333-4444-555566667777', name: 'iPhone 17 Pro', state, isAvailable: available },
+      { udid: 'BBBB1111-2222-3333-4444-555566667777', name: 'iPhone 17 Pro Max', state: 'Booted', isAvailable: true },
+    ],
+  },
+})
+
+/** Records what was invoked, so the test can assert what was NOT. */
+function fakeRun(devicesJson, { bootFails = false, bootstatusFails = false } = {}) {
+  const calls = []
+  const fn = (cmd, args) => {
+    calls.push(args.join(' '))
+    if (args[1] === 'list') return devicesJson
+    if (args[1] === 'boot' && bootFails) throw new Error('Unable to boot device in current state: Creating')
+    if (args[1] === 'bootstatus' && bootstatusFails) throw new Error('timed out')
+    return ''
+  }
+  fn.calls = calls
+  return fn
+}
+
+test('the destination is parsed by id or by name', () => {
+  assert.deepEqual(parseDestination('platform=iOS Simulator,id=77c35be1-d546-4067-b503-5624352678e0'),
+    { udid: '77C35BE1-D546-4067-B503-5624352678E0', name: null })
+  assert.deepEqual(parseDestination('platform=iOS Simulator,name=iPhone 16 Pro'), { udid: null, name: 'iPhone 16 Pro' })
+})
+
+test('a destination naming no simulator is left to xcodebuild', async () => {
+  // A real device, or a generic platform. Guessing would be worse than passing.
+  const r = await preflightSimulator('generic/platform=iOS', { run: fakeRun(DEVICES()) })
+  assert.equal(r.ok, true)
+  assert.equal(r.action, 'skipped-unparseable')
+})
+
+test('a shutdown device is booted, and the boot is waited for', async () => {
+  // Boot is asynchronous — without bootstatus the suite still reaches a
+  // half-started device, which is the failure being prevented.
+  const run = fakeRun(DEVICES('Shutdown'))
+  const r = await preflightSimulator('platform=iOS Simulator,id=AAAA1111-2222-3333-4444-555566667777', { run })
+  assert.equal(r.ok, true)
+  assert.equal(r.action, 'booted')
+  assert.ok(run.calls.some(c => c.startsWith('simctl boot AAAA1111')))
+  assert.ok(run.calls.some(c => c.includes('bootstatus')), 'must wait for the boot to finish')
+})
+
+test('an already-booted device is left completely alone', async () => {
+  // Rebooting a healthy simulator is its own outage.
+  const run = fakeRun(DEVICES('Booted'))
+  const r = await preflightSimulator('platform=iOS Simulator,id=AAAA1111-2222-3333-4444-555566667777', { run })
+  assert.equal(r.action, 'already-booted')
+  assert.ok(!run.calls.some(c => c.includes('boot ')), 'must not re-boot')
+})
+
+test('it NEVER touches another project’s devices', async () => {
+  // The device set is shared machine-wide. `shutdown all` / `erase` are
+  // forbidden here for the same reason the role docs forbid them to agents —
+  // they would kill another project's in-flight run.
+  const run = fakeRun(DEVICES('Shutdown'))
+  await preflightSimulator('platform=iOS Simulator,id=AAAA1111-2222-3333-4444-555566667777', { run })
+  const dangerous = run.calls.filter(c => /shutdown all|erase|delete/.test(c))
+  assert.deepEqual(dangerous, [], `must not run: ${dangerous.join('; ')}`)
+  assert.ok(!run.calls.some(c => c.includes('BBBB1111')), 'must not touch the other booted device')
+})
+
+test('a device that is not in the list is refused, not guessed at', async () => {
+  const r = await preflightSimulator('platform=iOS Simulator,id=DEAD0000-0000-0000-0000-000000000000', { run: fakeRun(DEVICES()) })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /device list/)
+})
+
+test('an unavailable device names the likely cause', async () => {
+  const r = await preflightSimulator('platform=iOS Simulator,id=AAAA1111-2222-3333-4444-555566667777', { run: fakeRun(DEVICES('Shutdown', false)) })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /runtime/)
+})
+
+test('a boot that never completes is reported, not run through', async () => {
+  // Starting xcodebuild anyway converts a clear message into a confusing one 38
+  // seconds later — which is exactly what happened before this existed.
+  const r = await preflightSimulator('platform=iOS Simulator,id=AAAA1111-2222-3333-4444-555566667777',
+    { run: fakeRun(DEVICES('Shutdown'), { bootstatusFails: true }), bootTimeoutMs: 100 })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /did not finish booting/)
+})
+
+test('a benign already-booted race during boot is not treated as failure', async () => {
+  const run = fakeRun(DEVICES('Shutdown'))
+  const racing = (cmd, args) => {
+    if (args[1] === 'boot') throw new Error('Unable to boot device in current state: Booted')
+    return run(cmd, args)
+  }
+  const r = await preflightSimulator('platform=iOS Simulator,id=AAAA1111-2222-3333-4444-555566667777', { run: racing })
+  assert.equal(r.ok, true)
+})
+
+test('simulatorState returns null rather than throwing when simctl is absent', () => {
+  const boom = () => { throw new Error('xcrun: command not found') }
+  assert.equal(simulatorState({ udid: 'AAAA' }, boom), null)
+})

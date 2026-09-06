@@ -8154,36 +8154,47 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
       }
 
       const timeoutMs = qaSuite.resolveTimeoutMs(config.qa_validation);
-      let handle;
-      try {
-        handle = qaSuite.startSuiteRun({
-          cwd: projectRoot,
-          args: suiteArgs,
-          logPath: suiteLogPath,
-          timeoutMs,
-          env: { ...process.env, BUILD_STUDIO_SIMULATOR_DESTINATION: config.simulator.destination },
-          onProgress: (p) => {
-            const step = wf.steps.qa_validation;
-            if (!step || !step.suiteRun) return;
-            step.suiteRun.progress = p;
-            state.saveWorkflow(wf);
-          },
+
+      // What happens when the suite ends. Defined here because the spawn now
+      // sits inside the pre-flight's callback rather than in the handler body.
+      function attachSuiteCompletion(handle, runTimeoutMs) {
+        handle.promise.then((result) => {
+          const step = wf.steps.qa_validation;
+          if (!step) return;
+          step.suiteRun = { ...step.suiteRun, ...result, status: result.status, finishedAt: new Date().toISOString() };
+          console.log(`[qa-suite] ${result.status} in ${Math.round(result.durationMs / 1000)}s — `
+            + `${result.counts.casesPassed} passed, ${result.counts.casesFailed} failed`);
+          launchQaAgent(qaSuite.formatSuiteSection({ ...step.suiteRun, timeoutMs: runTimeoutMs }));
+          // Reap simulator clones the run leaked. Only Shutdown+idle clones are
+          // removed, so this is safe even while another project is mid-test.
+          try {
+            require('child_process').spawn(process.execPath, [path.join(__dirname, '..', 'xctest-clean.js'), '--quiet'], { detached: true, stdio: 'ignore' }).unref();
+          } catch (_) { /* hygiene only */ }
+        }).catch((e) => {
+          const step = wf.steps.qa_validation;
+          if (!step) return;
+          console.warn('[qa-suite] run failed, falling back to agent-run:', e.message);
+          step.suiteRun = { ...step.suiteRun, status: 'error', error: e.message, finishedAt: new Date().toISOString() };
+          launchQaAgent(qaSuite.formatSuiteSection({ status: 'unavailable', error: `the run failed to start (${e.message})` }));
         });
-      } catch (e) {
-        console.warn('[qa-suite] spawn failed, falling back to agent-run:', e.message);
-        wf.steps.qa_validation = { status: 'running', agents: [] };
-        launchQaAgent(qaSuite.formatSuiteSection({ status: 'unavailable', error: `xcodebuild could not be started (${e.message})` }));
-        return res.json({ workflow: wf });
       }
 
+      // The step goes live in a PREPARING phase before anything is spawned.
+      //
+      // Booting a simulator takes tens of seconds, and this runs inside a
+      // request handler — awaiting it here would hold the HTTP response open
+      // for the whole boot. So the state is published first, the response
+      // returns, and the boot-then-spawn continues in the background. The UI
+      // already renders suiteRun, so "preparing" is visible rather than looking
+      // like the dead air that made a healthy run read as stuck before.
       wf.steps.qa_validation = {
         status: 'running',
         agents: [],
         suiteRun: {
-          status: 'running',
+          status: 'preparing',
           command: suiteCommand,
           logPath: suiteLogPath,
-          pid: handle.pid,
+          pid: null,
           // Whose child is this? The watchdog uses it to tell "running, and I
           // am awaiting it" from "running, but the server that started it is
           // gone" — the second needs killing, not waiting.
@@ -8194,26 +8205,63 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
         },
       };
       state.saveWorkflow(wf);
-      console.log(`[qa-suite] running ${suiteCommand} (pid ${handle.pid}, timeout ${Math.round(timeoutMs / 60000)}m)`);
 
-      handle.promise.then((result) => {
+      // Boot the pinned simulator before xcodebuild reaches for it. xcodebuild
+      // does this itself in the normal case, which is why it was never needed
+      // while the AGENT ran the suite — but hoisting the run here moved the work
+      // and left the hygiene behind. See qa-suite-run.js: it touches only this
+      // project's device, and never resets the shared device set.
+      qaSuite.preflightSimulator(config.simulator.destination).then((pf) => {
         const step = wf.steps.qa_validation;
-        if (!step) return;
-        step.suiteRun = { ...step.suiteRun, ...result, status: result.status, finishedAt: new Date().toISOString() };
-        console.log(`[qa-suite] ${result.status} in ${Math.round(result.durationMs / 1000)}s — `
-          + `${result.counts.casesPassed} passed, ${result.counts.casesFailed} failed`);
-        launchQaAgent(qaSuite.formatSuiteSection({ ...step.suiteRun, timeoutMs }));
-        // Reap simulator clones the run leaked. Only Shutdown+idle clones are
-        // removed, so this is safe even while another project is mid-test.
+        if (!step || !step.suiteRun || step.suiteRun.status !== 'preparing') return;  // relaunched under us
+        if (!pf.ok) {
+          console.warn(`[qa-suite] simulator not ready: ${pf.reason}`);
+          step.suiteRun.status = 'unavailable';
+          step.suiteRun.error = pf.reason;
+          step.suiteRun.finishedAt = new Date().toISOString();
+          // An environment fault, not a code one — hand it to the agent as a
+          // gate that could not run rather than spawning into a broken device
+          // and turning a clear message into a confusing one 38 seconds later.
+          launchQaAgent(qaSuite.formatSuiteSection({ status: 'unavailable', error: `the simulator is not ready — ${pf.reason}` }));
+          return;
+        }
+        if (pf.action === 'booted') console.log(`[qa-suite] booted ${pf.device.name} (${pf.device.udid}) before the run`);
+
+        let handle;
         try {
-          require('child_process').spawn(process.execPath, [path.join(__dirname, '..', 'xctest-clean.js'), '--quiet'], { detached: true, stdio: 'ignore' }).unref();
-        } catch (_) { /* hygiene only */ }
+          handle = qaSuite.startSuiteRun({
+            cwd: projectRoot,
+            args: suiteArgs,
+            logPath: suiteLogPath,
+            timeoutMs,
+            env: { ...process.env, BUILD_STUDIO_SIMULATOR_DESTINATION: config.simulator.destination },
+            onProgress: (p) => {
+              const s = wf.steps.qa_validation;
+              if (!s || !s.suiteRun) return;
+              s.suiteRun.progress = p;
+              state.saveWorkflow(wf);
+            },
+          });
+        } catch (e) {
+          console.warn('[qa-suite] spawn failed, falling back to agent-run:', e.message);
+          step.suiteRun.status = 'error';
+          step.suiteRun.error = e.message;
+          launchQaAgent(qaSuite.formatSuiteSection({ status: 'unavailable', error: `xcodebuild could not be started (${e.message})` }));
+          return;
+        }
+        step.suiteRun.status = 'running';
+        step.suiteRun.pid = handle.pid;
+        step.suiteRun.startedAt = new Date().toISOString();
+        state.saveWorkflow(wf);
+        console.log(`[qa-suite] running ${suiteCommand} (pid ${handle.pid}, timeout ${Math.round(timeoutMs / 60000)}m)`);
+        attachSuiteCompletion(handle, timeoutMs);
       }).catch((e) => {
         const step = wf.steps.qa_validation;
-        if (!step) return;
-        console.warn('[qa-suite] run failed, falling back to agent-run:', e.message);
-        step.suiteRun = { ...step.suiteRun, status: 'error', error: e.message, finishedAt: new Date().toISOString() };
-        launchQaAgent(qaSuite.formatSuiteSection({ status: 'unavailable', error: `the run failed to start (${e.message})` }));
+        if (!step || !step.suiteRun) return;
+        console.warn('[qa-suite] preflight threw, falling back to agent-run:', e.message);
+        step.suiteRun.status = 'error';
+        step.suiteRun.error = e.message;
+        launchQaAgent(qaSuite.formatSuiteSection({ status: 'unavailable', error: `simulator pre-flight failed (${e.message})` }));
       });
 
       return res.json({ workflow: wf });
