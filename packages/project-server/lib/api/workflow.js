@@ -3612,6 +3612,41 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
               canOverride: true,
             });
           }
+          // Refuse to start against a simulator that no longer exists.
+          //
+          // Preflight already checked this, but only inside the QA suite — the
+          // far end of a run. An Xcode update that removes a runtime deletes
+          // every device on it, so the pinned UDID silently stops resolving,
+          // and the run does not find out until execution is already done.
+          // Measured 2026-09-06: three hours of task_execution against a
+          // simulator that was not there.
+          //
+          // Existence only, no boot: this is on the start request, and booting
+          // can take minutes. QA still boots it later, by which point the
+          // device is known to exist.
+          if (!startOverride && config.simulator && config.simulator.destination) {
+            let simCheck;
+            try {
+              simCheck = qaSuite.checkSimulatorAvailable(config.simulator.destination);
+            } catch (e) {
+              // The check itself failing is not a reason to block a run — that
+              // would trade a real outage for a self-inflicted one.
+              console.warn('[start] simulator check threw, continuing:', e.message);
+              simCheck = { ok: true, action: 'check-failed' };
+            }
+            if (!simCheck.ok) {
+              return res.status(400).json({
+                error: `Cannot start execution: ${simCheck.reason}.\n\n`
+                  + `Pinned in .build-studio/config.yaml as:\n    ${config.simulator.destination}\n\n`
+                  + 'List what this machine actually has, then update the id:\n'
+                  + '    xcrun simctl list devices available\n\n'
+                  + 'Retry with {"override": true} to start anyway.',
+                simulatorUnavailable: true,
+                destination: config.simulator.destination,
+                canOverride: true,
+              });
+            }
+          }
           if (!startOverride) {
             const prdContent = fs.readFileSync(path.join(projectRoot, prdPath), 'utf8');
             const incomplete = findIncompleteRequiredSpecs(prdContent);

@@ -392,7 +392,7 @@ test('failureExcerpt keeps the "Testing failed" reason, which every other patter
 // Booted, and the run died in 38s with `Failed to prepare device … Invalid
 // connectionUUID`.
 
-const { parseDestination, simulatorState, preflightSimulator } = require('./qa-suite-run');
+const { parseDestination, simulatorState, preflightSimulator, checkSimulatorAvailable } = require('./qa-suite-run');
 
 const DEVICES = (state = 'Shutdown', available = true) => JSON.stringify({
   devices: {
@@ -494,4 +494,52 @@ test('a benign already-booted race during boot is not treated as failure', async
 test('simulatorState returns null rather than throwing when simctl is absent', () => {
   const boom = () => { throw new Error('xcrun: command not found') }
   assert.equal(simulatorState({ udid: 'AAAA' }, boom), null)
+})
+
+// ── checkSimulatorAvailable — the cheap half, called at execution start ──────
+//
+// Preflight ran only inside the QA suite, at the far end of a run. On
+// 2026-09-06 an Xcode update removed the iOS 26.2 runtime, which deletes every
+// device on it; the pinned UDID stopped resolving and a task_execution burned
+// three hours before anything looked. These cover the start-time gate.
+
+test('a deleted device is reported missing, and says why', () => {
+  // The runtime-removal case: the UDID is simply gone from the list.
+  const r = checkSimulatorAvailable('platform=iOS Simulator,id=DEAD1111-2222-3333-4444-555566667777',
+    { run: fakeRun(DEVICES()) })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /no simulator matching DEAD1111/)
+  assert.match(r.reason, /runtime an Xcode update removed/,
+    'the message must point at the actual cause, not just the symptom')
+})
+
+test('a device whose runtime is uninstalled is reported unavailable', () => {
+  const r = checkSimulatorAvailable('platform=iOS Simulator,id=AAAA1111-2222-3333-4444-555566667777',
+    { run: fakeRun(DEVICES('Shutdown', false)) })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /unavailable/)
+})
+
+test('it never boots — that is preflight’s job, not the start gate’s', () => {
+  // This runs synchronously on an HTTP start request. A boot can take minutes.
+  const run = fakeRun(DEVICES('Shutdown'))
+  const r = checkSimulatorAvailable('platform=iOS Simulator,id=AAAA1111-2222-3333-4444-555566667777', { run })
+  assert.equal(r.ok, true)
+  assert.equal(r.action, 'available')
+  assert.ok(!run.calls.some(c => c.includes('boot')), `must not boot: ${run.calls.join('; ')}`)
+})
+
+test('an unparseable destination is passed through, not blocked', () => {
+  // Non-iOS projects and real devices must never be gated by this.
+  const r = checkSimulatorAvailable('generic/platform=iOS', { run: fakeRun(DEVICES()) })
+  assert.equal(r.ok, true)
+  assert.equal(r.action, 'skipped-unparseable')
+})
+
+test('preflight still reports the missing device it now delegates', async () => {
+  // The split must not swallow the failure preflight used to detect itself.
+  const r = await preflightSimulator('platform=iOS Simulator,id=DEAD1111-2222-3333-4444-555566667777',
+    { run: fakeRun(DEVICES()) })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /no simulator matching DEAD1111/)
 })

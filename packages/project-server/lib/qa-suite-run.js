@@ -303,7 +303,25 @@ function defaultRun(cmd, args, opts) { return execFileSync(cmd, args, opts); }
  *
  * @returns {Promise<{ok:true, action:string, device?:object}|{ok:false, reason:string}>}
  */
-async function preflightSimulator(destination, { run = defaultRun, bootTimeoutMs = 180000 } = {}) {
+/**
+ * Does the pinned simulator still EXIST? No boot, no side effects.
+ *
+ * Split out of preflightSimulator so a run can be refused before it starts.
+ * Preflight only ran inside the QA suite, which is far too late: a pin that has
+ * gone stale is not discovered until execution has finished and QA reaches for
+ * the device. Seen live (2026-09-06) — an Xcode update removed the iOS 26.2
+ * runtime, which deletes every device on it. The pinned UDID no longer existed,
+ * and a task_execution run burned three hours against a simulator that was not
+ * there before anything noticed.
+ *
+ * Deliberately the cheap half. This is one `simctl list` parse (~1s), safe to
+ * call synchronously on a start request, where a three-minute boot would not
+ * be. Booting stays in preflightSimulator, which QA still calls later; by then
+ * the device is known to exist and only its state is in question.
+ *
+ * @returns {{ok:true, action?:string, device?:object}|{ok:false, reason:string}}
+ */
+function checkSimulatorAvailable(destination, { run = defaultRun } = {}) {
   const target = parseDestination(destination);
   if (!target.udid && !target.name) {
     // Not a simulator destination we can reason about (a device, a generic
@@ -311,8 +329,24 @@ async function preflightSimulator(destination, { run = defaultRun, bootTimeoutMs
     return { ok: true, action: 'skipped-unparseable' };
   }
   const dev = simulatorState(target, run);
-  if (!dev) return { ok: false, reason: `no simulator matching ${target.udid || target.name} is in the device list` };
-  if (dev.available === false) return { ok: false, reason: `simulator ${dev.name} (${dev.udid}) is unavailable — its runtime is probably not installed` };
+  if (!dev) {
+    return {
+      ok: false,
+      reason: `no simulator matching ${target.udid || target.name} is in the device list`
+        + ' — it was probably deleted with a runtime an Xcode update removed',
+    };
+  }
+  if (dev.available === false) {
+    return { ok: false, reason: `simulator ${dev.name} (${dev.udid}) is unavailable — its runtime is probably not installed` };
+  }
+  return { ok: true, action: 'available', device: dev };
+}
+
+async function preflightSimulator(destination, { run = defaultRun, bootTimeoutMs = 180000 } = {}) {
+  const exists = checkSimulatorAvailable(destination, { run });
+  if (!exists.ok) return exists;
+  if (exists.action === 'skipped-unparseable') return exists;
+  const dev = exists.device;
   if (dev.state === 'Booted') return { ok: true, action: 'already-booted', device: dev };
 
   try {
@@ -602,6 +636,7 @@ module.exports = {
   ranNoTests,
   parseDestination,
   simulatorState,
+  checkSimulatorAvailable,
   preflightSimulator,
   isPidAlive,
   killGroup,

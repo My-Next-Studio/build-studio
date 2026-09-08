@@ -21,6 +21,56 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-06 — A run refuses to start against a simulator that isn't there
+
+### Changed
+
+- **Execution runs now check the pinned simulator before starting, not after.**
+  Projects that set `simulator.destination` get a fast existence check on the
+  start request; a destination that no longer resolves is refused with a 400
+  naming the dead id and the `xcrun simctl list devices available` command to
+  repin it. Retry with `{"override": true}` to start anyway. Projects with no
+  `simulator.destination` are unaffected.
+
+  This closes a real gap rather than a theoretical one. The same check already
+  existed, but only inside the QA suite — the far end of a run. An Xcode update
+  removes a simulator runtime, which deletes every device on it, so a pinned
+  UDID silently stops resolving; the run then spends the whole implementation
+  phase against a simulator that does not exist before anything notices.
+  Measured here: three hours of `task_execution` lost this way.
+
+  The check deliberately does **not** boot the device — it is one `simctl list`
+  parse (~1s), because it runs synchronously on an HTTP start request where a
+  three-minute boot would not be acceptable. Booting stays where it was, in the
+  QA suite's preflight, by which point the device is known to exist.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+    cd packages/desktop && node inject-resources.js --sync-only
+
+Then restart the Electron app and any running project-servers.
+
+**In each managed project** — nothing required, but worth checking once. If a
+project pins `simulator.destination` by UDID, confirm the device still exists:
+
+    xcrun simctl list devices available | grep "$(grep -o 'id=[0-9A-F-]*' .build-studio/config.yaml | cut -d= -f2)"
+
+No output means the pin is stale and the next run will now be refused at start
+(previously it would fail deep into QA instead). Repin it to a live device.
+
+### Notes for forks
+
+`checkSimulatorAvailable` is the cheap half of `preflightSimulator`, split out
+of it and exported from `qa-suite-run.js`. Both are kept in one file on purpose:
+they must agree about what "this device is usable" means, and preflight now
+calls the check rather than repeating its guards. If you add a condition to one,
+add it to the check, not to the boot path — the start gate is the half that
+sees it first.
+
+---
+
 ## 2026-09-05 — Codex agents report their cost, and unpriced models say so
 
 ### Added
