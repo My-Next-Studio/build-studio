@@ -21,6 +21,53 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-08 — A finished run commits its own scorecard row
+
+### Changed
+
+- **Completing a workflow now commits `.build-studio/scorecard.jsonl` itself.**
+  Every finished run appends a row to that tracked file, which left the working
+  tree dirty and blocked the next run until someone committed it by hand from
+  the Operations tab — a manual step between every pair of runs, for a file no
+  human writes or reviews. The run now commits it as
+  `chore(scorecard): record <type> run`.
+
+  The commit is **pathspec-scoped**: it records only `scorecard.jsonl` and
+  leaves anything an agent has staged in parallel staged and uncommitted. It is
+  also **advisory** — if git refuses (merge in progress, lock contention, no
+  repo), the run logs the reason and finishes normally, leaving the row in the
+  working tree exactly as before. Nothing about workflow completion can now fail
+  on a git error.
+
+  Opt out per project with `scorecard.auto_commit: false` in
+  `.build-studio/config.yaml`.
+
+### Upgrade steps
+
+**In Build Studio** — rebuild and restart so the running servers pick it up:
+
+    cd packages/desktop && node inject-resources.js --sync-only --restart-projects
+
+Then click Start for each project in the hub.
+
+**In each managed project** — nothing to do. Projects that already track
+`scorecard.jsonl` get the automatic commit with no config change. If a project
+has an uncommitted scorecard row right now, the next completed run commits it
+along with its own.
+
+**Note** — this only fires for projects where `scorecard.jsonl` is tracked and
+inside the repo. A project whose `statePath` resolves outside the project root
+is skipped with a logged reason rather than committed.
+
+### Notes for forks
+
+`lib/scorecard-commit.js` holds the decision and its guards; the workflow router
+only logs the outcome. Keep it that way — the guards are unit-tested without
+booting a workflow, which is why they are not inline in `writeWorklog`. It
+shares `lib/scoped-commit.js` with support filing; that helper owns the
+concurrency contract (pathspec limiting, lock retries, merge detection), so
+new auto-commits should go through it rather than shelling out to git.
+
 ## 2026-09-06 — A run refuses to start against a simulator that isn't there
 
 ### Changed

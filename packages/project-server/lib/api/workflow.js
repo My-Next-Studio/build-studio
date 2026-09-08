@@ -23,6 +23,7 @@ const qaSuite = require('../qa-suite-run');
 const { suggestBuilderRole } = require('../builder-role-hint');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
+const { commitScorecard } = require('../scorecard-commit');
 
 // Common instruction fragments injected into all agent prompts.
 // Placeholders {{CONTEXT_BUDGET}} and {{SOFT_THRESHOLD}} are replaced
@@ -707,6 +708,20 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
     }
   }
 
+  /**
+   * Log-and-drop wrapper around commitScorecard. The decision logic and its
+   * guards live in lib/scorecard-commit.js so they can be tested without
+   * booting a workflow; this only reports what happened.
+   */
+  async function autoCommitScorecard(wf) {
+    const result = await commitScorecard(projectRoot, config.statePath, config, wf);
+    if (result.committed) {
+      console.log(`[scorecard] committed (${result.sha || result.reason})`);
+    } else {
+      console.warn(`[scorecard] not committed: ${result.reason} — row left in the working tree`);
+    }
+  }
+
   function writeWorklog(wf) {
     try {
       // FU-1 final sweep: harvest opencode telemetry for agents that ended
@@ -720,7 +735,17 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
       // ten FILES per project: one multi-step run fills the cap and evicts every
       // earlier run, so history depends on how many steps recent runs happened
       // to have. See lib/agent-scorecard.js.
-      agentScorecard.appendRun(config.statePath, wf, config.name || path.basename(projectRoot));
+      const scorecardRows = agentScorecard.appendRun(config.statePath, wf, config.name || path.basename(projectRoot));
+      // Commit the row we just wrote. Without this the file sits dirty in the
+      // working tree and the NEXT workflow refuses to start until someone
+      // commits it by hand from the Operations tab — a manual step between
+      // every pair of runs, for a file the run itself produced.
+      //
+      // Fire-and-forget: writeWorklog is sync and its six callers do not await,
+      // so awaiting here would mean changing all of them for a commit that is
+      // advisory anyway. A failure leaves the row in the working tree exactly
+      // as today, which is the pre-existing behaviour, not a regression.
+      if (scorecardRows > 0) autoCommitScorecard(wf).catch(() => {});
       const projectName = config.name || path.basename(projectRoot);
       const { path: dailyPath, yyyy, mm, dd, hhmm } = obsidianDailyPath();
 
