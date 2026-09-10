@@ -67,9 +67,30 @@ You have {{CONTEXT_BUDGET}}. Fix tasks involve investigation — that's why this
 8. **Screenshot / PR-evidence failures = check the FIXTURE first.** A blank, empty, or wrong-data capture almost always means the test didn't seed the state it asserts on (no open phase, empty store, missing record). Fix the test's data-seeding/setup. Do NOT modify production code to make a screenshot pass — that risks changing real behaviour to satisfy an evidence artifact.
 9. **Leave no debug cruft.** If you add temporary logging/probes (NSLog, print, etc.) to diagnose, REMOVE them before reporting. Never commit debug code.`;
 
-/** Resolve the context budget label for a model. */
+/**
+ * Resolve the context budget LABEL for a model.
+ *
+ * Advisory only. Nothing enforces these numbers — the sole consumer interpolates
+ * them into {{CONTEXT_BUDGET}}/{{SOFT_THRESHOLD}} in an agent prompt, so they
+ * tell an agent how much room to assume and nothing more. There is no
+ * truncation and no check against the provider's real window; an overflow
+ * surfaces as a provider error, not as anything this code catches.
+ *
+ * Keyed on the CLI rather than the model, because that is the granularity the
+ * launcher resolves. That makes the figure approximate by construction: every
+ * model on a given CLI is described identically. It previously also named a
+ * specific model ("Codex GPT-5.5") which drifted out of date the moment the
+ * configured model changed — measured 2026-09-10, the label read GPT-5.5 while
+ * the configured model was gpt-5.6-sol. Name the CONFIGURED model instead, so
+ * the label cannot claim a model nobody is running.
+ */
 function contextBudgetFor(modelId, cli) {
-  if (cli === 'codex') return { budget: '~258K tokens (Codex GPT-5.5)', softThreshold: '~130K tokens' };
+  if (cli === 'codex') {
+    return {
+      budget: `~258K tokens${modelId ? ` (Codex, ${modelId})` : ' (Codex)'}`,
+      softThreshold: '~130K tokens',
+    };
+  }
   if (cli === 'opencode') return { budget: '~200K tokens (varies by model — check your provider)', softThreshold: '~100K tokens' };
   if (modelId && modelId.includes('[1m]')) return { budget: '~1M tokens (1M-context tier)', softThreshold: '~500K tokens' };
   return { budget: '~200K tokens', softThreshold: '~100K tokens' };
