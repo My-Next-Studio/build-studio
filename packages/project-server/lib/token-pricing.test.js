@@ -96,3 +96,24 @@ test('pricedModels lists what a scorecard can cost, for gap reporting', () => {
   assert.ok(list.includes('gpt-5.6-sol'));
   assert.deepEqual(list, [...list].sort(), 'stable order');
 });
+
+// A bare CLI alias is the ORDINARY case, not an edge one: the launcher stores
+// whatever `agent_defaults.model` holds, and that defaults to the literal 'opus'.
+// Before this, such an agent carried real token counts and costUSD null — eleven
+// of them in one measured run (2026-09-11) — so the most common configuration on
+// the platform reported as "unmeasured".
+test('bare CLI aliases price through the same table the launcher resolves', () => {
+  assert.equal(normalizeModelId('sonnet'), 'claude-sonnet-5');
+  assert.equal(normalizeModelId('opus'), 'claude-opus-4-8');
+  assert.equal(normalizeModelId('opus[1m]'), 'claude-opus-4-8');
+  assert.ok(rateFor('sonnet'), 'an alias must resolve to a rate');
+  assert.ok(rateFor('opus'), 'an alias must resolve to a rate');
+  assert.ok(costUSD('sonnet', { inputTokens: 1000, outputTokens: 1000 }) > 0);
+});
+
+// The honesty property this module exists for must survive the alias change: an
+// unknown model is still null, never silently priced as something else.
+test('an unknown model is still unpriced rather than guessed', () => {
+  assert.equal(rateFor('not-a-real-model'), null);
+  assert.equal(costUSD('not-a-real-model', { inputTokens: 1000, outputTokens: 1000 }), null);
+});

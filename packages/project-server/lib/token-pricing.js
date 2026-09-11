@@ -1,5 +1,7 @@
 'use strict';
 
+const { MODEL_IDS } = require('@build-studio/shared/cli');
+
 /**
  * What a run cost, per model — or an honest null.
  *
@@ -69,11 +71,26 @@ const RATES = {
  *                                                   `longContext` below)
  *   `openrouter/x-ai/grok-4.6` → `x-ai/grok-4.6`   (drop the routing prefix)
  *   `claude-opus-5-20260514`   → `claude-opus-5`   (dated snapshot)
+ *   `sonnet`                   → `claude-sonnet-5` (bare CLI alias)
+ *
+ * The bare alias is not an edge case — it is what the launcher stores whenever a
+ * step runs on `agent_defaults.model`, which defaults to the literal 'opus'. So
+ * a default-configured agent recorded `model: "sonnet"` / `"opus"`, found no
+ * rate, and was priced null: measured 2026-09-11, eleven agents in one fazon run
+ * carried real token counts with costUSD null. That is the telemetry reading as
+ * "unmeasured" for the most ordinary configuration there is.
+ *
+ * MODEL_IDS (shared/cli.js) is the same alias table the launcher resolves
+ * `--model` through, so pricing and launching now agree by construction rather
+ * than by two hand-maintained lists.
  */
 function normalizeModelId(model) {
   if (!model || typeof model !== 'string') return null;
   let id = model.trim().toLowerCase();
   if (!id) return null;
+  // Alias first, and BEFORE the [1m] strip, since the table carries both
+  // `opus` and `opus[1m]` forms.
+  if (MODEL_IDS[id]) id = String(MODEL_IDS[id]).toLowerCase();
   id = id.replace(/\[1m\]$/, '');            // long-context suffix
   id = id.replace(/^openrouter\//, '');      // routing prefix
   if (RATES[id]) return id;

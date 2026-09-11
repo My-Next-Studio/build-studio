@@ -1295,7 +1295,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
               {tokenStats && tokenStats.projectTokens > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)' }}>Project total</span>
-                  <span title={`API-equiv: $${tokenStats.projectCostUSD.toFixed(2)} across ${tokenStats.prds.length} PRD(s)`} style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, color: 'var(--text)' }}>{fmt(tokenStats.projectTokens)} tok</span>
+                  <span title={`API-equiv: ${tokenStats.projectCostUSD != null ? `$${tokenStats.projectCostUSD.toFixed(2)}` : 'not priced'} across ${tokenStats.prds.length} PRD(s)`} style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, color: 'var(--text)' }}>{fmt(tokenStats.projectTokens)} tok</span>
                 </div>
               )}
             </div>
@@ -3318,12 +3318,19 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
 
         {/* Token usage badge */}
         {agent.tokenUsage && (() => {
-          const total = agent.tokenUsage.inputTokens + agent.tokenUsage.outputTokens
+          const total = (agent.tokenUsage.inputTokens ?? 0) + (agent.tokenUsage.outputTokens ?? 0)
           const display = total >= 1_000_000 ? `${(total / 1_000_000).toFixed(1)}M` : total >= 1000 ? `${Math.round(total / 1000)}k` : String(total)
           const isHeavy = total >= 100_000
+          // costUSD is deliberately nullable — token-pricing returns null for an unpriced
+          // model rather than lying with 0. Rendering it unguarded threw "Cannot read
+          // properties of null (reading 'toFixed')" during render, and because this sits
+          // inside the project route, the segment's error boundary swallowed the WHOLE
+          // page as "Failed to load project" (2026-09-11: eleven agents in one run, every
+          // one priced null). A missing cost must degrade to "not priced", never take the
+          // dashboard down with it.
           return (
             <span
-              title={`Input: ${agent.tokenUsage.inputTokens.toLocaleString()} · Output: ${agent.tokenUsage.outputTokens.toLocaleString()} · Cache read: ${agent.tokenUsage.cacheRead.toLocaleString()} · API-equiv: $${agent.tokenUsage.costUSD.toFixed(3)}`}
+              title={`Input: ${(agent.tokenUsage.inputTokens ?? 0).toLocaleString()} · Output: ${(agent.tokenUsage.outputTokens ?? 0).toLocaleString()} · Cache read: ${(agent.tokenUsage.cacheRead ?? 0).toLocaleString()} · API-equiv: ${agent.tokenUsage.costUSD != null ? `$${agent.tokenUsage.costUSD.toFixed(3)}` : 'not priced'}`}
               style={{
                 fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 600,
                 color: isHeavy ? 'var(--yellow, #fbbf24)' : 'var(--text-dim)',

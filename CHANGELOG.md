@@ -21,6 +21,50 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-11 — An unpriced agent no longer takes down the project page
+
+### Fixed
+
+- **"Failed to load project" when opening a project.** The workflow view
+  rendered each agent's `costUSD` without a guard, but that field is
+  deliberately nullable — pricing returns null for an unpriced model rather than
+  lying with 0. One unpriced agent threw `Cannot read properties of null
+  (reading 'toFixed')` during render, and because it sits inside the project
+  route, the error boundary swallowed the **whole page**. A missing cost now
+  shows "not priced". The two sibling token fields in the same badge, and the
+  project-level cost badge, were the same latent crash and are guarded too.
+
+- **Agents running on a bare model alias were priced as unmeasured.** Pricing
+  never consulted the alias table the launcher already resolves `--model`
+  through, so `sonnet` and `opus` found no rate. This was not an edge case: a
+  step with no explicit model falls back to `agent_defaults.model`, which
+  defaults to the literal `opus` — so the most ordinary configuration on the
+  platform recorded real token counts with a null cost. Measured on one run:
+  eleven agents, every one unpriced. Pricing and launching now share one table.
+
+  An unknown model is still reported as unpriced rather than guessed — that
+  property is unchanged and pinned by a test.
+
+### Upgrade steps
+
+**In Build Studio** — this touches hub code, so `--sync-only` is NOT enough:
+
+    cd packages/hub && npx next build
+    cd packages/desktop && node inject-resources.js
+
+Then restart the Electron app and Start each project.
+
+**In each managed project** — nothing to do. Costs already recorded as null stay
+null; they are historical records, not recomputed. New runs price correctly.
+
+### Notes for forks
+
+`token-pricing.js` now imports `MODEL_IDS` from `@build-studio/shared/cli` — the
+same table `buildCliFlags` resolves `--model` through. Keep it that way: two
+hand-maintained lists is how the aliases came to be unpriced. And treat every
+`costUSD` render as nullable; the null is the honest answer, not a bug to
+paper over.
+
 ## 2026-09-11 — A hung test suite is caught in minutes, and names the test
 
 ### Added
