@@ -21,6 +21,59 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-11 — A hung test suite is caught in minutes, and names the test
+
+### Added
+
+- **QA suite runs are now killed when they stop completing tests, not when they
+  run out of time.** A hung test stops producing case transitions long before
+  the 45-minute suite timeout, but the timeout could not tell "hung" from
+  "slow" — so a hang cost the full 45 minutes and reported only "no verdict".
+  Measured on 2026-09-08: a test hung 90 seconds into a run, and the 178 cases
+  that had already passed were reported as progress right up to the kill, so
+  nothing looked wrong for 44 minutes.
+
+  After 5 minutes with no test case starting or finishing, the run is killed and
+  reported as `stalled` — **naming the case that was running when transitions
+  stopped**, which is the test that hung. That is the difference between "no
+  verdict after 45 minutes" and one actionable line.
+
+- **A runaway log is capped at 500 MB.** The same run wrote a 557 MB log that
+  was 99.95% one repeated line. This is a disk backstop only — the stall check
+  is what catches a hang, including a silent one that writes nothing.
+
+### Changed
+
+- A stalled or oversized run reports its own status rather than `timeout`, and
+  both route to `**Gate could not run:**` — an environment outcome, not a defect
+  a developer can fix. Sending one into the fix loop produces a task no
+  developer can complete.
+
+### Upgrade steps
+
+**In Build Studio** — rebuild and restart so running servers pick it up:
+
+    cd packages/desktop && node inject-resources.js --sync-only --restart-projects
+
+Then click Start for each project in the hub.
+
+**In each managed project** — nothing to do. The 5-minute stall window and
+500 MB cap apply with no config change. Tune or disable per project in
+`.build-studio/config.yaml` if a suite legitimately goes quiet for longer:
+
+    qa_validation:
+      suite_stall_minutes: 8     # 0 disables the stall check
+      suite_log_cap_mb: 1000     # 0 disables the cap
+
+### Notes for forks
+
+The stall trigger is `caseActivity()` in `lib/qa-suite-run.js`, extracted so it
+can be tested against real xcodebuild output. Its false-NEGATIVE direction is the
+dangerous one — failing to see activity would kill a healthy suite — so a case
+that merely *started* counts as activity, and the tests pin that alongside a
+chunk of the real runaway log reading as no activity. Add new activity shapes
+there, not to the watchdog.
+
 ## 2026-09-08 — A finished run commits its own scorecard row
 
 ### Changed

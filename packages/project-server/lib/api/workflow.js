@@ -8252,6 +8252,10 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
       }
 
       const timeoutMs = qaSuite.resolveTimeoutMs(config.qa_validation);
+      // A hung test stops completing cases long before the timeout expires, and
+      // the timeout alone cannot tell "hung" from "slow" — see DEFAULT_STALL_MINUTES.
+      const stallMs = qaSuite.resolveStallMs(config.qa_validation);
+      const logCapBytes = qaSuite.resolveLogCapBytes(config.qa_validation);
 
       // What happens when the suite ends. Defined here because the spawn now
       // sits inside the pre-flight's callback rather than in the handler body.
@@ -8332,6 +8336,8 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
             args: suiteArgs,
             logPath: suiteLogPath,
             timeoutMs,
+            stallMs,
+            logCapBytes,
             env: { ...process.env, BUILD_STUDIO_SIMULATOR_DESTINATION: config.simulator.destination },
             onProgress: (p) => {
               const s = wf.steps.qa_validation;

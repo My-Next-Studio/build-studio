@@ -10,6 +10,9 @@ const {
   parallelArgs, buildXcodebuildArgs, displayCommand, parseTestCounts,
   failureExcerpt, resolveTimeoutMs, formatSuiteSection, startSuiteRun,
   DEFAULT_TIMEOUT_MINUTES,
+  caseActivity,
+  resolveStallMs,
+  resolveLogCapBytes,
 } = require('./qa-suite-run');
 
 // ── argv construction ────────────────────────────────────────────────────────
@@ -543,3 +546,133 @@ test('preflight still reports the missing device it now delegates', async () => 
   assert.equal(r.ok, false)
   assert.match(r.reason, /no simulator matching DEAD1111/)
 })
+
+// ── stall detection ──────────────────────────────────────────────────────────
+//
+// A hung test stops COMPLETING CASES long before the suite timeout expires.
+// Measured 2026-09-08: one test hung 90s in, the run was killed at the 45-minute
+// limit reporting "no verdict", and the 178 already-passed cases were reported as
+// progress right up to the kill — so nothing looked wrong for 44 minutes.
+
+test('caseActivity recognises real xcodebuild case lines', () => {
+  const started = caseActivity(
+    "Test Case '-[DeskRhythmTests.EntitlementServiceStoreKitTests testAnnual]' started.\n");
+  assert.equal(started.any, true);
+  assert.equal(started.startedName, '-[DeskRhythmTests.EntitlementServiceStoreKitTests testAnnual]');
+
+  const passed = caseActivity("Test Case '-[T testA]' passed (0.010 seconds).\n");
+  assert.equal(passed.passed, 1);
+  assert.equal(passed.any, true);
+
+  const failed = caseActivity("Test Case '-[T testB]' failed (0.140 seconds).\n");
+  assert.equal(failed.failed, 1);
+  assert.equal(failed.any, true);
+});
+
+// The false NEGATIVE is the dangerous direction — it would kill a healthy suite.
+// A chunk of the runaway log that triggered this work must read as NO activity.
+test('caseActivity treats a log storm with no case transitions as no activity', () => {
+  const spam = Array(500).fill(
+    '2026-09-09 01:29:53.160421+0200 DeskRhythm[24309:4582460] '
+    + '[entitlement-resolution] reason=no_history origin=bootstrap').join('\n');
+  const act = caseActivity(spam);
+  assert.equal(act.any, false, 'log volume alone is not progress');
+  assert.equal(act.passed, 0);
+  assert.equal(act.failed, 0);
+});
+
+test('the last started case in a chunk is the one reported — it is the one that hung', () => {
+  const act = caseActivity(
+    "Test Case '-[T testA]' started.\nTest Case '-[T testA]' passed (0.01 seconds).\n"
+    + "Test Case '-[T testHang]' started.\n");
+  assert.equal(act.startedName, '-[T testHang]');
+});
+
+test('a run that stops completing cases is killed as stalled and names the hung test', async () => {
+  const dir = stubDir(`#!/bin/sh
+echo "Test Case '-[T testA]' passed (0.10 seconds)."
+echo "Test Case '-[T testHang]' started."
+sleep 60
+`);
+  const logPath = path.join(dir, 'run.log');
+  const run = startSuiteRun({
+    cwd: dir, args: ['test'], logPath, timeoutMs: 60000, stallMs: 900,
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+  });
+  const r = await run.promise;
+  assert.equal(r.status, 'stalled', 'a hang is reported as a stall, not a timeout');
+  assert.equal(r.lastCase, '-[T testHang]', 'the culprit is named');
+  assert.equal(r.counts.casesPassed, 1, 'progress before the hang survives');
+  assert.ok(r.durationMs < 30000, 'it does not wait out the full timeout');
+});
+
+// The guard against the dangerous direction: a slow-but-progressing suite must
+// survive a stall window shorter than its total runtime.
+test('a slow suite that keeps completing cases is NOT stalled', async () => {
+  const dir = stubDir(`#!/bin/sh
+for i in 1 2 3 4 5 6; do
+  echo "Test Case '-[T test$i]' passed (0.10 seconds)."
+  sleep 0.3
+done
+`);
+  const run = startSuiteRun({
+    cwd: dir, args: ['test'], logPath: path.join(dir, 'run.log'), timeoutMs: 60000, stallMs: 900,
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+  });
+  const r = await run.promise;
+  assert.equal(r.status, 'completed');
+  assert.equal(r.counts.casesPassed, 6);
+});
+
+test('a runaway log is killed once it passes the cap', async () => {
+  const dir = stubDir(`#!/bin/sh
+echo "Test Case '-[T testA]' started."
+while true; do echo "spam spam spam spam spam spam spam spam spam spam"; done
+`);
+  const run = startSuiteRun({
+    cwd: dir, args: ['test'], logPath: path.join(dir, 'run.log'),
+    timeoutMs: 60000, stallMs: 0, logCapBytes: 256 * 1024,
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+  });
+  const r = await run.promise;
+  assert.equal(r.status, 'oversized');
+  assert.ok(r.logBytes > 256 * 1024);
+});
+
+test('stall and log-cap windows come from config, with explicit opt-out', () => {
+  assert.equal(resolveStallMs(undefined), 5 * 60 * 1000);
+  assert.equal(resolveStallMs({ suite_stall_minutes: 12 }), 12 * 60 * 1000);
+  assert.equal(resolveStallMs({ suite_stall_minutes: 0 }), 0, '0 disables');
+  assert.equal(resolveStallMs({ suite_stall_minutes: -3 }), 5 * 60 * 1000, 'nonsense falls back');
+
+  assert.equal(resolveLogCapBytes(undefined), 500 * 1024 * 1024);
+  assert.equal(resolveLogCapBytes({ suite_log_cap_mb: 10 }), 10 * 1024 * 1024);
+  assert.equal(resolveLogCapBytes({ suite_log_cap_mb: 0 }), 0, '0 disables');
+});
+
+// The reason a stall is a distinct status: the report must name the test. The
+// previous "no verdict" message sent a fix loop at nothing.
+test('the stalled report names the hung case and does not read as a defect', () => {
+  const out = formatSuiteSection({
+    status: 'stalled',
+    command: 'xcodebuild test',
+    logPath: '/tmp/x.log',
+    durationMs: 400000,
+    stalledForMs: 6 * 60 * 1000,
+    lastCase: '-[DeskRhythmTests.EntitlementServiceStoreKitTests testAnnual]',
+    counts: { casesPassed: 178, casesFailed: 0 },
+  });
+  assert.match(out, /STOPPED COMPLETING TESTS/);
+  assert.match(out, /testAnnual/, 'the culprit is named');
+  assert.match(out, /178 test cases passed/);
+  assert.match(out, /Gate could not run/, 'routed as environment, not a defect');
+});
+
+test('a stall before any test started says so rather than naming nothing', () => {
+  const out = formatSuiteSection({
+    status: 'stalled', command: 'xcodebuild test', logPath: '/tmp/x.log',
+    durationMs: 400000, stalledForMs: 300000, lastCase: null,
+    counts: { casesPassed: 0, casesFailed: 0 },
+  });
+  assert.match(out, /before the first test/);
+});

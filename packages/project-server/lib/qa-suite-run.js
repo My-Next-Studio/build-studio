@@ -46,6 +46,29 @@ const DEFAULT_TIMEOUT_MINUTES = 45;
 const KILL_GRACE_MS = 10 * 1000;
 /** Progress is recomputed from the stream, not by re-reading the log. */
 const PROGRESS_INTERVAL_MS = 15 * 1000;
+/**
+ * A suite still running but not COMPLETING CASES is hung, and waiting out the
+ * full timeout learns nothing more.
+ *
+ * Measured 2026-09-08: one test hung 90s into a run, the suite was killed at the
+ * 45-minute limit with "no verdict", and the 178 cases that had already passed
+ * were reported as progress right up to the kill — so nothing looked wrong until
+ * 44 minutes had been spent. Case transitions had stopped at minute 1.
+ *
+ * Five minutes is well clear of a slow single test (a cold-boot XCUITest case
+ * runs in tens of seconds) while turning that 45-minute wait into six.
+ */
+const DEFAULT_STALL_MINUTES = 5;
+/**
+ * A hung test can also SPIN, and a spinning test writes. The same run produced a
+ * 557 MB log — 4,717,332 lines, 99.95% of them one repeated string — which
+ * buried the real output and cost real disk.
+ *
+ * This is a backstop, not the detector: the stall check is what catches a hang,
+ * including a silent one. This only stops a loud hang from filling the volume
+ * while it is being caught.
+ */
+const DEFAULT_LOG_CAP_MB = 500;
 
 /**
  * Parallel-testing flags for a project's `simulator.parallel_testing`.
@@ -437,7 +460,42 @@ function xcodebuildInFlight() {
  *
  * @returns {{pid:number|null, promise:Promise<object>, cancel:function}}
  */
-function startSuiteRun({ cwd, args, logPath, timeoutMs, env, onProgress }) {
+/**
+ * What test-case activity does this output chunk show?
+ *
+ * Extracted so the stall detector's trigger can be tested against real
+ * xcodebuild output. A false negative here is the dangerous direction: it would
+ * make a healthy suite look hung and get it killed, so `any` counts a case that
+ * merely STARTED as activity too — that is progress even before it finishes.
+ *
+ * The started name is the last one in the chunk, because when transitions stop
+ * it is the case still running, i.e. the one that hung.
+ */
+/**
+ * How often the watchdog looks. Tied to the stall window rather than fixed, so a
+ * short window (a test, or a project that wants a tight one) is still noticed
+ * promptly, while the production default lands on the normal progress cadence.
+ * Floored so it can never become a busy loop.
+ */
+function watchdogIntervalMs(stallMs) {
+  if (!(stallMs > 0)) return PROGRESS_INTERVAL_MS;
+  return Math.max(100, Math.min(PROGRESS_INTERVAL_MS, Math.floor(stallMs / 3)));
+}
+
+function caseActivity(chunk) {
+  const text = String(chunk || '');
+  const passed = (text.match(/Test Case .*' passed \(/g) || []).length;
+  const failed = (text.match(/Test Case .*' failed \(/g) || []).length;
+  const started = text.match(/Test Case '([^']+)' started/g) || [];
+  let startedName = null;
+  if (started.length) {
+    const m = started[started.length - 1].match(/Test Case '([^']+)' started/);
+    if (m) startedName = m[1];
+  }
+  return { passed, failed, startedName, any: passed + failed + started.length > 0 };
+}
+
+function startSuiteRun({ cwd, args, logPath, timeoutMs, env, onProgress, stallMs = 0, logCapBytes = 0 }) {
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const out = fs.createWriteStream(logPath, { flags: 'w' });
   const startedAt = Date.now();
@@ -460,11 +518,21 @@ function startSuiteRun({ cwd, args, logPath, timeoutMs, env, onProgress }) {
   let tail = '';
   let casesPassed = 0;
   let casesFailed = 0;
+  // Stall detection watches CASE TRANSITIONS, not bytes. A hang that spins and a
+  // hang that sits silent both stop completing cases; only the first also writes.
+  // Bytes are tracked separately, purely as a disk backstop.
+  let lastCaseAt = startedAt;
+  let lastCaseName = null;
+  let bytesWritten = 0;
   const absorb = (buf) => {
     const chunk = buf.toString('utf8');
     out.write(chunk);
-    casesPassed += (chunk.match(/Test Case .*' passed \(/g) || []).length;
-    casesFailed += (chunk.match(/Test Case .*' failed \(/g) || []).length;
+    bytesWritten += Buffer.byteLength(chunk);
+    const act = caseActivity(chunk);
+    casesPassed += act.passed;
+    casesFailed += act.failed;
+    if (act.startedName) lastCaseName = act.startedName;
+    if (act.any) lastCaseAt = Date.now();
     tail = (tail + chunk).slice(-200000); // enough for the summary + failures
   };
   child.stdout.on('data', absorb);
@@ -477,16 +545,36 @@ function startSuiteRun({ cwd, args, logPath, timeoutMs, env, onProgress }) {
   }, PROGRESS_INTERVAL_MS);
 
   let timedOut = false;
+  let stalled = false;
+  let oversized = false;
   let killTimer = null;
-  const timeoutTimer = timeoutMs > 0 && setTimeout(() => {
-    timedOut = true;
+  const killNow = () => {
     killGroup(child.pid, 'SIGTERM');
     killTimer = setTimeout(() => killGroup(child.pid, 'SIGKILL'), KILL_GRACE_MS);
+  };
+  const timeoutTimer = timeoutMs > 0 && setTimeout(() => {
+    timedOut = true;
+    killNow();
   }, timeoutMs);
+
+  // Checked on the progress tick — no extra timer, and the resolution that
+  // matters here is minutes.
+  const watchdog = (stallMs > 0 || logCapBytes > 0) && setInterval(() => {
+    if (logCapBytes > 0 && bytesWritten > logCapBytes) {
+      oversized = true;
+      killNow();
+      return;
+    }
+    if (stallMs > 0 && Date.now() - lastCaseAt > stallMs) {
+      stalled = true;
+      killNow();
+    }
+  }, watchdogIntervalMs(stallMs));
 
   const promise = new Promise((resolve, reject) => {
     child.on('error', (e) => {
       if (progressTimer) clearInterval(progressTimer);
+      if (watchdog) clearInterval(watchdog);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (killTimer) clearTimeout(killTimer);
       if (child.pid) activeRuns.delete(child.pid);
@@ -495,6 +583,7 @@ function startSuiteRun({ cwd, args, logPath, timeoutMs, env, onProgress }) {
     });
     child.on('close', (code, signal) => {
       if (progressTimer) clearInterval(progressTimer);
+      if (watchdog) clearInterval(watchdog);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (killTimer) clearTimeout(killTimer);
       if (child.pid) activeRuns.delete(child.pid);
@@ -507,14 +596,23 @@ function startSuiteRun({ cwd, args, logPath, timeoutMs, env, onProgress }) {
     });
     const finish = (code, signal) => {
       const counts = parseTestCounts(tail);
+      // Order matters: a stall and an oversized log are both kills, and both
+      // would otherwise be reported as a plain timeout — the very conflation
+      // that made the 2026-09-08 hang read as "no verdict".
+      const status = stalled ? 'stalled' : oversized ? 'oversized' : timedOut ? 'timeout' : 'completed';
       resolve({
-        status: timedOut ? 'timeout' : 'completed',
+        status,
         exitCode: code,
         signal: signal || null,
         durationMs: Date.now() - startedAt,
         logPath,
         counts: { ...counts, casesPassed, casesFailed },
         failureExcerpt: failureExcerpt(tail),
+        // Only meaningful on a stall, but harmless to carry: the case that was
+        // running when transitions stopped is the culprit to name.
+        lastCase: lastCaseName,
+        stalledForMs: stalled ? Date.now() - lastCaseAt : null,
+        logBytes: bytesWritten,
       });
     };
   });
@@ -531,6 +629,22 @@ function resolveTimeoutMs(qaConfig) {
   const raw = qaConfig && qaConfig.suite_timeout_minutes;
   const minutes = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MINUTES;
   return Math.max(1, minutes) * 60 * 1000;
+}
+
+/** Minutes of no case transitions before a run is called hung. 0 disables. */
+function resolveStallMs(qaConfig) {
+  const raw = qaConfig && qaConfig.suite_stall_minutes;
+  if (raw === 0 || raw === false) return 0;   // explicit opt-out
+  const minutes = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_STALL_MINUTES;
+  return Math.max(1, minutes) * 60 * 1000;
+}
+
+/** Log size before a run is called runaway. 0 disables. */
+function resolveLogCapBytes(qaConfig) {
+  const raw = qaConfig && qaConfig.suite_log_cap_mb;
+  if (raw === 0 || raw === false) return 0;   // explicit opt-out
+  const mb = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_LOG_CAP_MB;
+  return Math.max(1, mb) * 1024 * 1024;
 }
 
 /**
@@ -568,6 +682,35 @@ function formatSuiteSection(run) {
   );
 
   const c = run.counts || {};
+  if (run.status === 'stalled') {
+    // The whole point of detecting a stall separately: say WHICH test hung.
+    // "No verdict after 45 minutes" sent a previous run into a fix loop aimed
+    // at nothing; naming the case turns it into one actionable line.
+    const mins = Math.round((run.stalledForMs || 0) / 60000);
+    lines.push(
+      `**The run was killed because it STOPPED COMPLETING TESTS.** No test case started or finished for ${mins} minute(s), while the process was still alive — a hung test, not a slow suite.`,
+      run.lastCase
+        ? `The case that was running when it stopped: \`${run.lastCase}\` — this is the one that hung.`
+        : 'No test case had started yet when it stopped — the hang is before the first test, in build or launch.',
+      `Progress at the kill: ${c.casesPassed || 0} test cases passed, ${c.casesFailed || 0} failed.`,
+      '',
+      'Report this on a `**Gate could not run:**` line, naming the hung test. A suite that cannot finish is an environment outcome, not a defect a developer can fix — but the named test is where to look.',
+    );
+    return lines.join('\n');
+  }
+
+  if (run.status === 'oversized') {
+    const mb = Math.round((run.logBytes || 0) / (1024 * 1024));
+    lines.push(
+      `**The run was killed because its log passed ${mb} MB.** That much output from a test suite means something is looping, not testing.`,
+      run.lastCase ? `The case that was running: \`${run.lastCase}\`.` : '',
+      `Progress at the kill: ${c.casesPassed || 0} test cases passed, ${c.casesFailed || 0} failed.`,
+      '',
+      'Report this on a `**Gate could not run:**` line with the named case — a runaway log is an environment outcome, not a defect a developer can fix.',
+    );
+    return lines.join('\n');
+  }
+
   if (run.status === 'timeout') {
     lines.push(
       `**The run was killed after hitting the ${Math.round(run.timeoutMs / 60000)}-minute limit.** It did not finish, so there is no verdict.`,
@@ -644,5 +787,8 @@ module.exports = {
   xcodebuildInFlight,
   startSuiteRun,
   resolveTimeoutMs,
+  caseActivity,
+  resolveStallMs,
+  resolveLogCapBytes,
   formatSuiteSection,
 };
