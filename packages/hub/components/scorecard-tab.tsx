@@ -42,6 +42,11 @@ interface Payload {
 }
 
 const n = (v: number) => v.toLocaleString()
+// Model ids share a prefix that carries no information in a column this narrow,
+// and the part that distinguishes them is the tail. The full id stays in the
+// title, so nothing is actually lost.
+const shortModel = (m: string) => m.replace(/^claude-/, '')
+
 const dur = (ms: number | null) => {
   if (!ms && ms !== 0) return '—'
   const s = Math.round(ms / 1000)
@@ -89,6 +94,7 @@ function RoleTable({ role, rows }: { role: string; rows: Row[] }) {
               <th style={{ ...TH, textAlign: 'right' }}>output</th>
               <th style={{ ...TH, textAlign: 'right' }}>cost</th>
               <th style={{ ...TH, textAlign: 'right' }}>blocking</th>
+              <th style={TH}>model</th>
               <th style={TH}>cli</th>
             </tr>
           </thead>
@@ -122,6 +128,21 @@ function RoleTable({ role, rows }: { role: string; rows: Row[] }) {
                   </td>
                   <td style={{ ...TD, textAlign: 'right', color: r.findings.blocking ? 'var(--red)' : 'var(--muted)' }}>
                     {r.verdicts ? r.findings.blocking : '—'}
+                  </td>
+                  {/*
+                    The model is the first thing that explains a cost difference
+                    between two otherwise-matching rows, and it was the one field
+                    collected but never shown. A row listing more than one model
+                    is also the row whose averages span different models — worth
+                    seeing before drawing a conclusion from them.
+                  */}
+                  <td
+                    style={{ ...TD, color: r.models.length > 1 ? 'var(--text-dim)' : 'var(--muted)' }}
+                    title={r.models.length > 1
+                      ? `Mixed across this row's agents: ${r.models.join(', ')} — the averages here span different models.`
+                      : r.models.join(', ') || undefined}
+                  >
+                    {r.models.length ? r.models.map(shortModel).join(', ') : '—'}
                   </td>
                   <td style={{ ...TD, color: 'var(--muted)' }}>{r.clis.join(', ') || '—'}</td>
                 </tr>
@@ -163,7 +184,13 @@ export function ScorecardTab() {
   const singles = rolesWithData.filter(r => !comparable.has(r)).sort()
 
   return (
-    <div style={{ padding: 16 }}>
+    // Own scroll container, matching monitor-tab and model-tab. The app shell is
+    // `h-screen … overflow-hidden` all the way down to <main>, so the page never
+    // scrolls on its own — a tab that does not carry its own `overflow` is simply
+    // clipped at the fold, and the rows below it cannot be reached at all. This
+    // one had `padding` only, which is invisible until the table outgrows the
+    // viewport, i.e. exactly when the data becomes worth reading.
+    <div style={{ padding: '20px 32px', overflow: 'auto', height: 'calc(100vh - 124px)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
         <div style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)' }}>
           Agent scorecard

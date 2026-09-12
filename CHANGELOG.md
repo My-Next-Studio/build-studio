@@ -21,6 +21,49 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-12 — The scorecard scrolls, and shows which model a row ran on
+
+### Fixed
+
+- **The scorecard tab could not be scrolled.** The app shell is
+  `h-screen … overflow-hidden` down to `<main>`, so the page never scrolls on its
+  own and each tab supplies its own scroll container. This one set `padding`
+  only, so everything below the fold was unreachable — invisible until enough
+  runs accumulated for the table to outgrow the viewport, i.e. exactly when it
+  became worth reading. It now matches `monitor-tab` and `model-tab`.
+
+### Added
+
+- **A `model` column.** The field was collected but never rendered, leaving the
+  most common explanation for a cost difference between two otherwise-matching
+  rows invisible. A row listing more than one model is shown slightly brighter
+  with a tooltip saying so: its averages span different models, which is worth
+  knowing before drawing a conclusion from them.
+
+### Known issues
+
+- `max round` is `max(round)` — the highest round the role appeared in, which is
+  a property of the *run*, not of the role. It therefore reads 4–6 on nearly
+  every row and cannot discriminate between roles. The metric worth having is
+  convergence (rounds needed to settle), which is not what this measures.
+  Unchanged for now; renaming or replacing it is a design decision, not a fix.
+
+- Costs already recorded against a bare model alias stay unpriced. Rows carrying
+  one show `(N gaps)` next to the cost, and with the model column those rows are
+  now self-explanatory: every row with a gap contains a bare alias, every row
+  without runs a fully-qualified id.
+
+### Upgrade steps
+
+**In Build Studio** — hub change, so `--sync-only` is not enough:
+
+    cd packages/hub && npx next build
+    cd packages/desktop && node inject-resources.js
+
+Then restart the Electron app.
+
+**In each managed project** — nothing to do.
+
 ## 2026-09-11 — An unpriced agent no longer takes down the project page
 
 ### Fixed
