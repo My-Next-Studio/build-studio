@@ -21,6 +21,44 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-13 — "Gate could not run: N/A" no longer blocks a healthy run
+
+### Fixed
+
+- **A verification step could not advance when the agent wrote a negative into
+  the `**Gate could not run:**` line.** Agents treat the marker as a field to
+  fill in rather than a line to omit, and any non-empty text counted as a
+  blocker. Seen in a real run: the suite executed fully, 664/665 passed, one
+  genuine blocking finding — exactly what the fix loop is for — alongside
+  `**Gate could not run:** N/A — suite executed fully; no environment blockers.`
+  The run stalled, and the message told the owner to fix an environment the
+  agent had just certified as fine.
+
+  An explicit negative (`N/A`, `none`, `nothing`, `no`, `-`, or one of those
+  followed by a separator) now reads as the absent line it was meant to be. The
+  matching is tight on purpose: a reason that merely *starts* with such a word —
+  `no browser is available`, `nothing was listening on port 4000` — still
+  blocks, because silently swallowing a real environment failure is the worse
+  error of the two.
+
+### Changed
+
+- The instructions handed to gate agents now say explicitly to **omit** the line
+  when every check ran, and not to write `N/A` into it. The line's presence is
+  the signal.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+    cd packages/desktop && node inject-resources.js --sync-only --restart-projects
+
+Then Start each project in the hub. A run already stalled on this unblocks
+without re-running the step: the stored feedback is re-parsed when you retry
+`send_to_devs`.
+
+**In each managed project** — nothing to do.
+
 ## 2026-09-12 — The scorecard scrolls, and shows which model a row ran on
 
 ### Fixed

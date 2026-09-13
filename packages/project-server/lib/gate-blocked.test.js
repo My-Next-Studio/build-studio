@@ -49,3 +49,44 @@ test('a marker with no reason is not actionable and is ignored', () => {
 test('empty and missing feedback are safe', () => {
   for (const v of ['', null, undefined]) assert.equal(parseGateBlocked(v), null);
 });
+
+// ── the marker written as a filled-in field ──────────────────────────────────
+//
+// Agents treat the marker as a FIELD rather than a line to omit, and fill it
+// with a negative. Seen live 2026-09-13 in a real run: the suite executed
+// fully, 664/665 passed, one genuine blocking finding — exactly the case the
+// fix loop exists for — and the run could not advance because of this:
+const N_A_ALONGSIDE_A_REAL_FINDING = `**Tests passed:** 664/665
+**Approved:** no
+**Blocking:** 1
+**Gate could not run:** N/A — suite executed fully; no environment blockers.`;
+
+test('a negative written into the marker does not block the run', () => {
+  assert.equal(parseGateBlocked(N_A_ALONGSIDE_A_REAL_FINDING), null,
+    'the agent certified the environment as fine — that must route to the fix loop, not to the owner');
+});
+
+test('the common ways an agent writes "nothing blocked" all read as absent', () => {
+  for (const reason of ['N/A', 'n/a', 'na', 'none', 'None.', 'nothing', 'null',
+                        'no', '-', '--', '—', 'N/A — everything ran', 'none: all checks executed']) {
+    assert.equal(parseGateBlocked(`**Gate could not run:** ${reason}`), null,
+      `"${reason}" should not block`);
+  }
+});
+
+// The expensive direction. A swallowed REAL blocker is worse than a false one:
+// the run proceeds into a fix loop against a broken environment, which is the
+// exact failure this module was written to prevent. These must keep blocking
+// even though each begins with a word that appears in the negative list.
+test('a real blocker that merely STARTS with a negative word still blocks', () => {
+  for (const reason of [
+    'no browser is available',
+    'No simulator matching the pinned id is in the device list',
+    'nothing was listening on port 4000',
+    'none of the three services came up',
+  ]) {
+    const got = parseGateBlocked(`**Gate could not run:** ${reason}`);
+    assert.ok(got && got.blocked, `"${reason}" must still block`);
+    assert.equal(got.reason, reason);
+  }
+});
