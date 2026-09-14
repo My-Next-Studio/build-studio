@@ -1,11 +1,70 @@
 # Plan: evaluate and adapt agent configuration per project
 
-> **Status: proposed 2026-09-01.**
+> **Status: Tier 2 largely implemented 2026-09-13; Tiers 1 and 3 and the
+> adaptation loop still proposed** (proposed 2026-09-01). See *Status by tier*
+> below for what each turned out to mean, and for two places the build diverged
+> from this plan.
 >
 > Owner request: a role behaves differently in different projects, and today
 > nothing adapts it beyond a hand-written command file, nor measures whether
 > that file is any good. Some adaptation could happen at kickoff; more could
 > come from evaluating each project's agents against how they actually perform.
+
+## Status by tier
+
+**Tier 2 — built, and in daily use.** Each project appends one record per agent
+to its own `.build-studio/scorecard.jsonl` when a run completes
+(`lib/agent-scorecard.js`), the hub aggregates across projects
+(`/api/scorecard`), and a Home tab groups the result by role so the same
+role-and-step pair from different projects sits on adjacent rows
+(`components/scorecard-tab.tsx`). Roles present in only one project are listed
+separately, since there is nothing to compare them against.
+
+A run now commits its own scorecard row, because the file is tracked and every
+completed run otherwise left the working tree dirty with output it generated
+itself — a manual commit between every pair of runs.
+
+**Open decision 1 resolved in the build, both ways.** The log is per-project and
+committed; the comparison is hub-side. The plan framed these as alternatives.
+They are not: the per-project JSONL is the durable record a role-tuner agent can
+read without new plumbing, and the hub reads all of them to do the only thing
+Tier 2 exists for.
+
+### Two divergences worth naming
+
+**1. The convergence metric was not built.** This plan's central quantity is
+*fix rounds to converge* — "2.5 in one project and 1.1 in another". What shipped
+is a `max round` column: `max(round)`, the highest round the role appeared in.
+That is a property of the RUN, not of the role, so it reads 4–6 on nearly every
+row and discriminates nothing. The column looks like the metric this plan asked
+for and is not it. Replacing it is the single highest-value piece of Tier 2 left.
+
+**2. Cost columns landed early, and the blind spot this plan predicted arrived
+with them.** The plan said fix-rounds, findings and gate trips should carry the
+first version and cost should wait for token accounting. Cost shipped anyway.
+The predicted consequence followed: rows are marked `(N gaps)` when agents were
+unpriced or unmeasured, and a row can read six times cheaper than its neighbour
+purely because two of its three agents were never priced.
+
+Two causes were found and fixed — a pricing table that did not recognise the
+bare model aliases the launcher actually stores (so any default-configured agent
+priced null), and an unpriced agent crashing the whole project page on render.
+A `model` column now makes a gapped row self-explanatory. Rows recorded before
+the fix stay unpriced; they are historical records, not recomputed.
+
+The CLI-coverage half of the blind spot is unchanged and remains the reason to
+read cost columns with the gap marker, never on their own.
+
+**Tier 1 — not started.** No contract eval exists: nothing checks that a role
+file still describes its project.
+
+**Tier 3 — not started, and correctly deferred.** Its precondition was that
+Tiers 1 and 2 exist and have identified a role file whose changes need guarding.
+Tier 2 now exists but has not yet produced that finding, partly because the
+metric that would produce it is divergence 1 above.
+
+**The adaptation loop — not started.** Scorecards are read by a human today.
+Nothing proposes a role-file change from them.
 
 ## The problem
 
