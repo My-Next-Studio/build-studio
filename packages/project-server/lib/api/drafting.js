@@ -9,6 +9,7 @@ const {
 } = require('../drafting');
 const { resolveStepLaunchSettings } = require('@build-studio/shared/cli');
 const { readItem } = require('../backlog');
+const agentSkills = require('../agent-skills');
 
 /**
  * Drafting runs OUTSIDE the workflow slot — see lib/drafting.js for why that is
@@ -51,9 +52,23 @@ function createDraftingRouter(config, state, tmuxOps) {
     // prompt has someone to answer it.
     const dangerFlag = cli === 'opencode' ? ' --auto' : '';
 
+    // `.claude/skills/` is a Claude Code path. A codex or opencode agent cannot
+    // load it, and a reference it cannot resolve is worse than none: it names a
+    // capability the agent lacks, so the agent substitutes something of its own
+    // chosen without any knowledge of what the project provides. Drafting is the
+    // step where that matters most — the skill IS the method here, not a
+    // convenience. Same resolver the workflow launcher uses.
+    const prompt = draftPrompt({ itemId, title: item && item.title });
+    const inlined = agentSkills.inlineReferencedDefinitions(prompt, {
+      cli, roots: [projectRoot], fs,
+    });
+    if (inlined) {
+      console.log(`[draft] inlined .claude definitions for ${itemId} (${cli}): ${inlined.length} chars`);
+    }
+
     const promptFile = path.join(projectRoot, `prompt-${windowName}.txt`);
     try {
-      fs.writeFileSync(promptFile, draftPrompt({ itemId, title: item && item.title }), 'utf8');
+      fs.writeFileSync(promptFile, prompt + (inlined || ''), 'utf8');
     } catch (e) {
       return res.status(500).json({ error: `could not write the prompt file: ${e.message}` });
     }

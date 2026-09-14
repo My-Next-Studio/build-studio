@@ -80,6 +80,18 @@ test('the opening prompt says a human is present and names the item', () => {
   assert.match(p, /draft_prd/);
 });
 
+// The skill IS the method for this step, so the reference has to be the form the
+// resolver can actually find. `.claude/skills/draft_prd/` is a SKILL; writing it
+// as `/draft_prd` resolves against `.claude/commands/`, finds nothing, and
+// inlines nothing — leaving a non-Claude agent to invent its own approach to the
+// one step where that is least acceptable.
+test('the skill is referenced in the form the resolver resolves', () => {
+  const skills = require('./agent-skills');
+  const refs = skills.referencedNames(draftPrompt({ itemId: 'IT-9' }));
+  assert.deepEqual(refs.skills, ['draft_prd'], 'must be seen as a SKILL');
+  assert.deepEqual(refs.commands, [], 'and not as a command');
+});
+
 test('the prompt survives an item with no title', () => {
   const p = draftPrompt({ itemId: 'IT-9' });
   assert.match(p, /IT-9/);

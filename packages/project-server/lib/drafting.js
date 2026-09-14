@@ -119,7 +119,12 @@ function buildDraftCommand({ cli, modelFlag = '', effortFlag = '', dangerFlag = 
  * cannot tolerate.
  */
 function draftPrompt({ itemId, title }) {
-  return `Use the /draft_prd skill to draft a PRD for backlog item ${itemId}${title ? ` — "${title}"` : ''}.
+  // Backticked-skill form, NOT `/draft_prd`. The skill lives in
+  // `.claude/skills/draft_prd/`, so the slash form resolves against
+  // `.claude/commands/` instead, finds nothing, and inlines nothing — leaving a
+  // non-Claude agent to invent a substitute for the one thing this step must get
+  // right. See agent-skills.js.
+  return `Use the \`draft_prd\` skill to draft a PRD for backlog item ${itemId}${title ? ` — "${title}"` : ''}.
 
 This is an INTERACTIVE session. The owner is at the keyboard and will answer
 questions. Drafting is where they shape the product, so ask rather than assume:

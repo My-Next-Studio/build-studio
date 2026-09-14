@@ -141,3 +141,22 @@ test('the regex is not left stateful across calls', () => {
     assert.deepEqual(translateClaudeOnlyCapabilities(REVIEW_PROMPT, 'codex').translated, ['/code-review'], `call ${i}`);
   }
 });
+
+// A skill directory name may contain an underscore, and a real one does
+// (`draft_prd`, scaffolded into every project). The skill pattern excluded
+// underscores, so such a skill could never be matched however it was written:
+// backticked it failed this pattern, and as `/draft_prd` it matched the COMMAND
+// pattern and resolved against `.claude/commands/`, where a skill does not live.
+// The reference inlined nothing, silently, and a non-Claude agent invented a
+// substitute — the exact failure this module exists to prevent.
+test('a skill name containing an underscore is recognised as a skill', () => {
+  const refs = referencedNames('Use the `draft_prd` skill to draft a PRD.');
+  assert.deepEqual(refs.skills, ['draft_prd']);
+  assert.deepEqual(refs.commands, []);
+});
+
+test('hyphenated skill names still work, and commands still win over skills', () => {
+  const refs = referencedNames('Use the `qa-browser-testing` skill. Also /qa.');
+  assert.deepEqual(refs.skills, ['qa-browser-testing']);
+  assert.deepEqual(refs.commands, ['qa']);
+});

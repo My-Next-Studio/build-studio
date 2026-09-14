@@ -42,6 +42,16 @@ that move underneath you without your having edited anything.
   CLI switch, so a project that moves planning to another model moves drafting
   with it. Nothing is hard-coded to `claude`.
 
+- **A skill whose name contains an underscore is now recognised as a skill.**
+  The skill-reference pattern allowed only letters, digits and hyphens, so
+  `draft_prd` — scaffolded into every project — could never match it. Written
+  backticked it failed the skill pattern; written `/draft_prd` it matched the
+  *command* pattern and resolved against `.claude/commands/`, where a skill does
+  not live. Either way the reference inlined nothing, silently, and a codex or
+  opencode agent invented its own substitute. That is the precise failure the
+  inlining exists to prevent, and it affected any prompt referencing that skill,
+  not only drafting.
+
 ### Known issues
 
 - **Increment 1 of four.** There is no continuity between drafts yet: each

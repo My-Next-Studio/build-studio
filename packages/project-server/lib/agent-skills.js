@@ -63,7 +63,14 @@ const MAX_INLINE_BYTES = 40 * 1024;
 const COMMAND_REF = /(?:^|[\s(*_"'`])\/([a-z][a-z0-9_-]*)\b/g;
 
 /** Skill references, which the prompts always write in backticks. */
-const SKILL_REF = /`([a-z][a-z0-9-]*)`\s+skill/g;
+// Underscores are legal in a skill directory name and are used by real skills
+// (`draft_prd`). Excluding them here meant such a skill could never be matched
+// however it was written: as a backticked skill it failed this pattern, and as
+// `/draft_prd` it matched COMMAND_REF and resolved against `.claude/commands/`,
+// where a skill does not live. The reference then inlined nothing, silently, and
+// a non-Claude agent invented a substitute — the exact failure this module
+// exists to prevent. Found 2026-09-14.
+const SKILL_REF = /`([a-z][a-z0-9_-]*)`\s+skill/g;
 
 function uniq(xs) {
   return [...new Set(xs)];
