@@ -52,8 +52,22 @@ priced null), and an unpriced agent crashing the whole project page on render.
 A `model` column now makes a gapped row self-explanatory. Rows recorded before
 the fix stay unpriced; they are historical records, not recomputed.
 
-The CLI-coverage half of the blind spot is unchanged and remains the reason to
-read cost columns with the gap marker, never on their own.
+**The CLI-coverage blind spot this plan described is closed** (verified
+2026-09-14). All three CLIs now record usage: Claude from its session
+transcripts, codex via `lib/codex-telemetry.js`, and OpenCode via
+`lib/opencode-telemetry.js`. The OpenCode path was checked end-to-end against a
+live run — the event format is unchanged on 1.18.4, tokens and session id parse
+correctly, and `opencode export` still resolves the model actually served behind
+a routing alias.
+
+OpenCode agents are in fact the best-measured of the three: their cost is the
+provider's real charge, carried straight through, so it does not depend on the
+rate table at all. Nothing in this installation currently runs on OpenCode, so
+that path is exercised by tests rather than by use.
+
+What remains is narrower than a CLI gap: an agent that errored before reporting,
+or that ran before the fixes above, still counts as unmeasured. Read cost beside
+the gap marker for that reason — not because a whole CLI is invisible.
 
 **Tier 1 — not started.** No contract eval exists: nothing checks that a role
 file still describes its project.
@@ -177,7 +191,9 @@ problem — it is a configuration problem, and the scorecard says which file to
 open. That comparison is impossible today because nothing aggregates across
 projects.
 
-**Known blind spot, and it is large.** `agent.tokenUsage` is populated only for
+**Known blind spot, and it is large.** *(Closed since — see Status by tier.
+Kept as written because it drove the sequencing this plan argued for.)*
+`agent.tokenUsage` is populated only for
 Claude agents: the usage reader keys on the CLI session id, and Codex and
 OpenCode agents have none. Any cost or turn-count column is therefore blank for
 whole roles depending on which CLI a project assigns them. Fix-round counts,
