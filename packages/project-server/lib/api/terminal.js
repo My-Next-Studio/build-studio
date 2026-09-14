@@ -10,7 +10,7 @@ const { stripAnsi, renderPipePaneLog } = require('../tmux');
  * live-terminal attach in server.js — the client only ever names an
  * agent; the tmux target is always resolved server-side from state.
  */
-function resolveAgentTarget(state, roleOrWindow) {
+function resolveAgentTarget(state, roleOrWindow, draftStatePath = null) {
   const key = String(roleOrWindow || '').toLowerCase();
   const match = (a) => a && (a.window === roleOrWindow || (a.role || '').toLowerCase() === key);
   const wf = state.loadWorkflow();
@@ -34,6 +34,20 @@ function resolveAgentTarget(state, roleOrWindow) {
   if (run) {
     const worker = (run.workers || []).find(w => w.window === roleOrWindow || w.branch === roleOrWindow);
     if (worker && worker.window) return { sessionName: run.sessionName, window: worker.window };
+  }
+  // Drafting sessions live outside the workflow slot in their own tmux session,
+  // so neither lookup above can see them. Resolving them here is what lets the
+  // existing terminal panel attach to a drafting window unchanged — the panel
+  // needs a {sessionName, window}, and where that pair comes from is not its
+  // concern.
+  if (draftStatePath) {
+    try {
+      const { loadDraftState } = require('../drafting');
+      const draft = loadDraftState(draftStatePath);
+      const entry = Object.values((draft && draft.sessions) || {})
+        .find(d => d && d.window === roleOrWindow);
+      if (entry && draft.sessionName) return { sessionName: draft.sessionName, window: entry.window };
+    } catch (_) { /* advisory — a missing drafting state is not an error here */ }
   }
   return null;
 }

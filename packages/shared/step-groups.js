@@ -50,6 +50,12 @@ const DEFAULT_STEP_GROUPS = [
       'ceo_synthesis', 'pm_scoping', 'pm_draft', 'pm_revision', 'pm_fix',
       'pm_synthesis', 'discovery', 'architect_backfill', 'companion_specs',
       'planning', 'fix_plan',
+      // Not a workflow step — drafting is a conversation, not a gated stage —
+      // but it resolves its CLI through the same switch, so it needs a group.
+      // Listed here rather than given its own so a project that moves planning
+      // to a different model moves drafting with it, which is what anyone
+      // regrouping `plan` would expect.
+      'draft_prd',
     ],
   },
   {

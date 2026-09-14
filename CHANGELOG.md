@@ -21,6 +21,59 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-14 — A Draft button opens a drafting session in the dashboard
+
+### Added
+
+- **Backlog items in `Backlog` with no PRD get a Draft button**, beside Review
+  and Execute. It opens an interactive session you talk to, in the dashboard's
+  own terminal panel, instead of a terminal you opened yourself in a session the
+  engine knew nothing about. Drafting is where the product gets shaped, and it
+  was the only step of the cycle living outside the dashboard.
+
+  **It does not consume the workflow slot.** A project allows one active
+  workflow, and the established practice is to draft with review and execution
+  rounds in between — a drafting session holding the slot would forbid exactly
+  the interleaving it exists to support. It runs in its own tmux session
+  (`draft-<project>`), touches no workflow state, and cannot make
+  `POST /workflow/start` answer 409.
+
+  The CLI, model and effort come from the `plan` step group through the shared
+  CLI switch, so a project that moves planning to another model moves drafting
+  with it. Nothing is hard-coded to `claude`.
+
+### Known issues
+
+- **Increment 1 of four.** There is no continuity between drafts yet: each
+  Draft opens a fresh conversation. Session persistence, skill distribution to
+  the other CLIs, and delta re-grounding on resume are the remaining increments.
+
+- **An item that already has a PRD is refused** (409, naming the existing PRD).
+  Re-drafting is legitimate when a story's scope changed, but it silently
+  replaces a reviewed document, and two drafting affordances on one story is an
+  unresolved UI question. Deferred rather than guessed at.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both change:
+
+    cd packages/hub && npx next build
+    cd packages/desktop && node inject-resources.js
+
+Then restart the Electron app and Start each project.
+
+**In each managed project** — nothing to do. Drafting state lives in a new
+`.build-studio/draft-state.json`, created on first use. Projects wanting
+drafting on a different model can regroup `draft_prd` in `step_groups`.
+
+### Notes for forks
+
+`draft_prd` is a pseudo-step: it appears in `step_groups` so it resolves a CLI
+through the same switch as every real step, but it has no workflow stage, no
+gate and no feedback contract. Keep it that way — the plan's central argument is
+that drafting has no intermediate states worth gating, and modelling it as a
+workflow would mean inventing a step sequence for something that has none.
+
 ## 2026-09-14 — The scorecard measures rounds to converge, not the round cap
 
 ### Changed

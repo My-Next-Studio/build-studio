@@ -137,7 +137,25 @@ export function BacklogTab({
   // Starting a run flips the project to busy and moves the item's status, so
   // both the rows and the readiness need re-reading.
   const [starting, setStarting] = useState<string | null>(null)
+  const [drafting, setDrafting] = useState<string | null>(null)
   const [startError, setStartError] = useState<{ id: string; message: string } | null>(null)
+
+  // Drafting runs OUTSIDE the workflow slot, so unlike startRun it neither
+  // checks nor consumes it — the owner drafts with review and execution rounds
+  // in between, and a drafting session that took the slot would forbid exactly
+  // that. A failure surfaces in the same inline row as a failed start.
+  const startDraft = useCallback(async (id: string) => {
+    setDrafting(id)
+    setStartError(null)
+    try {
+      const res = await api.post('/draft/start', { itemId: id })
+      if (res && res.error) { setStartError({ id, message: res.error }); return }
+    } catch (e) {
+      setStartError({ id, message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setDrafting(null)
+    }
+  }, [])
 
   const startRun = useCallback(async (id: string, run: RunType) => {
     setStarting(id)
@@ -603,7 +621,28 @@ export function BacklogTab({
             </div>
             <StatusPill status={item?.status} onChange={onStatusChange ? (next) => onStatusChange(id, next) : undefined} />
           </button>
-          <div style={{ display: 'flex', alignItems: 'center', paddingRight: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 12 }}>
+            {/*
+              Drafting is where the owner shapes the product, and it is the only
+              step of the cycle that lived outside the dashboard — in a terminal
+              they opened themselves, in a session the engine knew nothing about.
+
+              Shown only on an item in `Backlog` with no PRD yet. Re-drafting over
+              a reviewed document is legitimate but replaces it silently, and two
+              drafting affordances on one story is an unresolved UI question —
+              deferred rather than guessed at (owner decision 2026-09-14).
+            */}
+            {item?.status === 'Backlog' && !item?.prd && (
+              <button
+                onClick={(e) => { e.stopPropagation(); void startDraft(id) }}
+                disabled={drafting === id}
+                title={`Draft a PRD for ${id} — opens an interactive session you talk to`}
+                className="wf-btn secondary"
+                style={{ fontSize: 10, padding: '3px 9px', opacity: drafting === id ? 0.6 : 1 }}
+              >
+                {drafting === id ? 'Opening…' : 'Draft'}
+              </button>
+            )}
             <StartRunButton
               state={startStateFor(item, readiness)}
               busy={starting === id}

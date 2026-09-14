@@ -14,6 +14,7 @@ const { createFilesRouter } = require('./api/files');
 const { createQueueRouter } = require('./api/queue');
 const { createStatusRouter } = require('./api/status');
 const { createTerminalRouter } = require('./api/terminal');
+const { createDraftingRouter } = require('./api/drafting');
 const { createWorkflowRouter } = require('./api/workflow');
 const { createRunRouter } = require('./api/run');
 const { createDeploymentRouter } = require('./api/deployment');
@@ -188,6 +189,7 @@ function startServer(projectRoot, opts = {}) {
   const { router: queueRouter, parseExecutionPlan } = createQueueRouter(config, broadcast);
   const statusRouter = createStatusRouter(config, gitOps, state);
   const terminalRouter = createTerminalRouter(config, state, tmuxOps);
+  const draftingRouter = createDraftingRouter(config, state, tmuxOps);
   const workflowRouter = createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast);
   const runRouter = createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecutionPlan);
   // One monitor per project-server, shared by the CI/CD tab and the Monitor
@@ -206,6 +208,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', queueRouter);
   app.use('/api', statusRouter);
   app.use('/api/terminal', terminalRouter);
+  app.use('/api', draftingRouter);
   app.use('/api', workflowRouter);
   app.use('/api', runRouter);
   app.use('/api', deploymentRouter);
@@ -312,7 +315,7 @@ function startServer(projectRoot, opts = {}) {
   // destroy-unattached reaps the view session the moment the socket closes.
   function handleAgentTerminal(ws, agentWindow) {
     const { resolveAgentTarget } = require('./api/terminal');
-    const target = resolveAgentTarget(state, agentWindow);
+    const target = resolveAgentTarget(state, agentWindow, config.statePath);
     if (!target) {
       ws.send(JSON.stringify({ type: 'error', data: `No agent "${agentWindow}" found in the active workflow or run` }));
       ws.close();
