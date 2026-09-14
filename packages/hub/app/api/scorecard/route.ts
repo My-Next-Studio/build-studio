@@ -33,7 +33,7 @@ interface ScorecardRow {
   unmeasuredAgents: number
   findings: { blocking: number; medium: number; low: number }
   verdicts: number
-  maxRound: number
+  roundsToConverge: number | null
   medianDurationMs: number | null
   clis: string[]
   models: string[]

@@ -26,7 +26,7 @@ interface Row {
   unmeasuredAgents: number
   findings: { blocking: number; medium: number; low: number }
   verdicts: number
-  maxRound: number
+  roundsToConverge: number | null
   medianDurationMs: number | null
   clis: string[]
   models: string[]
@@ -88,7 +88,7 @@ function RoleTable({ role, rows }: { role: string; rows: Row[] }) {
               <th style={{ ...TH, textAlign: 'right' }}>runs</th>
               <th style={{ ...TH, textAlign: 'right' }}>agents</th>
               <th style={{ ...TH, textAlign: 'right' }}>err</th>
-              <th style={{ ...TH, textAlign: 'right' }}>max round</th>
+              <th style={{ ...TH, textAlign: 'right' }}>rounds</th>
               <th style={{ ...TH, textAlign: 'right' }}>median</th>
               <th style={{ ...TH, textAlign: 'right' }}>cache read</th>
               <th style={{ ...TH, textAlign: 'right' }}>output</th>
@@ -111,7 +111,26 @@ function RoleTable({ role, rows }: { role: string; rows: Row[] }) {
                   <td style={{ ...TD, textAlign: 'right' }}>{r.runs}</td>
                   <td style={{ ...TD, textAlign: 'right' }}>{r.agents}</td>
                   <td style={{ ...TD, textAlign: 'right', color: r.errored ? 'var(--red)' : 'var(--muted)' }}>{r.errored || '—'}</td>
-                  <td style={{ ...TD, textAlign: 'right', color: r.maxRound > 2 ? 'var(--orange)' : 'var(--text)' }}>{r.maxRound || '—'}</td>
+                  {/*
+                    Rounds to converge: the mean, across runs, of how many rounds
+                    this role needed to settle. This is the quantity the whole
+                    view exists to expose — a role needing 3.8 rounds in one
+                    project and 1.5 in another is a configuration difference, and
+                    the command file is where it lives.
+
+                    Read it beside `runs`. A mean over three runs moves a long
+                    way on one bad run.
+                  */}
+                  <td
+                    style={{ ...TD, textAlign: 'right', color: (r.roundsToConverge ?? 0) >= 3 ? 'var(--orange)' : 'var(--text)' }}
+                    title={r.roundsToConverge == null
+                      ? 'No run recorded a round for this role.'
+                      : `Mean rounds to settle, over ${r.runs} run(s).`
+                        + ' For a step where several roles run together in the same round — a review round —'
+                        + ' every role shares the round number, so the figure separates projects rather than roles.'}
+                  >
+                    {r.roundsToConverge == null ? '—' : r.roundsToConverge.toFixed(1)}
+                  </td>
                   <td style={{ ...TD, textAlign: 'right', color: 'var(--text-dim)' }}>{dur(r.medianDurationMs)}</td>
                   <td style={{ ...TD, textAlign: 'right' }}>{r.tokens.cacheRead ? n(r.tokens.cacheRead) : '—'}</td>
                   <td style={{ ...TD, textAlign: 'right', color: 'var(--text-dim)' }}>{r.tokens.out ? n(r.tokens.out) : '—'}</td>

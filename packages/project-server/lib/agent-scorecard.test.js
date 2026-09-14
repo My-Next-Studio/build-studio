@@ -244,14 +244,42 @@ test('the round comes from the agent, not from the run', () => {
   assert.equal(byRole.QA, 3)
 })
 
-test('maxRound per row reflects the rounds that role actually ran in', () => {
-  const wf = {
-    id: 'wf-r2', round: 5, updatedAt: AFTER,
-    steps: { reviewing: { agents: [
-      { role: 'QA', window: 'qa', status: 'done', startedAt: AFTER },
-      { role: 'QA', window: 'qa-r2', status: 'done', startedAt: AFTER },
-    ] } },
-  }
-  const [row] = aggregate(agentRecords(wf, 'p'))
-  assert.equal(row.maxRound, 2, 'the role ran in rounds 1 and 2, not 5')
+// ── rounds to converge ───────────────────────────────────────────────────────
+
+/** One aggregate-ready record; only the fields this metric reads. */
+const rec = ({ wfId, round }) => ({
+  project: 'p', role: 'R', step: 's', wfId, round, status: 'done',
+})
+
+test('roundsToConverge is the mean rounds PER RUN, not a max across runs', () => {
+  // The distinction the old maxRound column missed. Two runs: one settled in
+  // round 1, one needed three rounds. A max across both reports 3 and says the
+  // role always needs three; the mean per run reports 2, which is the truth.
+  const rows = aggregate([
+    rec({ wfId: 'w1', round: 1 }),
+    rec({ wfId: 'w2', round: 1 }),
+    rec({ wfId: 'w2', round: 3 }),
+  ]);
+  assert.equal(rows[0].runs, 2)
+  assert.equal(rows[0].roundsToConverge, 2)
+})
+
+test('roundsToConverge is null when no round was recorded, never 0', () => {
+  // "Not measured" and "converged in zero rounds" are different claims, and the
+  // second cannot happen. Reporting 0 would make an unmeasured role look like
+  // the best-performing one in the table.
+  const rows = aggregate([rec({ wfId: 'w1', round: 0 })]);
+  assert.equal(rows[0].roundsToConverge, null)
+})
+
+test('a role that ran in several rounds of ONE run counts that run once', () => {
+  // A review round runs every role again, so a role appears once per round. The
+  // run needed 3 rounds; it is still a single run.
+  const rows = aggregate([
+    rec({ wfId: 'w1', round: 1 }),
+    rec({ wfId: 'w1', round: 2 }),
+    rec({ wfId: 'w1', round: 3 }),
+  ]);
+  assert.equal(rows[0].runs, 1)
+  assert.equal(rows[0].roundsToConverge, 3)
 })

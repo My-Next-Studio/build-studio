@@ -21,6 +21,52 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-14 — The scorecard measures rounds to converge, not the round cap
+
+### Changed
+
+- **The scorecard's `max round` column is replaced by `rounds`** — the mean,
+  across runs, of how many rounds a role needed to settle. The old column was
+  `max(round)` taken across *all* runs, which is a property of the run rather
+  than of the role: it saturated at the review-round cap and read 4–6 on nearly
+  every row, so it could not tell two roles apart. It looked like the metric the
+  evaluation plan asked for and was not it.
+
+  On existing data the new column separates immediately where the old one did
+  not: the same role and step reading 3.75 in one project against 1.52 in
+  another, on rows whose old column said 5 and 6. That difference is a
+  configuration difference, and the project's command file is where it lives.
+
+  No new instrumentation — this is a different aggregation of records already
+  written. History therefore gains the metric retroactively.
+
+  Read it beside `runs`: a mean over three runs moves a long way on one bad run.
+  And for a step where several roles run together in one round — a review round —
+  every role necessarily shares the round number, so there the figure separates
+  projects rather than roles. The column's tooltip says both.
+
+- `roundsToConverge` is **null**, not 0, when no run recorded a round.
+  "Not measured" and "converged in zero rounds" are different claims, and
+  reporting 0 would rank an unmeasured role as the best in the table.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both change:
+
+    cd packages/hub && npx next build
+    cd packages/desktop && node inject-resources.js
+
+Then restart the Electron app and Start each project.
+
+**In each managed project** — nothing to do. The metric is computed from
+`scorecard.jsonl` records already on disk, so existing history is included.
+
+### Notes for forks
+
+The `maxRound` field is **gone** from the `/api/scorecard` payload, replaced by
+`roundsToConverge`. A fork rendering the old field will show nothing; switch to
+the new one rather than reinstating the max, which measured the round cap.
+
 ## 2026-09-13 — "Gate could not run: N/A" no longer blocks a healthy run
 
 ### Fixed
