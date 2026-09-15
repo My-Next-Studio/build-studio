@@ -632,17 +632,37 @@ export function BacklogTab({
               drafting affordances on one story is an unresolved UI question —
               deferred rather than guessed at (owner decision 2026-09-14).
             */}
-            {item?.status === 'Backlog' && !item?.prd && (
-              <button
-                onClick={(e) => { e.stopPropagation(); void startDraft(id) }}
-                disabled={drafting === id}
-                title={`Draft a PRD for ${id} — opens an interactive session you talk to`}
-                className="wf-btn secondary"
-                style={{ fontSize: 10, padding: '3px 9px', opacity: drafting === id ? 0.6 : 1 }}
-              >
-                {drafting === id ? 'Opening…' : 'Draft'}
-              </button>
-            )}
+            {/*
+              The slot is ALWAYS rendered, at a fixed width, even on rows that
+              get no button.
+
+              The status pill lives in the last `auto` column of the row button
+              beside this, so anything that changes this container's width moves
+              the pill. StartRunButton never did, because it is on every row;
+              a conditional button is not, so rows with and without one had their
+              pills at different depths. Reserving the slot keeps the pill column
+              straight down the list.
+
+              Fixed width rather than content width for the same reason at a
+              smaller scale: "Opening…" is wider than "Draft", so a
+              content-width button would shift the pill on every click.
+            */}
+            <span style={{ width: 62, display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+              {item?.status === 'Backlog' && !item?.prd && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); void startDraft(id) }}
+                  disabled={drafting === id}
+                  title={`Draft a PRD for ${id} — opens an interactive session you talk to`}
+                  className="wf-btn secondary"
+                  style={{
+                    fontSize: 10, padding: '3px 0', width: '100%', textAlign: 'center',
+                    opacity: drafting === id ? 0.6 : 1,
+                  }}
+                >
+                  {drafting === id ? 'Opening…' : 'Draft'}
+                </button>
+              )}
+            </span>
             <StartRunButton
               state={startStateFor(item, readiness)}
               busy={starting === id}
