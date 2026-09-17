@@ -627,7 +627,7 @@ export function BacklogTab({
               step of the cycle that lived outside the dashboard — in a terminal
               they opened themselves, in a session the engine knew nothing about.
 
-              Shown only on an item in `Backlog` with no PRD yet. Re-drafting over
+              Shown only on a non-Bug item in `Backlog` with no PRD yet. Re-drafting over
               a reviewed document is legitimate but replaces it silently, and two
               drafting affordances on one story is an unresolved UI question —
               deferred rather than guessed at (owner decision 2026-09-14).
@@ -648,7 +648,10 @@ export function BacklogTab({
               content-width button would shift the pill on every click.
             */}
             <span style={{ width: 62, display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
-              {item?.status === 'Backlog' && !item?.prd && (
+              {/* Bugs skip the PRD lifecycle entirely — they go straight to a
+                  bugfix run (see plannedRunFor) — so there is nothing to draft.
+                  Features and Tasks share that lifecycle and keep the button. */}
+              {item?.status === 'Backlog' && item?.type !== 'Bug' && !item?.prd && (
                 <button
                   onClick={(e) => { e.stopPropagation(); void startDraft(id) }}
                   disabled={drafting === id}

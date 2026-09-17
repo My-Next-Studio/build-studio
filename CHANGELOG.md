@@ -21,6 +21,27 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-17 — Bugs no longer offer a Draft button
+
+### Fixed
+
+- **Bug items in `Backlog` showed a Draft button**, though bugs have no PRD:
+  their lifecycle goes straight from `Backlog` to a bugfix run. Clicking it
+  would have opened a session to write a document nothing reads. The button is
+  now shown only on Features and Tasks, which share the PRD lifecycle, and
+  `POST /draft/start` refuses a Bug with a 409 before opening any window.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both change:
+
+    cd packages/hub && npx next build
+    cd packages/desktop && node inject-resources.js
+
+Then restart the Electron app and Start each project.
+
+**In each managed project** — nothing to do.
+
 ## 2026-09-14 — A Draft button opens a drafting session in the dashboard
 
 ### Added

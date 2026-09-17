@@ -31,6 +31,16 @@ function createDraftingRouter(config, state, tmuxOps) {
     let item = null;
     try { item = readItem(projectRoot, config.docsPath, itemId); } catch (_) { /* advisory */ }
 
+    // Bugs never get a PRD: their lifecycle is Backlog → bugfix run, with no
+    // drafting stage. Refused here as well as hidden in the UI, so a direct call
+    // cannot open a session that would write a PRD nothing will ever read.
+    if (item && item.type === 'Bug') {
+      return res.status(409).json({
+        error: `${itemId} is a Bug. Bugs go straight to a bugfix run and carry no PRD, so there is nothing to draft.`,
+        isBug: true,
+      });
+    }
+
     // Increment 1 deliberately refuses an item that already has a PRD. Drafting
     // over a reviewed document is legitimate but silently replaces it, and the
     // UI for two drafting affordances on one story is unresolved (owner
