@@ -316,6 +316,10 @@ const BUILD_STUDIO_GITIGNORE_PATTERNS = [
   '# Build Studio runtime state — ephemeral, machine-local, regenerated as workflows run',
   '.build-studio/workflow-state.json',
   '.build-studio/run-state.json',
+  // Drafting sessions — tmux session and window names, machine-local like the
+  // two above. Added late (2026-09-17) and found already committed in one
+  // project, which is why it is named here rather than left to a glob.
+  '.build-studio/draft-state.json',
   '.build-studio/snapshots/',
   '.build-studio/*.bak*',
   '# Hub-written local overrides (Agents-tab CLI settings) + model catalog cache — machine-local',

@@ -21,6 +21,31 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-17 — Drafting state is no longer committed into managed projects
+
+### Fixed
+
+- **`.build-studio/draft-state.json` was not gitignored.** It is machine-local
+  runtime state — tmux session and window names, timestamps — exactly like
+  `workflow-state.json` and `run-state.json`, which are both ignored already.
+  The drafting feature added the file without the matching ignore rule, so the
+  first session committed it and every later one showed as a diff. Added to the
+  scaffolded pattern list.
+
+### Upgrade steps
+
+**In each managed project** — a project that has already run a drafting session
+has the file tracked. Untrack it once:
+
+    git rm --cached .build-studio/draft-state.json
+    echo '.build-studio/draft-state.json' >> .gitignore
+
+Onboarding writes the pattern for projects that have not run one yet. Prompt
+files were already covered by the existing `prompt-*.txt` rule.
+
+**In Build Studio** — nothing beyond the usual inject; the change is in the
+onboarding scaffold, which runs per project.
+
 ## 2026-09-17 — The Draft button shows the session it starts, and logs it
 
 ### Added

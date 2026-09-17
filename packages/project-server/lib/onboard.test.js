@@ -274,6 +274,7 @@ test('onboardProject: appends build-studio runtime patterns to existing .gitigno
     assert.match(gi, /node_modules/, 'existing entries preserved');
     assert.match(gi, /dist/, 'existing entries preserved');
     assert.match(gi, /\.build-studio\/workflow-state\.json/);
+    assert.match(gi, /\.build-studio\/draft-state\.json/);
     assert.match(gi, /\.build-studio\/snapshots\//);
     assert.match(gi, /docs\/agent-status\.json/);
     assert.match(gi, /^prompt-\*\.txt$/m);
@@ -285,7 +286,7 @@ test('onboardProject: appends build-studio runtime patterns to existing .gitigno
 test('onboardProject: idempotent — re-adding patterns already present does not duplicate', async () => {
   const root = makeRepo({
     ...EXAMPLE_APP_SHAPE,
-    '.gitignore': 'node_modules\n.build-studio/workflow-state.json\n.build-studio/snapshots/\ndocs/agent-status.json\nprompt-*.txt\nstart-*.sh\nstart.sh\nTASK.md\ntmp/\n.build-studio/run-state.json\n.build-studio/*.bak*\n.build-studio/local.json\n.build-studio/*-cache.json\n.claude/scheduled_tasks.lock\n.claude/settings.local.json\ndocs/pr-evidence/**/*.png\ndocs/pr-evidence/**/*.jpg\ndocs/pr-evidence/**/*.jpeg\ndocs/pr-evidence/**/*.gif\ndocs/pr-evidence/**/*.pdf\n',
+    '.gitignore': 'node_modules\n.build-studio/workflow-state.json\n.build-studio/snapshots/\ndocs/agent-status.json\nprompt-*.txt\nstart-*.sh\nstart.sh\nTASK.md\ntmp/\n.build-studio/run-state.json\n.build-studio/draft-state.json\n.build-studio/*.bak*\n.build-studio/local.json\n.build-studio/*-cache.json\n.claude/scheduled_tasks.lock\n.claude/settings.local.json\ndocs/pr-evidence/**/*.png\ndocs/pr-evidence/**/*.jpg\ndocs/pr-evidence/**/*.jpeg\ndocs/pr-evidence/**/*.gif\ndocs/pr-evidence/**/*.pdf\n',
   });
   try {
     const result = await onboardProject(root, { name: 'desk', port: 3099 });
