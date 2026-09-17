@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useProjectApi } from '@/lib/use-project-api'
+import { AgentTerminal } from './agent-terminal'
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable,
   closestCorners, type DragStartEvent, type DragEndEvent,
@@ -138,6 +139,7 @@ export function BacklogTab({
   // both the rows and the readiness need re-reading.
   const [starting, setStarting] = useState<string | null>(null)
   const [drafting, setDrafting] = useState<string | null>(null)
+  const [draftSession, setDraftSession] = useState<{ id: string; window: string } | null>(null)
   const [startError, setStartError] = useState<{ id: string; message: string } | null>(null)
 
   // Drafting runs OUTSIDE the workflow slot, so unlike startRun it neither
@@ -150,6 +152,10 @@ export function BacklogTab({
     try {
       const res = await api.post('/draft/start', { itemId: id })
       if (res && res.error) { setStartError({ id, message: res.error }); return }
+      // Show the session where the click happened. Launching it silently in the
+      // background is what made the button read as broken on first use: the
+      // window opened, the agent ran, and the owner saw nothing.
+      if (res && res.window) setDraftSession({ id, window: res.window })
     } catch (e) {
       setStartError({ id, message: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -673,6 +679,29 @@ export function BacklogTab({
             />
           </div>
         </div>
+        {draftSession && draftSession.id === id && (
+          <div style={{ padding: '0 12px 10px 64px' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
+              fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+            }}>
+              <span>drafting session · {draftSession.window}</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); setDraftSession(null) }}
+                className="wf-btn secondary"
+                style={{ fontSize: 10, padding: '2px 8px' }}
+              >
+                Hide
+              </button>
+              <span style={{ color: 'var(--muted)' }}>
+                hiding this closes the view, not the session
+              </span>
+            </div>
+            <div style={{ height: 360, border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+              <AgentTerminal agentWindow={draftSession.window} />
+            </div>
+          </div>
+        )}
         {startError && startError.id === id && (
           <div style={{
             fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)',

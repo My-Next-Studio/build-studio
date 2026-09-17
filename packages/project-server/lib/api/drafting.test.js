@@ -26,6 +26,7 @@ function fakeTmux() {
     calls,
     ensureWindow: (s, w) => { calls.push(['ensureWindow', s, w]); return `${s}:${w}`; },
     sendKeys: (t, cmd) => { calls.push(['sendKeys', t, cmd]); },
+    pipePaneToLog: (t, f) => { calls.push(['pipePaneToLog', t, f]); },
   };
 }
 
@@ -33,6 +34,7 @@ async function post(root, tmux, body) {
   const config = {
     projectRoot: root, docsPath: 'docs', name: 'proj',
     statePath: path.join(root, '.build-studio'),
+    logsPath: path.join(root, 'tmp', '.logs'),
     cli: { default: 'claude', groups: {} }, step_groups: null,
   };
   const app = express();
@@ -71,6 +73,9 @@ test('a Feature with no PRD opens a drafting window', async () => {
   assert.equal(r.body.window, 'draft-EX-002');
   assert.equal(tmux.calls[0][0], 'ensureWindow');
   assert.equal(tmux.calls[0][1], 'draft-proj', 'never the workflow session');
+  // Without a log the pane is the only record, and it dies with the window.
+  assert.ok(tmux.calls.some(c => c[0] === 'pipePaneToLog'), 'the pane is logged');
+  assert.match(r.body.logFile, /draft-EX-002\.log$/);
 });
 
 // Tasks share the PRD lifecycle with Features, so they keep the button.

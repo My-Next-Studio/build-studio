@@ -83,12 +83,22 @@ function createDraftingRouter(config, state, tmuxOps) {
       return res.status(500).json({ error: `could not write the prompt file: ${e.message}` });
     }
 
+    // Pipe the pane to a log, as workflow agents do. Without it the pane IS the
+    // only record, and a launch that fails before the CLI starts leaves nothing
+    // to read: diagnosing the first real failure meant digging through tmux
+    // scrollback, which survives only as long as the window does.
+    const logFile = config.logsPath ? path.join(config.logsPath, `${windowName}.log`) : null;
+
     let target;
     try {
       target = tmuxOps.ensureWindow(sessionName, windowName, projectRoot);
       tmuxOps.sendKeys(target, `cd '${projectRoot}' && ${buildDraftCommand({
         cli, modelFlag: launch.modelFlag, effortFlag: launch.effortFlag, dangerFlag, promptFile,
       })}`, projectRoot);
+      if (logFile && typeof tmuxOps.pipePaneToLog === 'function') {
+        fs.mkdirSync(config.logsPath, { recursive: true });
+        tmuxOps.pipePaneToLog(target, logFile, projectRoot);
+      }
     } catch (e) {
       return res.status(500).json({ error: `tmux: ${e.message}` });
     }
@@ -98,6 +108,7 @@ function createDraftingRouter(config, state, tmuxOps) {
       startedAt: new Date().toISOString(),
       cli,
       model: launch.model || null,
+      logFile,
       title: (item && item.title) || null,
     };
     recordSession(config.statePath, sessionName, itemId, entry);

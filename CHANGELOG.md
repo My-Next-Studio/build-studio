@@ -21,6 +21,22 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-17 — The Draft button shows the session it starts, and logs it
+
+### Added
+
+- **A drafting session now appears inline under the backlog item**, as a live
+  terminal you can type into, instead of starting silently in the background.
+  Launching it invisibly is what made the button read as broken on first use:
+  the window opened and the agent ran, and nothing on screen said so. Hiding the
+  view closes the view, not the session.
+
+- **The drafting pane is piped to a log**, as workflow agent panes already are,
+  at `tmp/.logs/draft-<item>.log`. Without it the pane was the only record, and
+  a launch that failed before the CLI started left nothing to read — diagnosing
+  the first real failure meant digging through tmux scrollback, which lives only
+  as long as the window.
+
 ## 2026-09-17 — Bugs no longer offer a Draft button
 
 ### Fixed
