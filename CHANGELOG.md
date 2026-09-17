@@ -25,6 +25,15 @@ that move underneath you without your having edited anything.
 
 ### Fixed
 
+- **The Draft button did nothing on a project using a `[1m]` model.** The launch
+  line is typed into the pane's interactive shell, which is zsh, and zsh globs
+  unquoted arguments — so `--model claude-opus-5[1m]` failed with
+  `zsh: no matches found` before the CLI started. The tmux window opened, the
+  session was recorded, and the pane sat at a bare prompt, so the button looked
+  inert. Flag values are now quoted. (The workflow launcher never hit this: it
+  writes a script and runs it under bash, which passes an unmatched glob through
+  literally.)
+
 - **Bug items in `Backlog` showed a Draft button**, though bugs have no PRD:
   their lifecycle goes straight from `Backlog` to a bugfix run. Clicking it
   would have opened a session to write a document nothing reads. The button is

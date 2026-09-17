@@ -100,16 +100,40 @@ function recordSession(statePathDir, sessionName, itemId, entry) {
  * re-grounding delta grows into, and shell-escaping a growing prompt is a
  * recurring source of silent corruption.
  */
+/**
+ * Single-quote the VALUES in a pre-built flag string.
+ *
+ * The launch line is typed into the pane's interactive shell, which is zsh, and
+ * zsh globs unquoted arguments. Model ids carry brackets — `claude-opus-5[1m]`
+ * — so `--model claude-opus-5[1m]` dies with `no matches found` before the CLI
+ * starts: the pane sits at a bare prompt and the button looks like it did
+ * nothing. Observed on the first real use (FAZ-318, 2026-09-17).
+ *
+ * bash happens to pass an unmatched glob through literally, which is why the
+ * workflow launcher — which writes a script and runs it with bash — never hit
+ * this. Quoting fixes it at the source instead of depending on which shell
+ * reads the line.
+ *
+ * Flag NAMES are left alone; anything not starting with `-` is a value.
+ */
+function quoteFlagValues(flags) {
+  return String(flags || '')
+    .split(' ')
+    .map((tok) => (!tok || tok.startsWith('-') ? tok : `'${tok.replace(/'/g, `'\''`)}'`))
+    .join(' ');
+}
+
 function buildDraftCommand({ cli, modelFlag = '', effortFlag = '', dangerFlag = '', promptFile }) {
   if (!cli) throw new Error('buildDraftCommand: cli is required');
   if (!promptFile) throw new Error('buildDraftCommand: promptFile is required');
+  const flags = `${quoteFlagValues(dangerFlag)}${quoteFlagValues(modelFlag)}${quoteFlagValues(effortFlag)}`;
   if (cli === 'opencode') {
     // OpenCode reads the prompt from stdin — verified for multi-KB prompts with
     // no shell-escaping exposure.
-    return `opencode run${modelFlag}${effortFlag}${dangerFlag} < '${promptFile}'`;
+    return `opencode run${flags} < '${promptFile}'`;
   }
   // claude and codex both take it as one argument via command substitution.
-  return `${cli}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${promptFile}')"`;
+  return `${cli}${flags} "$(cat '${promptFile}')"`;
 }
 
 /**
@@ -144,5 +168,6 @@ module.exports = {
   saveDraftState,
   recordSession,
   buildDraftCommand,
+  quoteFlagValues,
   draftPrompt,
 };

@@ -8,7 +8,7 @@ const path = require('path');
 
 const {
   draftSessionName, draftWindowName, loadDraftState, recordSession,
-  buildDraftCommand, draftPrompt, DRAFT_STEP,
+  buildDraftCommand, draftPrompt, DRAFT_STEP, quoteFlagValues,
 } = require('./drafting');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'drafting-test-'));
@@ -53,7 +53,7 @@ test('recording twice for one item updates rather than duplicates', () => {
 // being Claude-only in practice.
 test('the launch line is built per CLI, not hard-coded to claude', () => {
   const claude = buildDraftCommand({ cli: 'claude', modelFlag: ' --model opus', promptFile: '/tmp/p.txt' });
-  assert.match(claude, /^claude --model opus "\$\(cat '\/tmp\/p\.txt'\)"$/);
+  assert.match(claude, /^claude --model 'opus' "\$\(cat '\/tmp\/p\.txt'\)"$/);
 
   const codex = buildDraftCommand({ cli: 'codex', modelFlag: ' --model gpt', promptFile: '/tmp/p.txt' });
   assert.ok(codex.startsWith('codex '), 'codex takes the prompt as an argument too');
@@ -103,4 +103,29 @@ test('drafting resolves its CLI through a real group key', () => {
   const group = DEFAULT_STEP_GROUPS.find(g => g.steps.includes(DRAFT_STEP));
   assert.ok(group, 'draft_prd must belong to a step group or it gets no model');
   assert.equal(group.key, 'plan');
+});
+
+// The pane's shell is zsh, and zsh GLOBS unquoted arguments. Model ids carry
+// brackets, so `--model claude-opus-5[1m]` died with `no matches found` before
+// the CLI started — the pane sat at a bare prompt and the button looked inert.
+// Seen on the first real use (FAZ-318, 2026-09-17). bash passes an unmatched
+// glob through literally, which is why the workflow launcher — which runs a
+// script under bash — never hit it.
+test('a bracketed model id survives the shell', () => {
+  const cmd = buildDraftCommand({
+    cli: 'claude', modelFlag: ' --model claude-opus-5[1m]', effortFlag: ' --effort medium',
+    promptFile: '/tmp/p.txt',
+  });
+  assert.match(cmd, /--model 'claude-opus-5\[1m\]'/);
+  assert.match(cmd, /--effort 'medium'/);
+  // And prove it against the real shell rather than trusting the pattern.
+  const { execFileSync } = require('node:child_process');
+  const echoed = execFileSync('zsh', ['-c', `echo ${cmd.replace(/ "\$\(cat.*$/, '')}`]).toString();
+  assert.match(echoed, /claude-opus-5\[1m\]/);
+});
+
+test('flag names are left alone and values with quotes are escaped', () => {
+  assert.equal(quoteFlagValues(' --model a-b'), " --model 'a-b'");
+  assert.equal(quoteFlagValues(''), '');
+  assert.match(quoteFlagValues(" --model it's"), /--model 'it'/);
 });
