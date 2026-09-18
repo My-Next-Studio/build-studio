@@ -21,6 +21,40 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-18 — Agent terminals no longer leak pty descriptors
+
+### Fixed
+
+- **Opening agent terminals eventually exhausted the machine's pty pool.** macOS
+  caps ptys system-wide (`kern.tty.ptmx_max`, 511 by default). One
+  project-server was found holding **466** of them with zero child processes —
+  every attach it had ever served, still allocated. Past that ceiling nothing on
+  the machine can open a pty: terminals fail with `posix_spawn failed`, and so
+  does anything else that needs one, including `tmux` and the test suite.
+
+  Two defects, both needed to produce it:
+
+  1. **The server released the child, not the descriptor.** On disconnect it
+     called node-pty's `kill()`, which only signals the process; `destroy()` is
+     what closes the socket and frees the fd. Long-standing, but harmless while
+     terminals were opened by hand and one at a time.
+  2. **The drafting terminal reconnected on a timer.** It rendered inside
+     `SortableItemRow`, which is defined inside `BacklogTab` and therefore gets a
+     new identity on every render, so React remounted every row. The backlog
+     polls every 30s, so the terminal reattached twice a minute — roughly 120
+     leaked descriptors an hour. It now renders at the tab's top level, where its
+     position in the tree is stable.
+
+  Defect 1 made the leak permanent; defect 2 made it fast. Either alone is
+  survivable, which is why this surfaced only after drafting shipped.
+
+### Upgrade steps
+
+**In Build Studio** — the usual inject and restart. A server already holding
+leaked descriptors keeps them until it restarts, which the deploy does anyway.
+
+**In each managed project** — nothing to do.
+
 ## 2026-09-17 — Drafting state is no longer committed into managed projects
 
 ### Fixed

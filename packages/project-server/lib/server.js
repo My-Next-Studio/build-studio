@@ -359,7 +359,17 @@ function startServer(projectRoot, opts = {}) {
       } catch (_) {}
     });
     ws.on('close', () => {
-      try { agentPty.kill(); } catch (_) {}
+      // destroy(), not kill(). kill() only signals the child — it leaves the
+      // pty master fd open, so the descriptor survives the process. macOS caps
+      // ptys system-wide (kern.tty.ptmx_max, 511 by default), and one server
+      // was found holding 466 of them with ZERO child processes: every attach
+      // it had ever served, still allocated. Past that ceiling nothing on the
+      // machine can open a pty and the next attach fails with
+      // `posix_spawn failed` (2026-09-18). destroy() closes the socket, disposes
+      // the write stream, and then SIGHUPs.
+      try { agentPty.destroy(); } catch (_) {
+        try { agentPty.kill(); } catch (_) {}
+      }
       // destroy-unattached reaps the grouped view session; belt and braces:
       try { require('child_process').execFile('tmux', ['kill-session', '-t', viewSession], () => {}); } catch (_) {}
     });

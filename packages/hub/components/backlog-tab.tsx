@@ -455,6 +455,43 @@ export function BacklogTab({
         </div>
       )}
 
+      {/*
+        The drafting terminal is rendered HERE, at the tab's top level, and not
+        inside the row that started it.
+
+        SortableItemRow is defined inside this component, so it gets a fresh
+        identity on every render and React remounts every row. That is harmless
+        for markup and fatal for a terminal: this list polls every 30s, so a
+        terminal living inside a row reconnected twice a minute, and each attach
+        allocated a pty the server never released. One project-server was found
+        holding 466 of them against a system limit of 511, after which nothing on
+        the machine could open a pty (2026-09-18). A stable position in the tree
+        means one connection per session.
+      */}
+      {draftSession && (
+        <div style={{ marginTop: 4 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
+            fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+          }}>
+            <span>drafting · {draftSession.id}</span>
+            <button
+              onClick={() => setDraftSession(null)}
+              className="wf-btn secondary"
+              style={{ fontSize: 10, padding: '2px 8px' }}
+            >
+              Hide
+            </button>
+            <span style={{ color: 'var(--muted)' }}>
+              hiding this closes the view, not the session
+            </span>
+          </div>
+          <div style={{ height: 360, border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+            <AgentTerminal agentWindow={draftSession.window} />
+          </div>
+        </div>
+      )}
+
       {/* Release groups — wrapped in DndContext for drag-and-drop */}
       <DndContext
         sensors={sensors}
@@ -679,29 +716,6 @@ export function BacklogTab({
             />
           </div>
         </div>
-        {draftSession && draftSession.id === id && (
-          <div style={{ padding: '0 12px 10px 64px' }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
-              fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
-            }}>
-              <span>drafting session · {draftSession.window}</span>
-              <button
-                onClick={(e) => { e.stopPropagation(); setDraftSession(null) }}
-                className="wf-btn secondary"
-                style={{ fontSize: 10, padding: '2px 8px' }}
-              >
-                Hide
-              </button>
-              <span style={{ color: 'var(--muted)' }}>
-                hiding this closes the view, not the session
-              </span>
-            </div>
-            <div style={{ height: 360, border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-              <AgentTerminal agentWindow={draftSession.window} />
-            </div>
-          </div>
-        )}
         {startError && startError.id === id && (
           <div style={{
             fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)',
