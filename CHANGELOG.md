@@ -53,17 +53,25 @@ that move underneath you without your having edited anything.
   defect 2 made attaches happen 120 times an hour. Either alone is survivable,
   which is why this surfaced only after drafting shipped.
 
-  **The leak is reduced, not closed.** With the reconnect loop gone the cost is
-  one descriptor per terminal you open, instead of one every 30 seconds — enough
-  to turn hours into months, not to make it permanent. Closing it needs either
-  node-pty 1.2 (beta only today) or reusing one pty per window across attaches.
+  **The leak is now bounded.** Agent terminals share one pty per WINDOW, kept
+  alive between viewers, so opening the same terminal ten times costs one
+  descriptor rather than ten. The pty is released when it exits — when its window
+  or session goes away — so a finished run reaps its own. What remains is one
+  descriptor per window ever viewed, against a ceiling of 511, instead of one per
+  attach. Measured: eight attach/detach cycles cost one pty where they used to
+  cost eight.
+
+  Viewers of the same window now share a view, including input. Joining replays
+  the recent buffer, so a late viewer sees the pane instead of a blank screen.
 
 ### Known issues
 
-- A server still accumulates one pty descriptor per agent-terminal attach, at a
-  system-wide ceiling of 511 (`sysctl kern.tty.ptmx_max`). Restarting the
-  project-server releases them. To check one:
-  `lsof -p <pid> | grep -c ptmx`.
+- node-pty 1.1.0 leaks one descriptor per pty regardless of how it is closed, so
+  a server still accumulates one per agent window ever viewed, against a ceiling
+  of 511 (`sysctl kern.tty.ptmx_max`). Restarting the project-server releases
+  them. To check one: `lsof -p <pid> | grep -c ptmx`. Closing it entirely needs
+  node-pty 1.2, which is beta-only today — deliberately not taken, since it is a
+  native module underneath every terminal in the app.
 
 ### Upgrade steps
 

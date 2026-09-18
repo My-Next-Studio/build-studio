@@ -313,20 +313,48 @@ function startServer(projectRoot, opts = {}) {
   // workflow session's windows but keeps its own current-window, so viewing
   // one agent never flips what another viewer (or the run itself) sees.
   // destroy-unattached reaps the view session the moment the socket closes.
-  function handleAgentTerminal(ws, agentWindow) {
-    const { resolveAgentTarget } = require('./api/terminal');
-    const target = resolveAgentTarget(state, agentWindow, config.statePath);
-    if (!target) {
-      ws.send(JSON.stringify({ type: 'error', data: `No agent "${agentWindow}" found in the active workflow or run` }));
-      ws.close();
-      return;
+  // ── agent terminals: one pty per WINDOW, shared and reused ────────────────
+  //
+  // Every attach used to spawn its own pty, and node-pty 1.1.0 leaks one
+  // descriptor per pty that no call releases — kill(), destroy(), both, and
+  // closing the streams by hand each free one of the two handles it opens.
+  // macOS caps ptys system-wide at 511 (kern.tty.ptmx_max), so the cost of
+  // attaching was permanent and the ceiling was reachable: one server was found
+  // holding 466 with zero child processes (2026-09-18).
+  //
+  // So the pty is keyed by window and OUTLIVES the viewer. Opening the same
+  // terminal ten times costs one descriptor, not ten, and the total is bounded
+  // by how many agent windows have ever been viewed rather than by how often
+  // anyone looked. It is released when the pty exits — which happens when the
+  // window or its session goes away — so a finished run reaps its own.
+  //
+  // Mirrors the persistent shell terminal below: a client Set, a rolling buffer,
+  // and a replay on join so a late viewer sees the pane rather than a blank
+  // screen until the next byte of output.
+  const agentPtys = new Map();
+  const AGENT_BUFFER_LIMIT = 50000;
+
+  function reapAgentPty(agentWindow) {
+    const entry = agentPtys.get(agentWindow);
+    if (!entry) return;
+    agentPtys.delete(agentWindow);
+    // destroy() over kill(): it is the more correct call even though neither
+    // frees the second descriptor. See the note above.
+    try { entry.pty.destroy(); } catch (_) {
+      try { entry.pty.kill(); } catch (_) {}
     }
+    try {
+      require('child_process').execFile('tmux', ['kill-session', '-t', entry.viewSession], () => {});
+    } catch (_) {}
+  }
+
+  function openAgentPty(agentWindow, target) {
     const viewSession = `view-${String(agentWindow).replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now().toString(36)}`;
     const env = { ...process.env };
     delete env.ANTHROPIC_API_KEY;
-    let agentPty;
+    let ptyProc;
     try {
-      agentPty = pty.spawn('tmux', [
+      ptyProc = pty.spawn('tmux', [
         'new-session', '-t', target.sessionName, '-s', viewSession, ';',
         'set-option', 'destroy-unattached', 'on', ';',
         // Mouse mode on the VIEW session only (grouped sessions keep their own
@@ -338,41 +366,76 @@ function startServer(projectRoot, opts = {}) {
         'select-window', '-t', `${viewSession}:=${target.window}`,
       ], { name: 'xterm-256color', cols: 220, rows: 50, cwd: config.projectRoot, env });
     } catch (e) {
-      ws.send(JSON.stringify({ type: 'error', data: `Could not attach to agent terminal: ${e.message}` }));
+      return { error: e.message };
+    }
+    const entry = {
+      pty: ptyProc, viewSession, clients: new Set(), buffer: [],
+      sessionName: target.sessionName, window: target.window,
+    };
+    ptyProc.onData((data) => {
+      entry.buffer.push(data);
+      let total = entry.buffer.reduce((n, c) => n + c.length, 0);
+      while (total > AGENT_BUFFER_LIMIT && entry.buffer.length > 1) {
+        total -= entry.buffer.shift().length;
+      }
+      for (const client of entry.clients) {
+        if (client.readyState === client.OPEN) client.send(JSON.stringify({ type: 'output', data }));
+      }
+    });
+    ptyProc.onExit(() => {
+      for (const client of entry.clients) {
+        if (client.readyState === client.OPEN) {
+          client.send(JSON.stringify({ type: 'exit' }));
+          client.close();
+        }
+      }
+      reapAgentPty(agentWindow);
+    });
+    agentPtys.set(agentWindow, entry);
+    return entry;
+  }
+
+  function handleAgentTerminal(ws, agentWindow) {
+    const { resolveAgentTarget } = require('./api/terminal');
+    const target = resolveAgentTarget(state, agentWindow, config.statePath);
+    if (!target) {
+      ws.send(JSON.stringify({ type: 'error', data: `No agent "${agentWindow}" found in the active workflow or run` }));
       ws.close();
       return;
     }
-    agentPty.onData((data) => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'output', data }));
-    });
-    agentPty.onExit(() => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'exit' }));
+
+    let entry = agentPtys.get(agentWindow);
+    // A window name can be reused against a different session — ensureWindow
+    // kills and recreates, and drafting reuses one name per item. Reattaching a
+    // pty pinned to the old target would show a pane that no longer exists.
+    if (entry && (entry.sessionName !== target.sessionName || entry.window !== target.window)) {
+      reapAgentPty(agentWindow);
+      entry = null;
+    }
+    if (!entry) {
+      const opened = openAgentPty(agentWindow, target);
+      if (opened.error) {
+        ws.send(JSON.stringify({ type: 'error', data: `Could not attach to agent terminal: ${opened.error}` }));
         ws.close();
+        return;
       }
-    });
+      entry = opened;
+    }
+
+    entry.clients.add(ws);
+    if (entry.buffer.length > 0) {
+      ws.send(JSON.stringify({ type: 'replay', data: entry.buffer.join('') }));
+    }
+
     ws.on('message', (raw) => {
       try {
         const { type, data, cols, rows } = JSON.parse(raw);
-        if (type === 'input') agentPty.write(data);
-        if (type === 'resize') agentPty.resize(Math.max(cols, 2), Math.max(rows, 2));
+        if (type === 'input') entry.pty.write(data);
+        if (type === 'resize') entry.pty.resize(Math.max(cols, 2), Math.max(rows, 2));
       } catch (_) {}
     });
-    ws.on('close', () => {
-      // destroy(), not kill(). kill() only signals the child — it leaves the
-      // pty master fd open, so the descriptor survives the process. macOS caps
-      // ptys system-wide (kern.tty.ptmx_max, 511 by default), and one server
-      // was found holding 466 of them with ZERO child processes: every attach
-      // it had ever served, still allocated. Past that ceiling nothing on the
-      // machine can open a pty and the next attach fails with
-      // `posix_spawn failed` (2026-09-18). destroy() closes the socket, disposes
-      // the write stream, and then SIGHUPs.
-      try { agentPty.destroy(); } catch (_) {
-        try { agentPty.kill(); } catch (_) {}
-      }
-      // destroy-unattached reaps the grouped view session; belt and braces:
-      try { require('child_process').execFile('tmux', ['kill-session', '-t', viewSession], () => {}); } catch (_) {}
-    });
+    // The viewer leaves; the pty stays. That is the point — see the note above.
+    ws.on('close', () => { entry.clients.delete(ws); });
   }
 
   wss.on('connection', (ws, req) => {
