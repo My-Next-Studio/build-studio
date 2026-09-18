@@ -22,11 +22,17 @@ test('the drafting session is never the workflow session', () => {
   assert.notEqual(draftSessionName('my-project'), 'my-project');
 });
 
-test('names are reduced to what tmux can address', () => {
+test('session names are reduced to what tmux can address', () => {
   assert.equal(draftSessionName('My Project!'), 'draft-My-Project');
-  assert.equal(draftWindowName('FAZ-294'), 'draft-FAZ-294');
-  assert.equal(draftWindowName('a/b c'), 'draft-a-b-c');
-  assert.ok(draftWindowName('x'.repeat(60)).length <= 24, 'window names stay addressable');
+});
+
+// One window per PROJECT, not per item. The owner's boundary is per project, cut
+// by hand when the subject changes, and the original request was continuity
+// across drafts — a window per item would give every draft a fresh conversation
+// that has to be told the same things again.
+test('the drafting window is per project, so drafts share one conversation', () => {
+  assert.equal(draftWindowName(), 'draft');
+  assert.equal(draftWindowName('FAZ-294'), 'draft', 'the item does not name the window');
 });
 
 test('an empty or missing state file reads as empty, never throws', () => {

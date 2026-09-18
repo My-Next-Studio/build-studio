@@ -47,9 +47,17 @@ function draftSessionName(projectName) {
   return `draft-${sanitize(projectName) || 'project'}`;
 }
 
-/** One window per item, so two drafts in flight do not share a pane. */
-function draftWindowName(itemId) {
-  return `draft-${sanitize(itemId) || 'item'}`.slice(0, 24);
+/**
+ * ONE window per project, not per item.
+ *
+ * The owner's boundary is per project, cut by hand when the subject changes
+ * (decision 2026-09-14) — and the original request was continuity across drafts,
+ * "since related stories touch related areas". A window per item would give the
+ * opposite: every draft a fresh conversation that has to be told the same things
+ * again.
+ */
+function draftWindowName() {
+  return 'draft';
 }
 
 function statePath(statePathDir) {
@@ -123,10 +131,10 @@ function quoteFlagValues(flags) {
     .join(' ');
 }
 
-function buildDraftCommand({ cli, modelFlag = '', effortFlag = '', dangerFlag = '', promptFile }) {
+function buildDraftCommand({ cli, modelFlag = '', effortFlag = '', dangerFlag = '', sessionFlag = '', promptFile }) {
   if (!cli) throw new Error('buildDraftCommand: cli is required');
   if (!promptFile) throw new Error('buildDraftCommand: promptFile is required');
-  const flags = `${quoteFlagValues(dangerFlag)}${quoteFlagValues(modelFlag)}${quoteFlagValues(effortFlag)}`;
+  const flags = `${quoteFlagValues(sessionFlag)}${quoteFlagValues(dangerFlag)}${quoteFlagValues(modelFlag)}${quoteFlagValues(effortFlag)}`;
   if (cli === 'opencode') {
     // OpenCode reads the prompt from stdin — verified for multi-KB prompts with
     // no shell-escaping exposure.
@@ -159,6 +167,19 @@ Start by reading the backlog item and whatever it references, then open the
 conversation with what you need to know.`;
 }
 
+/**
+ * What to say when an EXISTING conversation is pointed at a new item.
+ *
+ * Deliberately short. The session already knows how this project drafts and what
+ * was discussed; repeating the full briefing would spend context re-teaching it
+ * what it just did, which is the cost continuity exists to avoid.
+ */
+function continuePrompt({ itemId, title }) {
+  return `Next: draft a PRD for backlog item ${itemId}${title ? ` — "${title}"` : ''}.`
+    + ` Same skill and the same conventions as the previous draft in this session.`
+    + ` Read the item first, then ask what you need to know.`;
+}
+
 module.exports = {
   DRAFT_STEP,
   STATE_FILE,
@@ -170,4 +191,5 @@ module.exports = {
   buildDraftCommand,
   quoteFlagValues,
   draftPrompt,
+  continuePrompt,
 };

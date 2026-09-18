@@ -139,7 +139,9 @@ export function BacklogTab({
   // both the rows and the readiness need re-reading.
   const [starting, setStarting] = useState<string | null>(null)
   const [drafting, setDrafting] = useState<string | null>(null)
-  const [draftSession, setDraftSession] = useState<{ id: string; window: string } | null>(null)
+  const [draftSession, setDraftSession] = useState<
+    { id: string; window: string; ageMs?: number | null; resumable?: boolean; items?: string[] } | null
+  >(null)
 
   // Restore the view of a drafting session that is still running.
   //
@@ -156,13 +158,19 @@ export function BacklogTab({
     void (async () => {
       try {
         const res = await api.get('/draft')
-        if (cancelled || !res || !res.sessions) return
-        const entries = Object.entries(res.sessions as Record<string, { window: string; startedAt?: string }>)
-        if (entries.length === 0) return
-        // Most recent wins when several are alive — the one just left.
-        entries.sort((a, b) => String(b[1].startedAt || '').localeCompare(String(a[1].startedAt || '')))
-        const [id, entry] = entries[0]
-        setDraftSession({ id, window: entry.window })
+        if (cancelled || !res || !res.session) return
+        const sess = res.session as {
+          window: string; live?: boolean; resumable?: boolean
+          lastItemId?: string; ageMs?: number | null; items?: string[]
+        }
+        // Only restore a VIEW of something still there. A resumable-but-dead
+        // session is reachable by clicking Draft again; showing a terminal for a
+        // window that no longer exists would just fail to attach.
+        if (!sess.live) return
+        setDraftSession({
+          id: sess.lastItemId || '', window: sess.window,
+          ageMs: sess.ageMs, resumable: sess.resumable, items: sess.items,
+        })
       } catch { /* advisory — a missing drafting state is not an error */ }
     })()
     return () => { cancelled = true }
@@ -173,16 +181,18 @@ export function BacklogTab({
   // checks nor consumes it — the owner drafts with review and execution rounds
   // in between, and a drafting session that took the slot would forbid exactly
   // that. A failure surfaces in the same inline row as a failed start.
-  const startDraft = useCallback(async (id: string) => {
+  const startDraft = useCallback(async (id: string, fresh = false) => {
     setDrafting(id)
     setStartError(null)
     try {
-      const res = await api.post('/draft/start', { itemId: id })
+      const res = await api.post('/draft/start', { itemId: id, ...(fresh ? { fresh: true } : {}) })
       if (res && res.error) { setStartError({ id, message: res.error }); return }
       // Show the session where the click happened. Launching it silently in the
       // background is what made the button read as broken on first use: the
       // window opened, the agent ran, and the owner saw nothing.
-      if (res && res.window) setDraftSession({ id, window: res.window })
+      if (res && res.window) {
+        setDraftSession({ id, window: res.window, resumable: res.resumable, items: res.items })
+      }
     } catch (e) {
       setStartError({ id, message: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -501,13 +511,40 @@ export function BacklogTab({
             display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
             fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
           }}>
-            <span>drafting · {draftSession.id}</span>
+            <span>
+              drafting · {draftSession.id}
+              {draftSession.items && draftSession.items.length > 1 && (
+                <span style={{ color: 'var(--muted)' }}> · {draftSession.items.length} items this session</span>
+              )}
+              {typeof draftSession.ageMs === 'number' && (
+                <span style={{ color: 'var(--muted)' }}> · {fmtAge(draftSession.ageMs)} old</span>
+              )}
+            </span>
             <button
               onClick={() => setDraftSession(null)}
               className="wf-btn secondary"
               style={{ fontSize: 10, padding: '2px 8px' }}
             >
               Hide
+            </button>
+            {/*
+              One session per project, cut by hand when the subject changes —
+              that is the owner's boundary, and nothing expires it automatically.
+              This is the scissors. Destructive on purpose, so it asks first.
+            */}
+            <button
+              onClick={() => {
+                const ok = window.confirm(
+                  'Start a fresh drafting session?\n\n'
+                  + 'The current conversation is abandoned — it cannot be resumed afterwards.',
+                )
+                if (ok && draftSession.id) void startDraft(draftSession.id, true)
+              }}
+              className="wf-btn secondary"
+              style={{ fontSize: 10, padding: '2px 8px' }}
+              title="Abandon this conversation and begin a new one"
+            >
+              Start fresh
             </button>
             <span style={{ color: 'var(--muted)' }}>
               hiding this closes the view, not the session
@@ -1014,6 +1051,14 @@ function startStateFor(item: Item | undefined, r: Readiness | null): StartState 
 }
 
 const RUN_LABEL: Record<RunType, string> = { bugfix: 'Fix', review: 'Review', execution: 'Execute' }
+
+/** Session age, for a header that has one line to say how stale this is. */
+function fmtAge(ms: number): string {
+  const m = Math.round(ms / 60000)
+  if (m < 60) return `${m}m`
+  const h = Math.round(m / 60)
+  return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`
+}
 
 const STATUS_OPTIONS = ['Backlog', 'Drafted', 'Reviewed', 'Implemented', 'Done', 'Blocked']
 const STATUS_COLORS: Record<string, { color: string; bg: string }> = {

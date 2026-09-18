@@ -21,6 +21,50 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-18 — Drafting keeps one conversation per project
+
+### Added
+
+- **Drafting sessions persist and resume.** A project has ONE drafting session,
+  and a second Draft click continues it instead of replacing it. Three cases,
+  decided from tmux rather than from stored belief: a live window is pointed at
+  the new item and attached to; a window that has gone is relaunched with the
+  CLI's resume flag so the conversation carries on where it stopped; anything
+  else starts fresh.
+
+  This was the point of the feature as originally asked for — context kept
+  across drafts, since related stories touch related areas — and it removes the
+  destructive click: Draft on an item with a running session no longer kills it.
+
+- **The panel shows the session's age and how many items it has covered**, and
+  carries a **Start fresh** button. The boundary is per project, cut by hand
+  when the subject changes; nothing expires a session on its own, so that button
+  is the scissors. It confirms first, because the old conversation cannot be
+  resumed afterwards.
+
+### Changed
+
+- **The drafting window is named per project, not per item.** A window per item
+  gave every draft a fresh conversation that had to be told the same things
+  again — the opposite of what drafting is for.
+
+### Known issues
+
+- **Only claude can be resumed.** codex has no session-pinning equivalent, and
+  OpenCode can continue a session but cannot be told which id to use when
+  starting one. Both therefore start fresh every time; `sessionPinFlag` and
+  `sessionResumeFlag` in `shared/cli.js` are empty for them rather than
+  pretending. Resumable is reported per session so the UI can say so.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both change: `npx next build`, then
+the full inject, then restart.
+
+**In each managed project** — nothing to do. An existing `draft-state.json` from
+before this change is replaced on the next Draft click; it is gitignored and
+regenerated, so nothing needs cleaning up by hand.
+
 ## 2026-09-18 — A running drafting session can be found again
 
 ### Added

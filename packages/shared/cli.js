@@ -448,6 +448,34 @@ function resolveStepLaunchSettings(stepKey, wf, cliConfig, groups) {
 }
 
 /**
+ * Can this CLI be told its session id at launch, so the conversation can be
+ * picked up later?
+ *
+ * Only claude can. codex has no equivalent. OpenCode can continue a session but
+ * cannot be told which id to use when starting one — the id has to be read back
+ * afterwards — so it cannot be pinned, and anything relying on a pin must treat
+ * OpenCode as unresumable rather than pretend.
+ *
+ * Kept here beside buildCliFlags because it is the same kind of knowledge —
+ * per-CLI spelling for one idea — and splitting them is how the two drift.
+ */
+function canPinSession(cli) {
+  return cli === 'claude';
+}
+
+/** Flag that pins a NEW session to a known id. Empty when the CLI cannot. */
+function sessionPinFlag(cli, sessionId) {
+  if (!sessionId || !canPinSession(cli)) return '';
+  return ` --session-id ${sessionId}`;
+}
+
+/** Flag that resumes an EXISTING session. Empty when the CLI cannot. */
+function sessionResumeFlag(cli, sessionId) {
+  if (!sessionId || !canPinSession(cli)) return '';
+  return ` --resume ${sessionId}`;
+}
+
+/**
  * The one place that turns a resolved {cli, model, effort} into command-line
  * fragments. The workflow launcher calls this directly after layering its
  * per-step overrides on top, so both paths emit identical flags for identical
@@ -549,6 +577,9 @@ module.exports = {
   isModelCompatibleWithCli,
   resolveEffectiveCliConfig,
   buildCliFlags,
+  canPinSession,
+  sessionPinFlag,
+  sessionResumeFlag,
   resolveStepModelForCli,
   resolveStepEffortForCli,
   providersFromCliConfig,

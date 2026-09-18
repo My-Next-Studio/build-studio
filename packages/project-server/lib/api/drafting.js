@@ -3,11 +3,14 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const {
   DRAFT_STEP, draftSessionName, draftWindowName,
-  loadDraftState, saveDraftState, recordSession, buildDraftCommand, draftPrompt,
+  loadDraftState, saveDraftState, buildDraftCommand, draftPrompt, continuePrompt,
 } = require('../drafting');
-const { resolveStepLaunchSettings } = require('@build-studio/shared/cli');
+const {
+  resolveStepLaunchSettings, canPinSession, sessionPinFlag, sessionResumeFlag,
+} = require('@build-studio/shared/cli');
 const { readItem } = require('../backlog');
 const agentSkills = require('../agent-skills');
 
@@ -30,49 +33,68 @@ function createDraftingRouter(config, state, tmuxOps) {
   // anything this file believed about it could only ever be out of date. Dead
   // entries are pruned as they are found, which is also what keeps the file from
   // growing a row per draft ever started.
+  /**
+   * The project's drafting session, and whether it can still be reached.
+   *
+   * Liveness is read from tmux rather than tracked: the window is the truth, and
+   * anything the state file believed about it could only be out of date. A
+   * session whose window is gone is NOT discarded — with a pinned id the
+   * conversation can still be resumed, which is the whole point of increment 2.
+   */
   router.get('/draft', (req, res) => {
     const state = loadDraftState(config.statePath);
-    const sessions = state.sessions || {};
-    const live = {};
-    let pruned = false;
-    for (const [itemId, entry] of Object.entries(sessions)) {
-      const target = `${state.sessionName}:${entry.window}`;
-      const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
-      if (!pid) { pruned = true; continue; }
-      live[itemId] = {
-        ...entry,
-        live: true,
-        // A pane with no child process is a shell sitting at a prompt — the
-        // session outlived its agent. Worth showing differently from one still
-        // in conversation, so the hub can say which.
-        agentRunning: tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false,
-      };
-    }
-    if (pruned) saveDraftState(config.statePath, { ...state, sessions: live });
-    res.json({ ...state, sessions: live });
+    const session = state.session || null;
+    if (!session) return res.json({ sessionName: state.sessionName || null, session: null });
+
+    const target = `${state.sessionName}:${session.window}`;
+    const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
+    const live = !!pid;
+    res.json({
+      sessionName: state.sessionName,
+      session: {
+        ...session,
+        live,
+        // A pane with no child is a shell at a prompt: the window outlived its
+        // agent. Different from a conversation still in progress.
+        agentRunning: live && tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false,
+        // Resumable without the window, provided the CLI could be pinned.
+        resumable: !!session.cliSessionId && canPinSession(session.cli),
+        ageMs: session.startedAt ? Date.now() - Date.parse(session.startedAt) : null,
+        idleMs: session.lastUsedAt ? Date.now() - Date.parse(session.lastUsedAt) : null,
+      },
+    });
   });
 
+  /**
+   * Start, continue, or resume the project's drafting session.
+   *
+   * There is ONE session per project — the owner's boundary, cut by hand when
+   * the subject changes — so a second Draft click is normally a continuation,
+   * not a new conversation. Three cases:
+   *
+   *   live      the window is up and an agent is in it → point it at the new
+   *             item and attach. Nothing is killed. This is the case that used
+   *             to destroy a running session, because window creation
+   *             deduplicates by name.
+   *   resumable the window is gone but the session id is known → relaunch with
+   *             the CLI's resume flag, so the conversation continues where it
+   *             stopped rather than starting over.
+   *   fresh     no session, or the caller asked for one.
+   */
   router.post('/draft/start', (req, res) => {
     const itemId = String((req.body && req.body.itemId) || '').trim();
+    const wantFresh = (req.body && req.body.fresh) === true;
     if (!itemId) return res.status(400).json({ error: 'itemId is required' });
 
     let item = null;
     try { item = readItem(projectRoot, config.docsPath, itemId); } catch (_) { /* advisory */ }
 
-    // Bugs never get a PRD: their lifecycle is Backlog → bugfix run, with no
-    // drafting stage. Refused here as well as hidden in the UI, so a direct call
-    // cannot open a session that would write a PRD nothing will ever read.
     if (item && item.type === 'Bug') {
       return res.status(409).json({
         error: `${itemId} is a Bug. Bugs go straight to a bugfix run and carry no PRD, so there is nothing to draft.`,
         isBug: true,
       });
     }
-
-    // Increment 1 deliberately refuses an item that already has a PRD. Drafting
-    // over a reviewed document is legitimate but silently replaces it, and the
-    // UI for two drafting affordances on one story is unresolved (owner
-    // decision 2026-09-14: skip it for now).
     if (item && item.prd) {
       return res.status(409).json({
         error: `${itemId} already has a PRD (${item.prd}). Re-drafting over a reviewed document is not supported yet.`,
@@ -83,23 +105,39 @@ function createDraftingRouter(config, state, tmuxOps) {
     const launch = resolveStepLaunchSettings(DRAFT_STEP, null, config.cli, config.step_groups);
     const cli = launch.cli;
     const sessionName = draftSessionName(projectName);
-    const windowName = draftWindowName(itemId);
-
-    // Permission handling mirrors the workflow launcher per CLI. A drafting
-    // agent is ATTENDED, so it does not need codex's bypass — an approval
-    // prompt has someone to answer it.
+    const windowName = draftWindowName();
+    const target = `${sessionName}:${windowName}`;
     const dangerFlag = cli === 'opencode' ? ' --auto' : '';
 
-    // `.claude/skills/` is a Claude Code path. A codex or opencode agent cannot
-    // load it, and a reference it cannot resolve is worse than none: it names a
-    // capability the agent lacks, so the agent substitutes something of its own
-    // chosen without any knowledge of what the project provides. Drafting is the
-    // step where that matters most — the skill IS the method here, not a
-    // convenience. Same resolver the workflow launcher uses.
-    const prompt = draftPrompt({ itemId, title: item && item.title });
-    const inlined = agentSkills.inlineReferencedDefinitions(prompt, {
-      cli, roots: [projectRoot], fs,
-    });
+    const state = loadDraftState(config.statePath);
+    const prior = wantFresh ? null : (state.session || null);
+    const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
+    const windowLive = !!pid;
+    const agentRunning = windowLive && tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false;
+
+    // ── live: talk to the conversation already running ───────────────────────
+    if (prior && windowLive && agentRunning && !wantFresh) {
+      try {
+        tmuxOps.sendKeys(target, continuePrompt({ itemId, title: item && item.title }), projectRoot);
+      } catch (e) {
+        return res.status(500).json({ error: `could not reach the running session: ${e.message}` });
+      }
+      const session = { ...prior, lastItemId: itemId, lastUsedAt: new Date().toISOString(),
+        items: [...new Set([...(prior.items || []), itemId])] };
+      saveDraftState(config.statePath, { ...state, sessionName, session });
+      return res.json({ ok: true, sessionName, window: windowName, mode: 'continued', ...session });
+    }
+
+    // ── otherwise launch: resuming the old conversation, or starting one ──────
+    const resuming = !!(prior && prior.cliSessionId && canPinSession(cli) && !wantFresh);
+    const cliSessionId = resuming
+      ? prior.cliSessionId
+      : (canPinSession(cli) ? crypto.randomUUID() : null);
+
+    const prompt = resuming
+      ? continuePrompt({ itemId, title: item && item.title })
+      : draftPrompt({ itemId, title: item && item.title });
+    const inlined = agentSkills.inlineReferencedDefinitions(prompt, { cli, roots: [projectRoot], fs });
     if (inlined) {
       console.log(`[draft] inlined .claude definitions for ${itemId} (${cli}): ${inlined.length} chars`);
     }
@@ -111,37 +149,39 @@ function createDraftingRouter(config, state, tmuxOps) {
       return res.status(500).json({ error: `could not write the prompt file: ${e.message}` });
     }
 
-    // Pipe the pane to a log, as workflow agents do. Without it the pane IS the
-    // only record, and a launch that fails before the CLI starts leaves nothing
-    // to read: diagnosing the first real failure meant digging through tmux
-    // scrollback, which survives only as long as the window does.
     const logFile = config.logsPath ? path.join(config.logsPath, `${windowName}.log`) : null;
-
-    let target;
     try {
-      target = tmuxOps.ensureWindow(sessionName, windowName, projectRoot);
-      tmuxOps.sendKeys(target, `cd '${projectRoot}' && ${buildDraftCommand({
-        cli, modelFlag: launch.modelFlag, effortFlag: launch.effortFlag, dangerFlag, promptFile,
+      const t = tmuxOps.ensureWindow(sessionName, windowName, projectRoot);
+      tmuxOps.sendKeys(t, `cd '${projectRoot}' && ${buildDraftCommand({
+        cli,
+        modelFlag: launch.modelFlag,
+        effortFlag: launch.effortFlag,
+        dangerFlag,
+        sessionFlag: resuming ? sessionResumeFlag(cli, cliSessionId) : sessionPinFlag(cli, cliSessionId),
+        promptFile,
       })}`, projectRoot);
       if (logFile && typeof tmuxOps.pipePaneToLog === 'function') {
         fs.mkdirSync(config.logsPath, { recursive: true });
-        tmuxOps.pipePaneToLog(target, logFile, projectRoot);
+        tmuxOps.pipePaneToLog(t, logFile, projectRoot);
       }
     } catch (e) {
       return res.status(500).json({ error: `tmux: ${e.message}` });
     }
 
-    const entry = {
-      window: windowName,
-      startedAt: new Date().toISOString(),
+    const session = {
+      cliSessionId,
       cli,
       model: launch.model || null,
+      window: windowName,
       logFile,
-      title: (item && item.title) || null,
+      startedAt: resuming ? (prior.startedAt || new Date().toISOString()) : new Date().toISOString(),
+      lastUsedAt: new Date().toISOString(),
+      lastItemId: itemId,
+      items: resuming ? [...new Set([...(prior.items || []), itemId])] : [itemId],
+      resumable: canPinSession(cli),
     };
-    recordSession(config.statePath, sessionName, itemId, entry);
-
-    res.json({ ok: true, sessionName, ...entry });
+    saveDraftState(config.statePath, { ...state, sessionName, session });
+    res.json({ ok: true, sessionName, mode: resuming ? 'resumed' : 'fresh', ...session });
   });
 
   return router;
