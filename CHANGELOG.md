@@ -34,10 +34,14 @@ that move underneath you without your having edited anything.
 
   Two defects, both needed to produce it:
 
-  1. **The server released the child, not the descriptor.** On disconnect it
-     called node-pty's `kill()`, which only signals the process; `destroy()` is
-     what closes the socket and frees the fd. Long-standing, but harmless while
-     terminals were opened by hand and one at a time.
+  1. **node-pty leaks one descriptor per pty, and no call we can make releases
+     it.** Each pty opens *two* handles on the same fd (a `tty.ReadStream` and a
+     write stream). Measured on node-pty 1.1.0: `kill()` frees one, `destroy()`
+     frees one, both together free one, and destroying the streams by hand frees
+     one. The second is never released. The server now calls `destroy()` rather
+     than `kill()` because it is the more correct call, **but that is not a fix**
+     — it moves nothing. Long-standing, and invisible while terminals were opened
+     by hand and one at a time.
   2. **The drafting terminal reconnected on a timer.** It rendered inside
      `SortableItemRow`, which is defined inside `BacklogTab` and therefore gets a
      new identity on every render, so React remounted every row. The backlog
@@ -45,8 +49,21 @@ that move underneath you without your having edited anything.
      leaked descriptors an hour. It now renders at the tab's top level, where its
      position in the tree is stable.
 
-  Defect 1 made the leak permanent; defect 2 made it fast. Either alone is
-  survivable, which is why this surfaced only after drafting shipped.
+  Defect 1 makes every attach cost one descriptor for the life of the server;
+  defect 2 made attaches happen 120 times an hour. Either alone is survivable,
+  which is why this surfaced only after drafting shipped.
+
+  **The leak is reduced, not closed.** With the reconnect loop gone the cost is
+  one descriptor per terminal you open, instead of one every 30 seconds — enough
+  to turn hours into months, not to make it permanent. Closing it needs either
+  node-pty 1.2 (beta only today) or reusing one pty per window across attaches.
+
+### Known issues
+
+- A server still accumulates one pty descriptor per agent-terminal attach, at a
+  system-wide ceiling of 511 (`sysctl kern.tty.ptmx_max`). Restarting the
+  project-server releases them. To check one:
+  `lsof -p <pid> | grep -c ptmx`.
 
 ### Upgrade steps
 
