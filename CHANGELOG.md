@@ -21,6 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-18 — A running drafting session can be found again
+
+### Added
+
+- **The drafting panel is restored when you open the backlog.** The session
+  lives in tmux, not in the page, so it survives a reload — but the panel only
+  appeared straight after a successful Draft click, which meant a reload, or the
+  terminal failing to attach once, left a live session with no route back to it
+  from the hub at all. Found the hard way: a session sat waiting for an answer
+  while the only way to reach it was `tmux attach`.
+
+- **`GET /draft` reports liveness and prunes what is gone.** Whether a window
+  still exists is read from tmux rather than tracked, because the window is the
+  truth and anything the state file believed could only be out of date. Entries
+  whose window has gone are dropped as they are found, which also stops the file
+  growing a row per draft ever started.
+
+  Sessions are also marked `agentRunning`: a pane whose agent has exited is a
+  shell at a prompt, which is worth telling apart from one still in conversation.
+
+### Known issues
+
+- **Clicking Draft on an item that already has a live session kills it.** Window
+  creation deduplicates by name, so a second draft of the same item replaces the
+  first and its conversation is gone — there is no resume yet. The restored panel
+  makes the live session reachable, which is most of the need, but the button
+  itself is still destructive. Resume is increment 2.
+
 ## 2026-09-18 — Agent terminals no longer leak pty descriptors
 
 ### Fixed

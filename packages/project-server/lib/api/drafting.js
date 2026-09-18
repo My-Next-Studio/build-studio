@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const {
   DRAFT_STEP, draftSessionName, draftWindowName,
-  loadDraftState, recordSession, buildDraftCommand, draftPrompt,
+  loadDraftState, saveDraftState, recordSession, buildDraftCommand, draftPrompt,
 } = require('../drafting');
 const { resolveStepLaunchSettings } = require('@build-studio/shared/cli');
 const { readItem } = require('../backlog');
@@ -20,8 +20,36 @@ function createDraftingRouter(config, state, tmuxOps) {
   const projectRoot = config.projectRoot;
   const projectName = config.name || path.basename(projectRoot);
 
+  // Which drafting sessions are still alive?
+  //
+  // The state file is a record of what was STARTED, and a window can be gone —
+  // exited, killed, or replaced by a later draft of the same item. Returning it
+  // raw would have the hub offer a view of a pane that is not there.
+  //
+  // Liveness is read from tmux rather than tracked: the window is the truth, and
+  // anything this file believed about it could only ever be out of date. Dead
+  // entries are pruned as they are found, which is also what keeps the file from
+  // growing a row per draft ever started.
   router.get('/draft', (req, res) => {
-    res.json(loadDraftState(config.statePath));
+    const state = loadDraftState(config.statePath);
+    const sessions = state.sessions || {};
+    const live = {};
+    let pruned = false;
+    for (const [itemId, entry] of Object.entries(sessions)) {
+      const target = `${state.sessionName}:${entry.window}`;
+      const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
+      if (!pid) { pruned = true; continue; }
+      live[itemId] = {
+        ...entry,
+        live: true,
+        // A pane with no child process is a shell sitting at a prompt — the
+        // session outlived its agent. Worth showing differently from one still
+        // in conversation, so the hub can say which.
+        agentRunning: tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false,
+      };
+    }
+    if (pruned) saveDraftState(config.statePath, { ...state, sessions: live });
+    res.json({ ...state, sessions: live });
   });
 
   router.post('/draft/start', (req, res) => {

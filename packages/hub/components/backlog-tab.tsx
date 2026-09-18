@@ -140,6 +140,33 @@ export function BacklogTab({
   const [starting, setStarting] = useState<string | null>(null)
   const [drafting, setDrafting] = useState<string | null>(null)
   const [draftSession, setDraftSession] = useState<{ id: string; window: string } | null>(null)
+
+  // Restore the view of a drafting session that is still running.
+  //
+  // The session lives in tmux, not in this component, so it outlives a reload —
+  // but the panel only appeared straight after a successful Draft click, which
+  // meant a reload (or the terminal failing to attach once) left a live session
+  // with no way back to it from the hub at all. Found the hard way: a session sat
+  // waiting for an answer while the only route to it was `tmux attach`.
+  //
+  // The server reports which windows still exist, so this asks rather than
+  // assumes; a stale entry cannot resurrect a panel for a pane that is gone.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await api.get('/draft')
+        if (cancelled || !res || !res.sessions) return
+        const entries = Object.entries(res.sessions as Record<string, { window: string; startedAt?: string }>)
+        if (entries.length === 0) return
+        // Most recent wins when several are alive — the one just left.
+        entries.sort((a, b) => String(b[1].startedAt || '').localeCompare(String(a[1].startedAt || '')))
+        const [id, entry] = entries[0]
+        setDraftSession({ id, window: entry.window })
+      } catch { /* advisory — a missing drafting state is not an error */ }
+    })()
+    return () => { cancelled = true }
+  }, [api])
   const [startError, setStartError] = useState<{ id: string; message: string } | null>(null)
 
   // Drafting runs OUTSIDE the workflow slot, so unlike startRun it neither
