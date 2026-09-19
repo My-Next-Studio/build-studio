@@ -66,6 +66,48 @@ function createDraftingRouter(config, state, tmuxOps) {
   });
 
   /**
+   * End the running agent, keeping the conversation resumable.
+   *
+   * Hiding the panel closes the VIEW; it deliberately leaves the session alone.
+   * That is the right default for stepping away, but it made finishing ambiguous:
+   * a completed draft whose agent is still sitting at its prompt looks exactly
+   * like one in progress, so it held the one-draft-at-a-time lock and disabled
+   * every Draft button (owner hit this 2026-09-19). Ending needed to be its own
+   * deliberate act rather than a thing you had to know to type.
+   *
+   * The session id is KEPT. Ending stops the process; it does not abandon the
+   * conversation, which can still be resumed. Start fresh is what discards.
+   */
+  router.post('/draft/end', (req, res) => {
+    const state = loadDraftState(config.statePath);
+    const session = state.session || null;
+    if (!session) return res.json({ ok: true, alreadyEnded: true });
+
+    const target = `${state.sessionName}:${session.window}`;
+    const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
+    if (!pid) {
+      saveDraftState(config.statePath, { ...state, session: { ...session, endedAt: new Date().toISOString() } });
+      return res.json({ ok: true, alreadyEnded: true });
+    }
+
+    // Graceful: the CLI's own exit, so it closes its session cleanly rather than
+    // being cut off mid-write. Killing the window would also end it, but a CLI
+    // that is part-way through writing a file should be allowed to finish.
+    try {
+      tmuxOps.sendKeys(target, '/exit', projectRoot);
+    } catch (e) {
+      return res.status(500).json({ error: `could not reach the session: ${e.message}` });
+    }
+    saveDraftState(config.statePath, {
+      ...state,
+      session: { ...session, endedAt: new Date().toISOString() },
+    });
+    // The process takes a moment to go; the poll notices and re-enables the
+    // buttons. Reported rather than waited for, so the request does not hang.
+    res.json({ ok: true, ending: true, resumable: !!session.cliSessionId && canPinSession(session.cli) });
+  });
+
+  /**
    * Start, continue, or resume the project's drafting session.
    *
    * There is ONE session per project — the owner's boundary, cut by hand when

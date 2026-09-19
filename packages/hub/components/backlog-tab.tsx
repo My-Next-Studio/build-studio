@@ -204,6 +204,19 @@ export function BacklogTab({
     }
   }, [])
 
+  // Ends the agent without abandoning the conversation — the next Draft resumes
+  // it. Start fresh is the one that discards.
+  const endDraft = useCallback(async () => {
+    try {
+      const res = await api.post('/draft/end', {})
+      if (res && res.error) { setStartError({ id: '', message: res.error }); return }
+      // The process takes a moment to go; the poll clears the lock when it has.
+      setDraftRunning(null)
+    } catch (e) {
+      setStartError({ id: '', message: e instanceof Error ? e.message : String(e) })
+    }
+  }, [api])
+
   const startRun = useCallback(async (id: string, run: RunType) => {
     setStarting(id)
     setStartError(null)
@@ -531,6 +544,28 @@ export function BacklogTab({
             >
               Hide
             </button>
+            {/*
+              End vs Hide vs Start fresh, three different things:
+                Hide         closes the view. The session keeps running.
+                End session  stops the agent, KEEPS the conversation. Resumable.
+                Start fresh  abandons the conversation entirely.
+
+              End exists because Hide made finishing ambiguous: a completed draft
+              whose agent still sat at its prompt looked exactly like one in
+              progress, held the one-at-a-time lock, and disabled every Draft
+              button. Typing /exit in the pane was the only way out, which is not
+              something the button should require you to know.
+            */}
+            {draftRunning !== null && (
+              <button
+                onClick={() => { void endDraft() }}
+                className="wf-btn secondary"
+                style={{ fontSize: 10, padding: '2px 8px' }}
+                title="Stop the agent. The conversation is kept and the next draft resumes it."
+              >
+                End session
+              </button>
+            )}
             {/*
               One session per project, cut by hand when the subject changes —
               that is the owner's boundary, and nothing expires it automatically.

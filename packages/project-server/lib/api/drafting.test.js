@@ -32,7 +32,11 @@ function fakeTmux({ livePid = null, agentRunning = false } = {}) {
   };
 }
 
-async function post(root, tmux, body) {
+async function postTo(root, tmux, route, body) {
+  return post(root, tmux, body, route);
+}
+
+async function post(root, tmux, body, route = '/draft/start') {
   const config = {
     projectRoot: root, docsPath: 'docs', name: 'proj',
     statePath: path.join(root, '.build-studio'),
@@ -46,7 +50,7 @@ async function post(root, tmux, body) {
   await new Promise((r) => server.listen(0, r));
   const { port } = server.address();
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/draft/start`, {
+    const res = await fetch(`http://127.0.0.1:${port}/api${route}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     return { status: res.status, body: await res.json() };
@@ -160,4 +164,48 @@ test('fresh: true abandons the old conversation deliberately', async () => {
   assert.equal(r.body.mode, 'fresh');
   assert.notEqual(r.body.cliSessionId, first.body.cliSessionId, 'a new conversation');
   assert.ok(live.calls.some(c => c[0] === 'ensureWindow'), 'and a new window');
+});
+
+// Hiding the panel closes the view and leaves the session alone — right for
+// stepping away, ambiguous for finishing. A completed draft whose agent still
+// sits at its prompt looks identical to one in progress, so it held the
+// one-at-a-time lock and disabled every Draft button. Ending is its own act.
+test('ending stops the agent but keeps the conversation resumable', async () => {
+  const root = makeProject({ 'EX-020': { type: 'Feature', status: 'Backlog', title: 'A' } });
+  const started = await post(root, fakeTmux(), { itemId: 'EX-020' });
+
+  const live = fakeTmux({ livePid: 321, agentRunning: true });
+  const r = await postTo(root, live, '/draft/end', {});
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ending, true);
+  assert.equal(r.body.resumable, true, 'ending is not abandoning');
+
+  const sent = live.calls.find(c => c[0] === 'sendKeys');
+  assert.equal(sent[2], '/exit', 'the CLI exits itself rather than being cut off');
+
+  const state = readState(root);
+  assert.equal(state.session.cliSessionId, started.body.cliSessionId, 'the id survives');
+  assert.ok(state.session.endedAt, 'and the end is recorded');
+});
+
+test('ending an already-dead session is a no-op, not an error', async () => {
+  const root = makeProject({ 'EX-021': { type: 'Feature', status: 'Backlog', title: 'A' } });
+  await post(root, fakeTmux(), { itemId: 'EX-021' });
+  const r = await postTo(root, fakeTmux(), '/draft/end', {});   // panePid null
+  assert.equal(r.status, 200);
+  assert.equal(r.body.alreadyEnded, true);
+});
+
+// After ending, the next draft resumes rather than starting over — the whole
+// reason ending keeps the id.
+test('a draft after ending resumes the same conversation', async () => {
+  const root = makeProject({
+    'EX-022': { type: 'Feature', status: 'Backlog', title: 'A' },
+    'EX-023': { type: 'Feature', status: 'Backlog', title: 'B' },
+  });
+  const first = await post(root, fakeTmux(), { itemId: 'EX-022' });
+  await postTo(root, fakeTmux({ livePid: 5, agentRunning: true }), '/draft/end', {});
+  const r = await post(root, fakeTmux(), { itemId: 'EX-023' });
+  assert.equal(r.body.mode, 'resumed');
+  assert.equal(r.body.cliSessionId, first.body.cliSessionId);
 });

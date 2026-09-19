@@ -40,6 +40,18 @@ that move underneath you without your having edited anything.
   case is removed rather than made careful. The buttons re-enable on their own
   once the agent finishes.
 
+- **An End session button.** Three controls, three different things: **Hide**
+  closes the view and leaves the session running; **End session** stops the
+  agent but keeps the conversation, so the next draft resumes it; **Start
+  fresh** abandons the conversation entirely.
+
+  End exists because Hide made finishing ambiguous. A completed draft whose
+  agent was still sitting at its prompt looked identical to one in progress, so
+  it held the one-at-a-time lock and disabled every Draft button — and typing
+  `/exit` into the pane was the only way out, which is not something a button
+  should require you to know. Ending sends the CLI's own exit rather than
+  killing the window, so a CLI part-way through writing a file can finish.
+
 - **The panel shows the session's age and how many items it has covered**, and
   carries a **Start fresh** button. The boundary is per project, cut by hand
   when the subject changes; nothing expires a session on its own, so that button
