@@ -101,9 +101,11 @@ test('a first draft pins a session id it can later resume', async () => {
   assert.match(cmd, /--session-id '/, 'pinned at launch, not after');
 });
 
-// The bug this increment exists to remove: a second Draft click used to kill the
-// running conversation, because window creation deduplicates by name.
-test('a second item joins the RUNNING session instead of replacing it', async () => {
+// The bug this increment removed: a second Draft click used to kill the running
+// conversation, because window creation deduplicates by name. It is now refused
+// outright — talking into a live session meant typing into whatever the agent
+// was doing, which is wrong when it is sitting on a menu.
+test('a second item is refused while a session is running, and nothing is touched', async () => {
   const root = makeProject({
     'EX-011': { type: 'Feature', status: 'Backlog', title: 'A' },
     'EX-012': { type: 'Feature', status: 'Backlog', title: 'B' },
@@ -112,11 +114,26 @@ test('a second item joins the RUNNING session instead of replacing it', async ()
   const live = fakeTmux({ livePid: 4242, agentRunning: true });
   const r = await post(root, live, { itemId: 'EX-012' });
 
-  assert.equal(r.body.mode, 'continued');
-  assert.ok(!live.calls.some(c => c[0] === 'ensureWindow'), 'the window is never recreated');
-  const sent = live.calls.find(c => c[0] === 'sendKeys')[2];
-  assert.match(sent, /EX-012/, 'the running session is pointed at the new item');
-  assert.deepEqual(readState(root).session.items, ['EX-011', 'EX-012']);
+  assert.equal(r.status, 409);
+  assert.equal(r.body.sessionRunning, true);
+  assert.equal(r.body.lastItemId, 'EX-011', 'it says which draft is in the way');
+  assert.deepEqual(live.calls, [], 'the running session is neither recreated nor typed into');
+});
+
+// A window with no agent in it is a shell at a prompt, not a conversation in
+// progress — that is the case the refusal must NOT catch.
+test('an idle window does not count as a running session', async () => {
+  const root = makeProject({
+    'EX-016': { type: 'Feature', status: 'Backlog', title: 'A' },
+    'EX-017': { type: 'Feature', status: 'Backlog', title: 'B' },
+  });
+  const first = await post(root, fakeTmux(), { itemId: 'EX-016' });
+  const idle = fakeTmux({ livePid: 777, agentRunning: false });
+  const r = await post(root, idle, { itemId: 'EX-017' });
+
+  assert.equal(r.status, 200);
+  assert.equal(r.body.mode, 'resumed');
+  assert.equal(r.body.cliSessionId, first.body.cliSessionId, 'same conversation continues');
 });
 
 test('a dead window resumes the conversation rather than starting over', async () => {

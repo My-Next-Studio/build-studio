@@ -25,16 +25,20 @@ that move underneath you without your having edited anything.
 
 ### Added
 
-- **Drafting sessions persist and resume.** A project has ONE drafting session,
-  and a second Draft click continues it instead of replacing it. Three cases,
-  decided from tmux rather than from stored belief: a live window is pointed at
-  the new item and attached to; a window that has gone is relaunched with the
-  CLI's resume flag so the conversation carries on where it stopped; anything
-  else starts fresh.
+- **Drafting sessions persist and resume.** A project has ONE drafting session.
+  When the previous draft has finished, the next Draft click resumes that same
+  conversation with the CLI's resume flag rather than starting over — context
+  kept across drafts, which is what the feature was asked for, since related
+  stories touch related areas.
 
-  This was the point of the feature as originally asked for — context kept
-  across drafts, since related stories touch related areas — and it removes the
-  destructive click: Draft on an item with a running session no longer kills it.
+- **One draft at a time.** While a drafting agent is running, every Draft button
+  is disabled and says which item is in the way; the API refuses a second start
+  with a 409. Previously a second click replaced the running conversation, and
+  briefly afterwards it typed the new item into it — fine mid-answer, wrong when
+  the agent was sitting on a menu, where the text would have been read as the
+  menu choice. There is no need for two drafts at once in one project, so the
+  case is removed rather than made careful. The buttons re-enable on their own
+  once the agent finishes.
 
 - **The panel shows the session's age and how many items it has covered**, and
   carries a **Start fresh** button. The boundary is per project, cut by hand

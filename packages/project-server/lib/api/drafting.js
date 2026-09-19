@@ -115,17 +115,25 @@ function createDraftingRouter(config, state, tmuxOps) {
     const windowLive = !!pid;
     const agentRunning = windowLive && tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false;
 
-    // ── live: talk to the conversation already running ───────────────────────
+    // ── one draft at a time ──────────────────────────────────────────────────
+    //
+    // A running session is refused rather than talked into. Sending a second
+    // item into a live conversation meant typing into whatever the agent was
+    // doing — fine mid-answer, wrong when it was sitting on a menu, where the
+    // text would have been read as the menu choice. There is no need for two
+    // drafts at once in one project (owner, 2026-09-19), so the case is removed
+    // rather than made careful.
+    //
+    // Continuity is unaffected: once the agent finishes, the next Draft resumes
+    // this same conversation through the path below.
     if (prior && windowLive && agentRunning && !wantFresh) {
-      try {
-        tmuxOps.sendKeys(target, continuePrompt({ itemId, title: item && item.title }), projectRoot);
-      } catch (e) {
-        return res.status(500).json({ error: `could not reach the running session: ${e.message}` });
-      }
-      const session = { ...prior, lastItemId: itemId, lastUsedAt: new Date().toISOString(),
-        items: [...new Set([...(prior.items || []), itemId])] };
-      saveDraftState(config.statePath, { ...state, sessionName, session });
-      return res.json({ ok: true, sessionName, window: windowName, mode: 'continued', ...session });
+      return res.status(409).json({
+        error: `A drafting session is already running${prior.lastItemId ? ` for ${prior.lastItemId}` : ''}.`
+          + ' Finish it, or use Start fresh to abandon it, before drafting another item.',
+        sessionRunning: true,
+        lastItemId: prior.lastItemId || null,
+        window: windowName,
+      });
     }
 
     // ── otherwise launch: resuming the old conversation, or starting one ──────

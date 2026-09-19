@@ -142,38 +142,42 @@ export function BacklogTab({
   const [draftSession, setDraftSession] = useState<
     { id: string; window: string; ageMs?: number | null; resumable?: boolean; items?: string[] } | null
   >(null)
+  // Which item's draft is running, or null. Drives the disabled state of every
+  // Draft button: one draft at a time per project, so while one is in progress
+  // the rest are not offered rather than refused after the click.
+  const [draftRunning, setDraftRunning] = useState<string | null>(null)
 
-  // Restore the view of a drafting session that is still running.
+  // Track the project's drafting session: restore its view, and know whether a
+  // draft is running so the buttons can say so.
   //
   // The session lives in tmux, not in this component, so it outlives a reload —
-  // but the panel only appeared straight after a successful Draft click, which
-  // meant a reload (or the terminal failing to attach once) left a live session
-  // with no way back to it from the hub at all. Found the hard way: a session sat
-  // waiting for an answer while the only route to it was `tmux attach`.
-  //
-  // The server reports which windows still exist, so this asks rather than
-  // assumes; a stale entry cannot resurrect a panel for a pane that is gone.
+  // the panel used to appear only straight after a successful click, which left
+  // a live session with no route back to it from the hub. Polled rather than
+  // read once, because the interesting transition is the agent FINISHING: that
+  // is what re-enables the buttons, and nothing pushes it.
   useEffect(() => {
     let cancelled = false
-    void (async () => {
+    const read = async () => {
       try {
         const res = await api.get('/draft')
-        if (cancelled || !res || !res.session) return
-        const sess = res.session as {
-          window: string; live?: boolean; resumable?: boolean
-          lastItemId?: string; ageMs?: number | null; items?: string[]
-        }
+        if (cancelled) return
+        const sess = res && res.session
+        if (!sess) { setDraftRunning(null); return }
+        setDraftRunning(sess.agentRunning ? (sess.lastItemId || '') : null)
         // Only restore a VIEW of something still there. A resumable-but-dead
         // session is reachable by clicking Draft again; showing a terminal for a
-        // window that no longer exists would just fail to attach.
-        if (!sess.live) return
-        setDraftSession({
-          id: sess.lastItemId || '', window: sess.window,
-          ageMs: sess.ageMs, resumable: sess.resumable, items: sess.items,
-        })
+        // window that is gone would just fail to attach.
+        if (sess.live) {
+          setDraftSession(prev => prev ?? {
+            id: sess.lastItemId || '', window: sess.window,
+            ageMs: sess.ageMs, resumable: sess.resumable, items: sess.items,
+          })
+        }
       } catch { /* advisory — a missing drafting state is not an error */ }
-    })()
-    return () => { cancelled = true }
+    }
+    void read()
+    const id = setInterval(() => { void read() }, 10_000)
+    return () => { cancelled = true; clearInterval(id) }
   }, [api])
   const [startError, setStartError] = useState<{ id: string; message: string } | null>(null)
 
@@ -761,8 +765,11 @@ export function BacklogTab({
               {item?.status === 'Backlog' && item?.type !== 'Bug' && !item?.prd && (
                 <button
                   onClick={(e) => { e.stopPropagation(); void startDraft(id) }}
-                  disabled={drafting === id}
-                  title={`Draft a PRD for ${id} — opens an interactive session you talk to`}
+                  disabled={drafting === id || draftRunning !== null}
+                  title={draftRunning !== null
+                    ? `A drafting session is already running${draftRunning ? ` for ${draftRunning}` : ''}.`
+                      + ' One at a time per project — finish it, or use Start fresh, before drafting another item.'
+                    : `Draft a PRD for ${id} — opens an interactive session you talk to`}
                   className="wf-btn secondary"
                   style={{
                     fontSize: 10, padding: '3px 0', width: '100%', textAlign: 'center',
