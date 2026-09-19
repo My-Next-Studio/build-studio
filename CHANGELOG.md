@@ -21,6 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-19 — A tmux call can no longer freeze a project-server
+
+### Fixed
+
+- **The project-server could deadlock against its own tmux command and stop
+  answering entirely.** Every tmux call is synchronous, and the same process is
+  the reader of the ptys attached tmux clients write to. So: a sync call blocks
+  the event loop, tmux tries to redraw an attached client, the pty's reader is
+  the blocked process, the pty fills, tmux blocks on the write, and the call
+  never returns. Observed with a drafting terminal attached — `tmux send-keys`
+  hung for minutes and HTTP stopped responding altogether.
+
+  Tmux calls now carry a 5-second timeout. The real remedy is asynchronous tmux
+  calls, which is a larger change than this warrants today; the timeout turns a
+  permanent freeze into a brief hiccup and a visible error, and lets the pty
+  drain so the deadlock clears itself.
+
+- **Close did nothing on a session whose agent had already exited.** It sent
+  `/exit` in both cases, but a pane with no agent is a bare shell, which does
+  not understand it — the shell printed `command not found` and the window
+  stayed open. A running CLI is still asked to exit itself, so it can finish
+  writing; a shell has its window closed instead.
+
+### Known issues
+
+- Tmux operations remain synchronous. The timeout bounds the damage but the
+  deadlock is still reachable, briefly, whenever a terminal is attached.
+
 ## 2026-09-19 — The drafting session is a terminal you keep open
 
 ### Changed

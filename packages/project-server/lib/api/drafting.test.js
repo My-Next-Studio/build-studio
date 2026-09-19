@@ -27,6 +27,7 @@ function fakeTmux({ livePid = null, agentRunning = false } = {}) {
     ensureWindow: (s, w) => { calls.push(['ensureWindow', s, w]); return `${s}:${w}`; },
     sendKeys: (t, cmd) => { calls.push(['sendKeys', t, cmd]); },
     pipePaneToLog: (t, f) => { calls.push(['pipePaneToLog', t, f]); },
+    killWindowAndChildren: (t) => { calls.push(['killWindowAndChildren', t]); },
     panePid: () => livePid,
     hasLiveDescendant: () => agentRunning,
   };
@@ -208,4 +209,29 @@ test('a draft after ending resumes the same conversation', async () => {
   const r = await post(root, fakeTmux(), { itemId: 'EX-023' });
   assert.equal(r.body.mode, 'resumed');
   assert.equal(r.body.cliSessionId, first.body.cliSessionId);
+});
+
+// Close sent /exit to both cases, and a pane whose agent has already exited is a
+// bare SHELL — it printed "command not found" and the window stayed open, so
+// Close looked like it did nothing.
+test('closing a session with no agent kills the window instead of typing at a shell', async () => {
+  const root = makeProject({ 'EX-030': { type: 'Feature', status: 'Backlog', title: 'A' } });
+  await post(root, fakeTmux(), { itemId: 'EX-030' });
+  const shell = fakeTmux({ livePid: 4242, agentRunning: false });
+  const r = await postTo(root, shell, '/draft/end', {});
+
+  assert.equal(r.status, 200);
+  assert.ok(shell.calls.some(c => c[0] === 'killWindowAndChildren'), 'the window is closed');
+  assert.ok(!shell.calls.some(c => c[0] === 'sendKeys'), 'nothing is typed at the shell');
+});
+
+test('closing a session with a live agent still asks the CLI to exit itself', async () => {
+  const root = makeProject({ 'EX-031': { type: 'Feature', status: 'Backlog', title: 'A' } });
+  await post(root, fakeTmux(), { itemId: 'EX-031' });
+  const live = fakeTmux({ livePid: 4242, agentRunning: true });
+  await postTo(root, live, '/draft/end', {});
+
+  const sent = live.calls.find(c => c[0] === 'sendKeys');
+  assert.equal(sent[2], '/exit', 'a running CLI is allowed to close itself');
+  assert.ok(!live.calls.some(c => c[0] === 'killWindowAndChildren'), 'and is not cut off');
 });

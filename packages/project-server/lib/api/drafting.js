@@ -90,13 +90,23 @@ function createDraftingRouter(config, state, tmuxOps) {
       return res.json({ ok: true, alreadyEnded: true });
     }
 
-    // Graceful: the CLI's own exit, so it closes its session cleanly rather than
-    // being cut off mid-write. Killing the window would also end it, but a CLI
-    // that is part-way through writing a file should be allowed to finish.
+    // Two cases, and sending /exit to both was the bug: a pane whose agent has
+    // already exited is a bare SHELL, which does not understand /exit — it
+    // printed "command not found" and the window stayed open, so Close appeared
+    // to do nothing (2026-09-19).
+    const agentRunning = tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false;
     try {
-      tmuxOps.sendKeys(target, '/exit', projectRoot);
+      if (agentRunning) {
+        // The CLI's own exit, so it closes its session cleanly rather than being
+        // cut off part-way through writing a file.
+        tmuxOps.sendKeys(target, '/exit', projectRoot);
+      } else {
+        // Nothing to ask politely. Close the window itself.
+        // No port argument: that is for windows running dev servers, not this one.
+        tmuxOps.killWindowAndChildren(`${state.sessionName}:${session.window}`);
+      }
     } catch (e) {
-      return res.status(500).json({ error: `could not reach the session: ${e.message}` });
+      return res.status(500).json({ error: `could not close the session: ${e.message}` });
     }
     saveDraftState(config.statePath, {
       ...state,

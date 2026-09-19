@@ -1,7 +1,30 @@
-const { execSync, execFileSync, spawnSync } = require('child_process');
+const { execSync, execFileSync: rawExecFileSync, spawnSync } = require('child_process');
 
 // Note: Uses execSync for tmux shell commands, matching the existing example-web
 // codebase patterns. All inputs are from project config (not user input).
+
+/**
+ * Every tmux call here is SYNCHRONOUS, and this process is also the reader of
+ * the ptys that attached tmux clients write to — the hub's live terminals. That
+ * pair can deadlock:
+ *
+ *   1. a sync tmux call blocks the event loop;
+ *   2. tmux wants to redraw an attached client and writes to its pty;
+ *   3. the reader of that pty is this process, which is blocked;
+ *   4. the pty fills, tmux blocks on the write, and the call never returns.
+ *
+ * Seen live 2026-09-19: `tmux send-keys` hung for minutes with a drafting
+ * terminal attached, and the project-server stopped answering HTTP entirely —
+ * frozen behind its own tmux command.
+ *
+ * The real remedy is async tmux calls, which is a larger change than the bug
+ * warrants today. A timeout is the safety net: the call dies, the loop resumes,
+ * the pty drains, and the failure surfaces as an error instead of a freeze.
+ * Generous enough that a merely busy tmux is not mistaken for a wedged one.
+ */
+const TMUX_TIMEOUT_MS = 5000;
+const execFileSync = (file, args, opts) =>
+  rawExecFileSync(file, args, { timeout: TMUX_TIMEOUT_MS, ...(opts || {}) });
 
 function createTmuxOps(config) {
   const projectName = config.name;
