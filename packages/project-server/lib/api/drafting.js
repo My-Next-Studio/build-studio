@@ -221,6 +221,12 @@ function createDraftingRouter(config, state, tmuxOps) {
     const session = {
       cliSessionId,
       cli,
+      // Changes on every launch, and the window name no longer does — it is
+      // `draft` for the life of the project. The hub keys the terminal on this,
+      // because ensureWindow KILLS and recreates the window, and a terminal that
+      // only watches the name cannot tell that the pane underneath it was
+      // replaced. It sat attached to a window that no longer existed.
+      launchedAt: new Date().toISOString(),
       model: launch.model || null,
       window: windowName,
       logFile,

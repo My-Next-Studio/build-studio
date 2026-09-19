@@ -140,17 +140,33 @@ export function BacklogTab({
   const [starting, setStarting] = useState<string | null>(null)
   const [drafting, setDrafting] = useState<string | null>(null)
   const [draftSession, setDraftSession] = useState<
-    { id: string; window: string; ageMs?: number | null; resumable?: boolean; items?: string[] } | null
+    {
+      id: string; window: string; ageMs?: number | null; resumable?: boolean
+      items?: string[]
+      /** Changes on every launch. The window name does not, so this is what
+       *  tells the terminal its pane was replaced — ensureWindow kills and
+       *  recreates, and a terminal watching only the name stayed attached to a
+       *  window that no longer existed. */
+      launchedAt?: string
+    } | null
   >(null)
   // Which item's draft is running, or null. Drives the disabled state of every
   // Draft button: one draft at a time per project, so while one is in progress
   // the rest are not offered rather than refused after the click.
   const [draftRunning, setDraftRunning] = useState<string | null>(null)
-  // Hiding is an INTENT, tracked apart from whether a session exists. Collapsing
-  // the two meant Hide set the session to null and the next poll — seeing a live
-  // window — put it straight back, so hiding lasted under ten seconds and looked
-  // like the panel ignoring the button.
-  const [draftHidden, setDraftHidden] = useState(false)
+  // Minimised is an INTENT, tracked apart from whether a session exists.
+  // Collapsing the two meant the button set the session to null and the next
+  // poll — seeing a live window — put it straight back, so it lasted under ten
+  // seconds and read as the panel ignoring the click.
+  //
+  // Persisted per project: the panel is a fixture of this view now, and one that
+  // un-minimises itself on every reload is worse than no memory at all.
+  const [draftMin, setDraftMin] = useState(() => {
+    try { return localStorage.getItem('bs.draftMin') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('bs.draftMin', draftMin ? '1' : '0') } catch { /* private mode */ }
+  }, [draftMin])
 
   // Track the project's drafting session: restore its view, and know whether a
   // draft is running so the buttons can say so.
@@ -176,13 +192,14 @@ export function BacklogTab({
           setDraftSession(prev => prev ?? {
             id: sess.lastItemId || '', window: sess.window,
             ageMs: sess.ageMs, resumable: sess.resumable, items: sess.items,
+            launchedAt: sess.launchedAt,
           })
         } else {
           // The window is gone: drop the view and the hidden flag together, so a
           // later session does not open already hidden by a decision about a
           // session that no longer exists.
           setDraftSession(null)
-          setDraftHidden(false)
+          setDraftMin(false)
         }
       } catch { /* advisory — a missing drafting state is not an error */ }
     }
@@ -206,8 +223,12 @@ export function BacklogTab({
       // background is what made the button read as broken on first use: the
       // window opened, the agent ran, and the owner saw nothing.
       if (res && res.window) {
-        setDraftHidden(false)
-        setDraftSession({ id, window: res.window, resumable: res.resumable, items: res.items })
+        // A Draft click always maximises: you asked to see it.
+        setDraftMin(false)
+        setDraftSession({
+          id, window: res.window, resumable: res.resumable, items: res.items,
+          launchedAt: res.launchedAt,
+        })
       }
     } catch (e) {
       setStartError({ id, message: e instanceof Error ? e.message : String(e) })
@@ -216,8 +237,9 @@ export function BacklogTab({
     }
   }, [])
 
-  // Ends the agent without abandoning the conversation — the next Draft resumes
-  // it. Start fresh is the one that discards.
+  // Closes the session without abandoning the conversation — the next Draft
+  // resumes it. Clearing context is /clear in the terminal, deliberately not a
+  // button: one that duplicates the CLI's own command can disagree with it.
   const endDraft = useCallback(async () => {
     try {
       const res = await api.post('/draft/end', {})
@@ -451,6 +473,86 @@ export function BacklogTab({
         </p>
       </div>
 
+      {/*
+        The drafting session, above the filter bar because it is a fixture of
+        this view rather than something that appears under a row: it is a
+        terminal you keep open while you work the backlog.
+
+        Rendered ONLY when a session exists — always-on would push the list down
+        behind an empty box. Minimised collapses to one line naming the ticket,
+        so a session is never invisible while its lock disables the buttons.
+
+        Not inside SortableItemRow: that is defined inside this component and so
+        remounts on every render, which reconnected the terminal twice a minute
+        and exhausted the machine's pty pool (2026-09-18).
+      */}
+      {draftSession && (
+        <div style={{ marginTop: 4 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, marginBottom: draftMin ? 0 : 4,
+            padding: draftMin ? '4px 8px' : 0,
+            borderRadius: draftMin ? 'var(--radius)' : 0,
+            background: draftMin ? 'var(--surface2)' : 'transparent',
+            border: draftMin ? '1px solid var(--border)' : 'none',
+            fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+          }}>
+            <button
+              onClick={() => setDraftMin(!draftMin)}
+              className="wf-btn secondary"
+              style={{ fontSize: 10, padding: '2px 7px', flexShrink: 0 }}
+              title={draftMin ? 'Maximise the drafting session' : 'Minimise — the session keeps running'}
+            >
+              {draftMin ? '▸' : '▾'}
+            </button>
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+              background: draftRunning !== null ? 'var(--green)' : 'var(--muted)',
+            }} />
+            <span>
+              drafting{draftSession.id ? ` · ${draftSession.id}` : ''}
+              <span style={{ color: 'var(--muted)' }}>
+                {draftRunning !== null ? ' · running' : ' · idle'}
+                {draftSession.items && draftSession.items.length > 1 ? ` · ${draftSession.items.length} items` : ''}
+                {typeof draftSession.ageMs === 'number' ? ` · ${fmtAge(draftSession.ageMs)} old` : ''}
+              </span>
+            </span>
+            <span style={{ flex: 1 }} />
+            {/*
+              Close, not "end" — this is a terminal, and closing it is what
+              closing a terminal means. The conversation is KEPT: the next draft
+              resumes it. Its two real effects are releasing the one-at-a-time
+              lock and freeing the agent's ~300-450 MB and its pty.
+
+              Clearing context has no button: /clear in the terminal is the
+              canonical way, and a button that duplicates it is a button that can
+              disagree with it.
+            */}
+            <button
+              onClick={() => { void endDraft() }}
+              className="wf-btn secondary"
+              style={{ fontSize: 10, padding: '2px 8px' }}
+              title="Close the session. The conversation is kept — the next draft resumes it."
+            >
+              Close
+            </button>
+          </div>
+          {!draftMin && (
+            <div style={{ height: 360, border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+              {/*
+                Keyed on the launch stamp. The window is called `draft` for the
+                life of the project, but ensureWindow kills and recreates it on
+                every launch — without a changing key the terminal stayed
+                attached to a pane that no longer existed.
+              */}
+              <AgentTerminal
+                key={`${draftSession.window}#${draftSession.launchedAt || ''}`}
+                agentWindow={draftSession.window}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Filter bar */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
@@ -534,111 +636,6 @@ export function BacklogTab({
         the machine could open a pty (2026-09-18). A stable position in the tree
         means one connection per session.
       */}
-      {/*
-        Hidden, but running. Without this a hidden session is invisible: the
-        panel is gone, the Draft buttons are disabled because an agent holds the
-        lock, and nothing on screen says why or offers a way back. One line is
-        enough — it is a signpost, not a second panel.
-      */}
-      {draftSession && draftHidden && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, marginTop: 4,
-          padding: '4px 8px', borderRadius: 'var(--radius)',
-          background: 'var(--surface2)', border: '1px solid var(--border)',
-          fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
-        }}>
-          <span style={{
-            width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-            background: draftRunning !== null ? 'var(--green)' : 'var(--muted)',
-          }} />
-          <span>
-            drafting session {draftRunning !== null ? 'running' : 'idle'}
-            {draftSession.id ? ` · ${draftSession.id}` : ''}
-            {' '}· hidden
-          </span>
-          <button
-            onClick={() => setDraftHidden(false)}
-            className="wf-btn secondary"
-            style={{ fontSize: 10, padding: '2px 8px' }}
-          >
-            Show
-          </button>
-        </div>
-      )}
-
-      {draftSession && !draftHidden && (
-        <div style={{ marginTop: 4 }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
-            fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
-          }}>
-            <span>
-              drafting · {draftSession.id}
-              {draftSession.items && draftSession.items.length > 1 && (
-                <span style={{ color: 'var(--muted)' }}> · {draftSession.items.length} items this session</span>
-              )}
-              {typeof draftSession.ageMs === 'number' && (
-                <span style={{ color: 'var(--muted)' }}> · {fmtAge(draftSession.ageMs)} old</span>
-              )}
-            </span>
-            <button
-              onClick={() => setDraftHidden(true)}
-              className="wf-btn secondary"
-              style={{ fontSize: 10, padding: '2px 8px' }}
-            >
-              Hide
-            </button>
-            {/*
-              End vs Hide vs Start fresh, three different things:
-                Hide         closes the view. The session keeps running.
-                End session  stops the agent, KEEPS the conversation. Resumable.
-                Start fresh  abandons the conversation entirely.
-
-              End exists because Hide made finishing ambiguous: a completed draft
-              whose agent still sat at its prompt looked exactly like one in
-              progress, held the one-at-a-time lock, and disabled every Draft
-              button. Typing /exit in the pane was the only way out, which is not
-              something the button should require you to know.
-            */}
-            {draftRunning !== null && (
-              <button
-                onClick={() => { void endDraft() }}
-                className="wf-btn secondary"
-                style={{ fontSize: 10, padding: '2px 8px' }}
-                title="Stop the agent. The conversation is kept and the next draft resumes it."
-              >
-                End session
-              </button>
-            )}
-            {/*
-              One session per project, cut by hand when the subject changes —
-              that is the owner's boundary, and nothing expires it automatically.
-              This is the scissors. Destructive on purpose, so it asks first.
-            */}
-            <button
-              onClick={() => {
-                const ok = window.confirm(
-                  'Start a fresh drafting session?\n\n'
-                  + 'The current conversation is abandoned — it cannot be resumed afterwards.',
-                )
-                if (ok && draftSession.id) void startDraft(draftSession.id, true)
-              }}
-              className="wf-btn secondary"
-              style={{ fontSize: 10, padding: '2px 8px' }}
-              title="Abandon this conversation and begin a new one"
-            >
-              Start fresh
-            </button>
-            <span style={{ color: 'var(--muted)' }}>
-              hiding this closes the view, not the session
-            </span>
-          </div>
-          <div style={{ height: 360, border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-            <AgentTerminal agentWindow={draftSession.window} />
-          </div>
-        </div>
-      )}
-
       {/* Release groups — wrapped in DndContext for drag-and-drop */}
       <DndContext
         sensors={sensors}
@@ -847,7 +844,7 @@ export function BacklogTab({
                   disabled={drafting === id || draftRunning !== null}
                   title={draftRunning !== null
                     ? `A drafting session is already running${draftRunning ? ` for ${draftRunning}` : ''}.`
-                      + ' One at a time per project — finish it, or use Start fresh, before drafting another item.'
+                      + ' One at a time per project — finish it and Close the session before drafting another item.'
                     : `Draft a PRD for ${id} — opens an interactive session you talk to`}
                   className="wf-btn secondary"
                   style={{

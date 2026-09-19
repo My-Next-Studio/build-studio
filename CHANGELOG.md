@@ -21,6 +21,37 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-19 — The drafting session is a terminal you keep open
+
+### Changed
+
+- **The drafting panel sits above the filter bar and minimises rather than
+  hides.** It is a fixture of the backlog view — a terminal you keep open while
+  you work — not something that appears under the row that started it. Minimised
+  it collapses to one line naming the ticket, whether the session is running or
+  idle, and how long it has been open. Clicking Draft always maximises it.
+
+  It renders only when a session exists, so an empty box never pushes the list
+  down, and the minimised state is remembered: a panel that un-minimises itself
+  on every reload is worse than no memory at all.
+
+- **End session is now Close.** The old name suggested discarding. It closes a
+  terminal: the conversation is kept and the next draft resumes it. Its two real
+  effects are releasing the one-at-a-time lock and freeing the agent's
+  ~300–450 MB and its pty.
+
+- **Start fresh is gone.** `/clear` in the terminal is the canonical way to drop
+  context, and a button duplicating a CLI's own command is a button that can
+  disagree with it.
+
+### Fixed
+
+- **The terminal stayed attached to a pane that had been replaced.** The window
+  is called `draft` for the life of the project, but launching kills and
+  recreates it, and the terminal only watched the name — so after moving to the
+  next story it showed a dead pane. Sessions now carry a launch stamp the
+  terminal keys on.
+
 ## 2026-09-19 — Hiding the drafting panel sticks, and says so
 
 ### Fixed
