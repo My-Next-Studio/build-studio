@@ -146,6 +146,11 @@ export function BacklogTab({
   // Draft button: one draft at a time per project, so while one is in progress
   // the rest are not offered rather than refused after the click.
   const [draftRunning, setDraftRunning] = useState<string | null>(null)
+  // Hiding is an INTENT, tracked apart from whether a session exists. Collapsing
+  // the two meant Hide set the session to null and the next poll — seeing a live
+  // window — put it straight back, so hiding lasted under ten seconds and looked
+  // like the panel ignoring the button.
+  const [draftHidden, setDraftHidden] = useState(false)
 
   // Track the project's drafting session: restore its view, and know whether a
   // draft is running so the buttons can say so.
@@ -172,6 +177,12 @@ export function BacklogTab({
             id: sess.lastItemId || '', window: sess.window,
             ageMs: sess.ageMs, resumable: sess.resumable, items: sess.items,
           })
+        } else {
+          // The window is gone: drop the view and the hidden flag together, so a
+          // later session does not open already hidden by a decision about a
+          // session that no longer exists.
+          setDraftSession(null)
+          setDraftHidden(false)
         }
       } catch { /* advisory — a missing drafting state is not an error */ }
     }
@@ -195,6 +206,7 @@ export function BacklogTab({
       // background is what made the button read as broken on first use: the
       // window opened, the agent ran, and the owner saw nothing.
       if (res && res.window) {
+        setDraftHidden(false)
         setDraftSession({ id, window: res.window, resumable: res.resumable, items: res.items })
       }
     } catch (e) {
@@ -522,7 +534,39 @@ export function BacklogTab({
         the machine could open a pty (2026-09-18). A stable position in the tree
         means one connection per session.
       */}
-      {draftSession && (
+      {/*
+        Hidden, but running. Without this a hidden session is invisible: the
+        panel is gone, the Draft buttons are disabled because an agent holds the
+        lock, and nothing on screen says why or offers a way back. One line is
+        enough — it is a signpost, not a second panel.
+      */}
+      {draftSession && draftHidden && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, marginTop: 4,
+          padding: '4px 8px', borderRadius: 'var(--radius)',
+          background: 'var(--surface2)', border: '1px solid var(--border)',
+          fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)',
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+            background: draftRunning !== null ? 'var(--green)' : 'var(--muted)',
+          }} />
+          <span>
+            drafting session {draftRunning !== null ? 'running' : 'idle'}
+            {draftSession.id ? ` · ${draftSession.id}` : ''}
+            {' '}· hidden
+          </span>
+          <button
+            onClick={() => setDraftHidden(false)}
+            className="wf-btn secondary"
+            style={{ fontSize: 10, padding: '2px 8px' }}
+          >
+            Show
+          </button>
+        </div>
+      )}
+
+      {draftSession && !draftHidden && (
         <div style={{ marginTop: 4 }}>
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
@@ -538,7 +582,7 @@ export function BacklogTab({
               )}
             </span>
             <button
-              onClick={() => setDraftSession(null)}
+              onClick={() => setDraftHidden(true)}
               className="wf-btn secondary"
               style={{ fontSize: 10, padding: '2px 8px' }}
             >

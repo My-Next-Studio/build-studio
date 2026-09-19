@@ -43,9 +43,17 @@ function resolveAgentTarget(state, roleOrWindow, draftStatePath = null) {
   if (draftStatePath) {
     try {
       const { loadDraftState } = require('../drafting');
-      const draft = loadDraftState(draftStatePath);
-      const entry = Object.values((draft && draft.sessions) || {})
-        .find(d => d && d.window === roleOrWindow);
+      const draft = loadDraftState(draftStatePath) || {};
+      // Two shapes. `session` is the current one — a project has ONE drafting
+      // session, whose window is named for the project rather than the item.
+      // `sessions` is what the per-item version wrote; a state file written
+      // before that change still carries it, and dropping the fallback would
+      // strand any window it named.
+      const candidates = [
+        draft.session,
+        ...Object.values(draft.sessions || {}),
+      ].filter(Boolean);
+      const entry = candidates.find((d) => d && d.window === roleOrWindow);
       if (entry && draft.sessionName) return { sessionName: draft.sessionName, window: entry.window };
     } catch (_) { /* advisory — a missing drafting state is not an error here */ }
   }

@@ -21,6 +21,29 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-19 — Hiding the drafting panel sticks, and says so
+
+### Fixed
+
+- **Hide did not hold.** It cleared the session from the page, and the status
+  poll — seeing a live window — put the panel straight back, so hiding lasted
+  under ten seconds and read as the button being ignored. Hiding is now an
+  intent tracked apart from whether a session exists.
+
+- **The drafting terminal could not attach after the move to one session per
+  project.** The window is named `draft` now, but the terminal's lookup still
+  searched only the older per-item map, so every attach answered
+  `No agent "draft" found in the active workflow or run`. Both shapes resolve;
+  the older one is kept because a state file written before the change still
+  carries it.
+
+### Added
+
+- **A hidden session shows as one line, with a Show button.** Without it a
+  hidden session was invisible: the panel gone, the Draft buttons disabled
+  because an agent held the lock, and nothing on screen saying why or offering a
+  way back. The line reports whether the session is running or idle.
+
 ## 2026-09-18 — Drafting keeps one conversation per project
 
 ### Added
