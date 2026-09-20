@@ -21,6 +21,36 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-20 — Scoped QA no longer aborts when a new UITest sits in a subfolder
+
+### Fixed
+
+- **QA halted with "no tests were executed (0 passed, 0 failed)" after a run
+  that lasted under a second.** When a change adds or edits XCUITest files, QA
+  scopes the run to the unit-test target plus those classes. The class
+  identifier was built from the file's parent directory, so a test filed in a
+  subfolder of the UITest target (`ios/AppUITests/Onboarding/FooUITests.swift`)
+  became `-only-testing:Onboarding/FooUITests`. xcodebuild rejects an unknown
+  target while loading the project, so nothing ran — not even the unit tests.
+  The target is now the path segment that names the UITest target. Changed
+  files in a UITest target that declare no `XCTestCase` (shared support code)
+  are no longer passed as test classes.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers. A workflow already halted on this needs its
+QA step relaunched after the restart.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-20 — Scheduled content publishing, per project
 
 ### Added

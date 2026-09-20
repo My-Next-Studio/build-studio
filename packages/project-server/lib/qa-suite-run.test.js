@@ -676,3 +676,28 @@ test('a stall before any test started says so rather than naming nothing', () =>
   });
   assert.match(out, /before the first test/);
 });
+
+test('uiTestIdentifiers names the UITest target, not the subfolder the file sits in', () => {
+  const { uiTestIdentifiers } = require('./qa-suite-run');
+  assert.deepStrictEqual(
+    uiTestIdentifiers([
+      'ios/AppUITests/Onboarding/FooUITests.swift',
+      'ios/AppUITests/BarUITests.swift',
+      'ios/AppUITests/Deep/Er/BazUITests.swift',
+    ]),
+    ['AppUITests/FooUITests', 'AppUITests/BarUITests', 'AppUITests/BazUITests'],
+  );
+});
+
+test('uiTestIdentifiers skips support files with no XCTestCase, keeps unreadable ones', () => {
+  const { uiTestIdentifiers } = require('./qa-suite-run');
+  const src = {
+    'ios/AppUITests/Flow/Support.swift': 'enum Support { static let x = 1 }',
+    'ios/AppUITests/Flow/RealUITests.swift': 'final class RealUITests: XCTestCase {}',
+  };
+  const readFile = (f) => { if (!(f in src)) throw new Error('ENOENT'); return src[f]; };
+  assert.deepStrictEqual(
+    uiTestIdentifiers([...Object.keys(src), 'ios/AppUITests/Gone.swift'], { readFile }),
+    ['AppUITests/RealUITests', 'AppUITests/Gone'],
+  );
+});

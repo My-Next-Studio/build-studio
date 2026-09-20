@@ -124,6 +124,37 @@ function buildXcodebuildArgs({ project, scheme, destination, parallelTesting, on
 }
 
 /** Human-readable form of the argv, for the prompt and for error messages. */
+/**
+ * `-only-testing` identifiers for changed XCUITest files: `<Target>/<Class>`.
+ *
+ * The target is the path segment that names the UITest target, NOT the file's
+ * parent directory. A test filed in a subfolder
+ * (`ios/AppUITests/Onboarding/FooUITests.swift`) used to yield
+ * `Onboarding/FooUITests`; xcodebuild rejects an unknown target while loading
+ * the project, so the whole run — unit tests included — aborted in under a
+ * second with zero tests executed.
+ *
+ * Files that declare no XCTestCase (shared support code living beside the
+ * tests) are skipped when `readFile` is given: they name no runnable class.
+ */
+function uiTestIdentifiers(files, { readFile = null } = {}) {
+  const out = [];
+  for (const f of files) {
+    const parts = f.split('/');
+    const target = parts.slice(0, -1).find((seg) => /UITests$/.test(seg));
+    if (!target) continue;
+    if (readFile) {
+      let src = null;
+      try { src = readFile(f); } catch (_) { src = null; }
+      // Unreadable: keep it. Dropping a real test silently is the worse error.
+      if (src !== null && !/\bXCTestCase\b/.test(src)) continue;
+    }
+    const id = `${target}/${path.basename(f, '.swift')}`;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
 function displayCommand(args) {
   return ['xcodebuild', ...args.map(a => (/[\s"']/.test(a) ? JSON.stringify(a) : a))].join(' ');
 }
@@ -768,6 +799,7 @@ function formatSuiteSection(run) {
 }
 
 module.exports = {
+  uiTestIdentifiers,
   DEFAULT_TIMEOUT_MINUTES,
   PROGRESS_INTERVAL_MS,
   parallelArgs,

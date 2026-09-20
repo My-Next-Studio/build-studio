@@ -8077,11 +8077,8 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
           const uitestFiles = diff.split('\n')
             .map(s => s.trim())
             .filter(f => /^ios\/.*UITests\/.*\.swift$/.test(f));
-          const testClasses = uitestFiles.map(f => {
-            const parts = f.split('/');
-            const target = parts[parts.length - 2]; // e.g. "<Scheme>UITests"
-            const cls = path.basename(f, '.swift');
-            return `${target}/${cls}`;
+          const testClasses = qaSuite.uiTestIdentifiers(uitestFiles, {
+            readFile: (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8'),
           });
           // Identify the unit-test target from project config; fall back to the
           // <Scheme>Tests convention derived from config.simulator.scheme.
