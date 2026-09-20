@@ -64,6 +64,31 @@ function statePath(statePathDir) {
   return path.join(statePathDir, STATE_FILE);
 }
 
+const IGNORE_RULE = `.build-studio/${STATE_FILE}`;
+
+/**
+ * Make sure the project ignores the drafting state BEFORE the first write.
+ *
+ * Onboarding writes the rule, but only when a project is onboarded — one that
+ * predates drafting never gets it, so its first session left an untracked file
+ * that the next sweep-all commit picked up. Found in two projects.
+ *
+ * Adds this ONE line, not the whole pattern list: rewriting a project's
+ * .gitignore wholesale as a side effect of clicking Draft would be a surprise.
+ *
+ * @returns {boolean} true when the file was changed and so needs committing —
+ *   a modified .gitignore on the default branch blocks the next execution run.
+ */
+function ensureIgnored(projectRoot) {
+  const gi = path.join(projectRoot, '.gitignore');
+  let existing = '';
+  try { existing = fs.readFileSync(gi, 'utf8'); } catch (_) { /* no file yet */ }
+  if (existing.split('\n').some((l) => l.trim() === IGNORE_RULE)) return false;
+  const sep = existing === '' || existing.endsWith('\n') ? '' : '\n';
+  fs.writeFileSync(gi, `${existing}${sep}${IGNORE_RULE}\n`, 'utf8');
+  return true;
+}
+
 /** Read the drafting state. Advisory: a missing or corrupt file reads as empty. */
 function loadDraftState(statePathDir) {
   try {
@@ -185,6 +210,8 @@ module.exports = {
   STATE_FILE,
   draftSessionName,
   draftWindowName,
+  ensureIgnored,
+  IGNORE_RULE,
   loadDraftState,
   saveDraftState,
   recordSession,

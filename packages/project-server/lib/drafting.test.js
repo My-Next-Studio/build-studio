@@ -9,6 +9,7 @@ const path = require('path');
 const {
   draftSessionName, draftWindowName, loadDraftState, recordSession,
   buildDraftCommand, draftPrompt, DRAFT_STEP, quoteFlagValues,
+  ensureIgnored, IGNORE_RULE,
 } = require('./drafting');
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'drafting-test-'));
@@ -134,4 +135,31 @@ test('flag names are left alone and values with quotes are escaped', () => {
   assert.equal(quoteFlagValues(' --model a-b'), " --model 'a-b'");
   assert.equal(quoteFlagValues(''), '');
   assert.match(quoteFlagValues(" --model it's"), /--model 'it'/);
+});
+
+// Onboarding writes the ignore rule, but only at onboarding — a project that
+// predates drafting never got it, and its first session left an untracked state
+// file for the next sweep-all commit to pick up.
+test('the state file is ignored before it is first written', () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules\n');
+  assert.equal(ensureIgnored(dir), true, 'changed, so the caller knows to commit it');
+  const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+  assert.match(gi, /^node_modules$/m, 'existing rules are kept');
+  assert.ok(gi.split('\n').includes(IGNORE_RULE));
+});
+
+test('ensuring the rule twice adds it once and reports no change', () => {
+  const dir = tmp();
+  ensureIgnored(dir);
+  assert.equal(ensureIgnored(dir), false);
+  const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+  assert.equal(gi.split('\n').filter((l) => l === IGNORE_RULE).length, 1);
+});
+
+test('a .gitignore with no trailing newline is not corrupted', () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'dist');
+  ensureIgnored(dir);
+  assert.deepEqual(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8').split('\n').filter(Boolean), ['dist', IGNORE_RULE]);
 });

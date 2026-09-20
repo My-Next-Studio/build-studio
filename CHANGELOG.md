@@ -21,6 +21,33 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-20 — Drafting ignores its own state file in projects that predate it
+
+### Fixed
+
+- **`.build-studio/draft-state.json` showed up as an untracked file, and got
+  committed.** Onboarding writes the ignore rule, but only when a project is
+  onboarded, so a project that predates the drafting feature never received it.
+  Its first drafting session left an untracked state file, and the next
+  sweep-all commit picked it up. Drafting now adds that one line to the
+  project's `.gitignore` before it first writes state, and commits the change
+  immediately with a pathspec-scoped commit — a modified `.gitignore` on the
+  default branch would otherwise block the next execution run.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+    cd packages/desktop && node inject-resources.js --sync-only --restart-projects
+
+**In each managed project** — nothing to do for a project that has never
+drafted; the rule is added on first use. A project where the file is **already
+tracked** needs it untracked once, and note the form — a pathspec commit takes
+the working-tree state and silently ignores a staged deletion:
+
+    git rm --cached .build-studio/draft-state.json
+    git commit -m "chore: stop tracking drafting state"     # no path argument
+
 ## 2026-09-19 — A tmux call can no longer freeze a project-server
 
 ### Fixed

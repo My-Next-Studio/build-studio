@@ -7,7 +7,9 @@ const crypto = require('crypto');
 const {
   DRAFT_STEP, draftSessionName, draftWindowName,
   loadDraftState, saveDraftState, buildDraftCommand, draftPrompt, continuePrompt,
+  ensureIgnored,
 } = require('../drafting');
+const { scopedCommit } = require('../scoped-commit');
 const {
   resolveStepLaunchSettings, canPinSession, sessionPinFlag, sessionResumeFlag,
 } = require('@build-studio/shared/cli');
@@ -152,6 +154,20 @@ function createDraftingRouter(config, state, tmuxOps) {
         error: `${itemId} already has a PRD (${item.prd}). Re-drafting over a reviewed document is not supported yet.`,
         hasPrd: true,
       });
+    }
+
+    // Ignore the state file before writing it, and commit the rule at once: a
+    // modified .gitignore on the default branch blocks the next execution run.
+    // Pathspec-scoped, so nothing an agent has staged is swept in. Advisory —
+    // a failed commit leaves one line to commit by hand, not a broken draft.
+    try {
+      if (ensureIgnored(projectRoot) && fs.existsSync(path.join(projectRoot, '.git'))) {
+        scopedCommit(projectRoot, ['.gitignore'], 'chore: gitignore drafting state')
+          .then((r) => { if (!r.committed) console.warn(`[draft] .gitignore not committed: ${r.reason}`); })
+          .catch(() => {});
+      }
+    } catch (e) {
+      console.warn(`[draft] could not update .gitignore: ${e.message}`);
     }
 
     const launch = resolveStepLaunchSettings(DRAFT_STEP, null, config.cli, config.step_groups);
