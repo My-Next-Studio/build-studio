@@ -320,6 +320,8 @@ const BUILD_STUDIO_GITIGNORE_PATTERNS = [
   // two above. Added late (2026-09-17) and found already committed in one
   // project, which is why it is named here rather than left to a glob.
   '.build-studio/draft-state.json',
+  // Content publishing's record — carries absolute log paths, so machine-local.
+  '.build-studio/publish-history.jsonl',
   '.build-studio/snapshots/',
   '.build-studio/*.bak*',
   '# Hub-written local overrides (Agents-tab CLI settings) + model catalog cache — machine-local',

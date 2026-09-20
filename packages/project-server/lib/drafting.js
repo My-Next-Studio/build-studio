@@ -27,6 +27,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { ensureIgnoreRule } = require('./ignore-rule');
 
 /** The pseudo-step drafting resolves its CLI through. In the `plan` group. */
 const DRAFT_STEP = 'draft_prd';
@@ -80,13 +81,7 @@ const IGNORE_RULE = `.build-studio/${STATE_FILE}`;
  *   a modified .gitignore on the default branch blocks the next execution run.
  */
 function ensureIgnored(projectRoot) {
-  const gi = path.join(projectRoot, '.gitignore');
-  let existing = '';
-  try { existing = fs.readFileSync(gi, 'utf8'); } catch (_) { /* no file yet */ }
-  if (existing.split('\n').some((l) => l.trim() === IGNORE_RULE)) return false;
-  const sep = existing === '' || existing.endsWith('\n') ? '' : '\n';
-  fs.writeFileSync(gi, `${existing}${sep}${IGNORE_RULE}\n`, 'utf8');
-  return true;
+  return ensureIgnoreRule(projectRoot, IGNORE_RULE);
 }
 
 /** Read the drafting state. Advisory: a missing or corrupt file reads as empty. */

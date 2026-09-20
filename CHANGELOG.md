@@ -21,6 +21,102 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-20 — Scheduled content publishing, per project
+
+### Added
+
+- **A scheduled job that publishes staged blog posts when their date arrives.**
+  Off by default; a project opts in with `content_publishing.enabled: true`.
+  While the project is running, Build Studio checks its staged directory and
+  publishes every draft whose `publish_date` has been reached. A date that
+  passed while Build Studio was closed is published at the next start. A draft
+  with no `publish_date` is never published by the timer.
+- **Operations → Publishing**, shown only in projects that enabled it: what is
+  scheduled, drafts waiting for a click (`Publish now` — also for publishing a
+  dated post early), failures with their reason and log, and a history of every
+  attempt.
+- **Failures are loud and logged.** A failed publish is never retried by the
+  timer — it raises a Monitor alert naming the log file, which holds the full
+  command output, so an agent can be pointed at it. `Retry` in the tab is the
+  only way it runs again.
+- **A background check that the post is actually live.** "Published" means the
+  push succeeded. Afterwards the live URL is polled for up to
+  `verify_timeout_minutes`; if it never answers, a Monitor alert says so.
+
+### How publishing works
+
+Build Studio knows nothing about your site. It runs **your** command with the
+staged files of one post as arguments, and expects one line per file on stdout:
+
+```
+PUBLISHED<TAB><staged path as given><TAB><live url>
+```
+
+and exit code 0. Anything else is a failure. On success Build Studio stamps the
+staged files (`status: published`, `posted_to`, `publishedAt` — no other key is
+touched, the file is line-edited, never re-serialised), commits exactly the
+paths the publish changed, and pushes the default branch. `<slug>.md` and
+`<slug>.<lang>.md` are one post and are published together.
+
+It publishes only while the project's checkout is on its default branch. During
+an execution run on a feature branch the publish is deferred to the next check,
+and the tab says why.
+
+```yaml
+content_publishing:
+  enabled: true
+  command: node scripts/publish-blog-post.mjs   # required
+  staged_dir: docs/marketing/content/staged     # default
+  publish_time: "08:00"                         # local time on the publish date
+  check_interval_minutes: 15
+  command_timeout_minutes: 10
+  verify_url: true
+  verify_timeout_minutes: 20
+```
+
+The config is re-read on every check; changing it needs no restart.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server changed:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+Then restart the app and the project-servers.
+
+**In each managed project** — nothing, unless you want the feature. To use it:
+write a publish command that follows the protocol above, put staged posts in
+`docs/marketing/content/staged/`, and add the config block. The history file
+`.build-studio/publish-history.jsonl` is ignored automatically on first use.
+
+### Known issues
+
+- A publish command that fails halfway can leave uncommitted files behind.
+  Build Studio reports them (tab and alert) but does not delete them — it cannot
+  know they are safe to remove — and a dirty default branch blocks the next
+  execution run until they are dealt with. Write the command so it cleans up
+  after itself on failure.
+- The job runs inside the project-server, so nothing is published while the
+  project is stopped. The catch-up at start covers this.
+
+### Notes for forks
+
+- `lib/content-publish.js` must never throw out of `publishPost`, and must keep
+  committing a pathspec of only the paths the publish itself changed. It runs on
+  a checkout the owner may be working in.
+- A deferred publish is deliberately not written to history; only real attempts
+  are.
+- `lib/ignore-rule.js` is now the single place that adds a `.gitignore` line for
+  a runtime state file. New state files should use it before their first write
+  and commit the change on its own.
+- Monitor accepts `deps.extraAlerts()` — a feature contributes derived alerts
+  without the monitor knowing about it.
+
+---
+
 ## 2026-09-20 — Drafting ignores its own state file in projects that predate it
 
 ### Fixed

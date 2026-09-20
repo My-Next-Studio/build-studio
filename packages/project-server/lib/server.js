@@ -20,6 +20,7 @@ const { createRunRouter } = require('./api/run');
 const { createDeploymentRouter } = require('./api/deployment');
 const { createMonitorRouter } = require('./api/monitor');
 const { createMonitor } = require('./monitor');
+const { createPublisher, createPublishingRouter } = require('./api/publishing');
 const { createRunbooksRouter } = require('./api/runbooks');
 const { createOpsUITestsRouter } = require('./api/ops-uitests');
 const { createDemoSetupRouter } = require('./api/demo-setup');
@@ -194,9 +195,13 @@ function startServer(projectRoot, opts = {}) {
   const runRouter = createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecutionPlan);
   // One monitor per project-server, shared by the CI/CD tab and the Monitor
   // tab so a single cached `gh run list` answers both.
-  const monitor = createMonitor(config);
+  // Content publishing — off unless the project enables it. Built before the
+  // monitor so its failures can surface there as alerts.
+  const publisher = createPublisher(config);
+  const monitor = createMonitor(config, { extraAlerts: () => publisher.alerts() });
   const deploymentRouter = createDeploymentRouter(config, gitOps, { monitor });
   const monitorRouter = createMonitorRouter(config, monitor);
+  const publishingRouter = createPublishingRouter(config, publisher);
   const runbooksRouter = createRunbooksRouter(config);
   const opsUITestsRouter = createOpsUITestsRouter(config);
   const demoSetupRouter = createDemoSetupRouter(config);
@@ -213,6 +218,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', runRouter);
   app.use('/api', deploymentRouter);
   app.use('/api', monitorRouter);
+  app.use('/api', publishingRouter);
   app.use('/api', runbooksRouter);
   app.use('/api', opsUITestsRouter);
   app.use('/api', demoSetupRouter);
@@ -893,6 +899,7 @@ function startServer(projectRoot, opts = {}) {
   const tryListen = () => {
     server.listen(currentPort, listenHost, () => {
       config.port = currentPort;
+      publisher.start();
       console.log(`\nBuild Studio — ${config.name}`);
       console.log(`  Server:  http://localhost:${currentPort}`);
       console.log(`  Project: ${config.projectRoot}`);

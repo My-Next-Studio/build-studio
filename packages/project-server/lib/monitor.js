@@ -474,7 +474,14 @@ function createMonitor(config, deps = {}) {
     // Fresh per pass, so an edited lockfile is picked up on the next poll rather
     // than being remembered for the lifetime of the server.
     manifestCache = new Map();
-    if (!repo()) return { configured: false, alerts: [], counts: alertsLib.countBySeverity([]) };
+    // Alerts from outside GitHub — content publishing today. Derived on every
+    // pass like everything else here, so a fixed condition just stops appearing.
+    let extra = [];
+    try { extra = typeof deps.extraAlerts === 'function' ? (deps.extraAlerts() || []) : []; } catch (_) { extra = []; }
+    if (!repo()) {
+      const only = alertsLib.sortAlerts(extra);
+      return { configured: only.length > 0, alerts: only, counts: alertsLib.countBySeverity(only) };
+    }
     const runsC = runsCache.get();
     const alertsC = alertsCache.get();
 
@@ -501,6 +508,7 @@ function createMonitor(config, deps = {}) {
       }
     }
 
+    out.push(...extra);
     const alerts = alertsLib.sortAlerts(out);
     return {
       configured: true,

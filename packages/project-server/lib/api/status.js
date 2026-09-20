@@ -310,7 +310,12 @@ function createStatusRouter(config, gitOps, state) {
       config: { name: config.name, port: config.port },
       functions: config.functions,
       portals: config.portals || [],
-      operationsTabs: config.operations_tabs || {},
+      // The Publishing tab is shown only where content publishing is enabled, so
+      // an installation that never turns it on never sees it.
+      operationsTabs: {
+        ...(config.operations_tabs || {}),
+        ...((config.content_publishing && config.content_publishing.enabled === true) ? { publishing: true } : {}),
+      },
       hasBacklog,
     });
   });
