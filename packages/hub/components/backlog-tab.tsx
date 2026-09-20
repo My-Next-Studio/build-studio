@@ -518,10 +518,11 @@ export function BacklogTab({
             </span>
             <span style={{ flex: 1 }} />
             {/*
-              Close, not "end" — this is a terminal, and closing it is what
-              closing a terminal means. The conversation is KEPT: the next draft
-              resumes it. Its two real effects are releasing the one-at-a-time
-              lock and freeing the agent's ~300-450 MB and its pty.
+              "End draft", not "Close": what the owner is finishing is the draft
+              of this item, and "Close" read as closing the panel. The
+              conversation is KEPT: the next draft resumes it. Its two real
+              effects are releasing the one-at-a-time lock and freeing the
+              agent's ~300-450 MB and its pty.
 
               Clearing context has no button: /clear in the terminal is the
               canonical way, and a button that duplicates it is a button that can
@@ -531,9 +532,9 @@ export function BacklogTab({
               onClick={() => { void endDraft() }}
               className="wf-btn secondary"
               style={{ fontSize: 10, padding: '2px 8px' }}
-              title="Close the session. The conversation is kept — the next draft resumes it."
+              title="End this draft. The conversation is kept — the next draft resumes it, and another item can be drafted."
             >
-              Close
+              End draft
             </button>
           </div>
           {!draftMin && (
@@ -844,7 +845,7 @@ export function BacklogTab({
                   disabled={drafting === id || draftRunning !== null}
                   title={draftRunning !== null
                     ? `A drafting session is already running${draftRunning ? ` for ${draftRunning}` : ''}.`
-                      + ' One at a time per project — finish it and Close the session before drafting another item.'
+                      + ' One at a time per project — finish it and click End draft before drafting another item.'
                     : `Draft a PRD for ${id} — opens an interactive session you talk to`}
                   className="wf-btn secondary"
                   style={{

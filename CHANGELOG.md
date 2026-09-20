@@ -21,6 +21,31 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-20 — The drafting panel's Close button is now "End draft"
+
+### Changed
+
+- **`Close` on the drafting panel is relabelled `End draft`.** It does what it
+  did: exits the drafting agent, keeps the conversation for the next draft to
+  resume, and releases the one-draft-at-a-time lock. "Close" read as closing the
+  panel, which left it unclear how to get the Draft buttons back. The
+  server's refusal message no longer points at the removed `Start fresh` button.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server changed:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+Then restart the app and the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-20 — Scoped QA no longer aborts when a new UITest sits in a subfolder
 
 ### Fixed

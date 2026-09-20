@@ -197,7 +197,7 @@ function createDraftingRouter(config, state, tmuxOps) {
     if (prior && windowLive && agentRunning && !wantFresh) {
       return res.status(409).json({
         error: `A drafting session is already running${prior.lastItemId ? ` for ${prior.lastItemId}` : ''}.`
-          + ' Finish it, or use Start fresh to abandon it, before drafting another item.',
+          + ' Finish it and click End draft before drafting another item.',
         sessionRunning: true,
         lastItemId: prior.lastItemId || null,
         window: windowName,
