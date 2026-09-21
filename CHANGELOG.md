@@ -21,6 +21,40 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-21 — Agents no longer leave feedback payload files in the project
+
+### Fixed
+
+- **Untracked files such as `.qa-review-feedback.json` or
+  `.tmp-qa-feedback-<prd>.json` appeared in a project's root after a review.**
+  An agent whose feedback is long writes the JSON body to a file and posts that
+  file — sensible, since inline shell quoting mangles long payloads. Nothing
+  told it where to put the file, so it used the project directory and left it
+  there. On the default branch that is an untracked file, which blocks the next
+  execution run and gets swept into a careless commit. Every agent that reports
+  feedback is now told to create the file in the system temp directory and
+  delete it after a successful POST. The fix planner's file instruction names
+  the same location.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — delete any leftovers once; they are copies of
+feedback the server already recorded:
+
+```bash
+git status --short | grep -E '^\?\? \.?[^/]*(feedback|qa-review)[^/]*\.json$'
+```
+
+---
+
 ## 2026-09-20 — The drafting panel's Close button is now "End draft"
 
 ### Changed

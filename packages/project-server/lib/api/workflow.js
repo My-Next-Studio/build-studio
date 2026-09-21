@@ -1713,10 +1713,13 @@ ${notes ? `\n## User Notes\n\n${notes}` : ''}
 Analyze the feedback and produce a JSON fix plan. Your final output MUST include a \`\`\`json code block containing a "tasks" array — this is machine-parsed.
 
 **POSTING THE PLAN — write it to a file, then send the file.** Build the JSON in
-a file and post it with \`--data-binary @<file>\`:
+a file in the system temp directory — never in the project directory — and post
+it with \`--data-binary @<file>\`:
 
+    f="$(mktemp "\${TMPDIR:-/tmp}/bs-feedback.XXXXXX")"
     curl -s -X POST http://localhost:${config.port}/api/workflow/feedback \\
-      -H 'Content-Type: application/json' --data-binary @payload.json
+      -H 'Content-Type: application/json' --data-binary @"$f"
+    rm -f "$f"   # once the POST returned {"ok":true}
 
 Do NOT assemble the payload inline in a shell string, a heredoc, or a multi-line
 \`python3 -c\`. Quoting has silently destroyed a real plan that way: the shell
@@ -2117,6 +2120,15 @@ ${EFFICIENCY_INSTRUCTIONS}`,
           ? `\n\nWhen you are done, report your feedback by running (${plannerFeedbackHint}):\ncurl -s -X POST http://localhost:${dashboardPort}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"${agent.role}","step":"${resolvedStep}"${taskIndexParam},"feedback":"<paste full plan here>"}'`
           : `\n\nWhen you are done, report your feedback by running:\ncurl -s -X POST http://localhost:${dashboardPort}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"${agent.role}","step":"${resolvedStep}"${taskIndexParam},"feedback":"<your structured feedback here>"}'`
         : '';
+      // Agents with long feedback write the JSON body to a file and post that —
+      // the right call, inline quoting has destroyed payloads before. Left to
+      // pick the location themselves they used the project root, and the files
+      // stayed behind as untracked litter on the default branch
+      // (.qa-review-feedback.json, .tmp-qa-feedback-<prd>.json). So name the
+      // place: the OS temp dir is outside every repo and needs no ignore rule.
+      const feedbackFileNote = agent.reportFeedback
+        ? `\n\nIf the feedback is too long or too full of quotes to pass inline, write the JSON body to a file and send it with \`--data-binary @<file>\` instead of \`-d\`. Put that file in the system temp directory — \`f="$(mktemp "\${TMPDIR:-/tmp}/bs-feedback.XXXXXX")"\` — NEVER in the project directory, and delete it once the POST returns \`{"ok":true}\`. A payload file left in the repo is an untracked file on the branch, which blocks the next run.`
+        : '';
 
       // Build feedback history from previous rounds
       // A re-reviewing role gets its OWN findings + PM's fix reports instead of
@@ -2207,7 +2219,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       if (translated.translated.length) {
         console.log(`[workflow] translated claude-only capabilities for ${agent.role} (${agentCli}): ${translated.translated.join(', ')}`);
       }
-      const prompt = interpolate(`${translated.text}${extraInstructions}${inlinedSkills}${learningsResult.text}${history}${feedbackCurl}`);
+      const prompt = interpolate(`${translated.text}${extraInstructions}${inlinedSkills}${learningsResult.text}${history}${feedbackCurl}${feedbackFileNote}`);
 
       const baseWindow = (agent.window || agent.role).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 12).replace(/-+$/, '');
       const windowName = wf.round > 1 ? `${baseWindow}-r${wf.round}` : baseWindow;
