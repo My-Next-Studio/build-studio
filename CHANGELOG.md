@@ -21,6 +21,47 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-22 — Approving a QA round cap no longer loops back into fix planning
+
+### Fixed
+
+- **Approving the fix-loop cap after `qa_validation` sent the run back into
+  `fix_plan` with the same findings, instead of moving on.** The cap's approve
+  delegated to QA's own approve, whose strict gate re-read the round's failing
+  test counts and refused. That left the run on a completed `qa_validation`
+  step, which auto-advance evaluated from the same stale report and routed to
+  `fix_plan` again — no fresh QA run, and a fix planner handed findings it had
+  already seen fixed. It either invented "prove it" tasks or, honestly,
+  returned none and tripped the 0-task gate. Approving the cap now passes the
+  operator override the strict gate expects, and is logged on the step's
+  `overrides` as well as `wf.capOverrides`.
+- **The 0-task fix-plan gate over-counted findings.** A QA report with
+  `Blocking: 7` and `9 failures` was reported as 16 blocking findings. The
+  blocking line is the triaged count; the raw failure count is only used when
+  there is no blocking line.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do.
+
+### Known issues
+
+- "Another round" at a `qa_validation` cap re-runs QA against HEAD, which is
+  the right choice when the last fix round claims green. Approving the cap
+  accepts the outstanding findings and does NOT re-run the suite: the branch
+  merges on the last fix round's own scoped verification. Pick "Another
+  round" when what is missing is proof, not fixes.
+
+---
+
 ## 2026-09-21 — Agents no longer leave feedback payload files in the project
 
 ### Fixed

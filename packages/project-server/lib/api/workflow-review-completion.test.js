@@ -151,3 +151,39 @@ test('the generated feedback curl carries the step it belongs to', () => {
     assert.match(c, /"step":"\$\{(resolvedStep|wf\.currentStep)\}"/, `curl without a step stamp: ${c.slice(0, 120)}`);
   }
 });
+
+// ── execution-run cap ────────────────────────────────────────────────────────
+//
+// Approving the fix-loop cap in an execution run delegates to the source
+// step's own approve. For qa_validation that approve carries a strict gate
+// which re-reads the round's failing test counts and refuses — leaving the
+// run parked on a completed qa_validation step that the auto-advance tick then
+// evaluates from the same stale report and sends back into fix_plan. The
+// planner is handed findings it has already seen fixed. fazon, 2026-09-22:
+// two rounds burnt this way before the 0-task gate halted it.
+
+function executionCapRegion() {
+  const i = SRC.indexOf("const source = wf.fixSource || wf.returnTo || 'code_review';");
+  assert.ok(i > 0, 'execution cap handler not found');
+  return SRC.slice(i, i + 2200);
+}
+
+test('approving the execution cap tells the delegated approve it is an operator override', () => {
+  const region = executionCapRegion();
+  const approve = region.indexOf("if (action === 'approve' || action === 'skip')");
+  assert.ok(approve > 0);
+  const branch = region.slice(approve, approve + 1400);
+  assert.match(branch, /override: true/);
+  // The delegate must receive the override body, not the raw one.
+  assert.match(branch, /handleExecutionAdvance\(wf, 'approve', notes, res, capBody\)/);
+  assert.doesNotMatch(branch, /handleExecutionAdvance\(wf, 'approve', notes, res, body\)/);
+});
+
+test('the 0-task gate counts triaged blocking findings, not blocking plus failing tests', () => {
+  const i = SRC.indexOf('const totalFindings = cleanApproval ? 0 :');
+  assert.ok(i > 0, 'totalFindings not found');
+  const line = SRC.slice(i, SRC.indexOf('\n', i));
+  // A report with `Blocking: 7` and `9 failures` has 7 findings, not 16.
+  assert.doesNotMatch(line, /failureCount \+ blockingCount/);
+  assert.match(line, /blockingMatch \? blockingCount : failureCount/);
+});

@@ -6673,7 +6673,20 @@ Fix only the issues raised. Commit your changes.`,
         });
         wf.currentStep = source;
         state.saveWorkflow(wf);
-        return handleExecutionAdvance(wf, 'approve', notes, res, body);
+        // Approving the cap IS the operator's decision to accept what the source
+        // step still flags. Say so to the delegated approve: qa_validation's
+        // strict gate otherwise re-reads the round's failing counts, refuses,
+        // and leaves the workflow parked on a completed qa_validation step —
+        // which the auto-advance tick then evaluates from that same stale
+        // report and routes back into fix_plan. The planner receives findings
+        // it has already seen fixed and either invents "prove it" tasks or,
+        // honestly, returns none (fazon, 2026-09-22: two rounds burnt this way
+        // before the 0-task gate stopped it).
+        const capBody = {
+          ...body, override: true,
+          note: body.note || body.overrideReason || notes || `accepted the outstanding ${source} findings at the round cap (round ${rounds})`,
+        };
+        return handleExecutionAdvance(wf, 'approve', notes, res, capBody);
       }
       return res.status(400).json({
         error: `The ${source} fix loop reached its round cap at round ${rounds}. `
@@ -9470,7 +9483,11 @@ Before adding new entries, scan existing files in docs/learnings/:
           // paired with `Blocking: N>0`, still counts as findings.
           const approvedYes = /\*\*Approved:\*\*\s*yes\b/i.test(sourceFeedback);
           const cleanApproval = approvedYes && !approvedNo && blockingCount === 0;
-          const totalFindings = cleanApproval ? 0 : (failureCount + blockingCount);
+          // A QA report that says `Blocking: 7` and `Executed 647 tests, with 9
+          // failures` has 7 findings, not 16: the failing tests ARE the
+          // findings, already triaged. Only fall back to the raw failure count
+          // when the report carries no blocking line at all.
+          const totalFindings = cleanApproval ? 0 : (blockingMatch ? blockingCount : failureCount);
           // `Approved: no` alone is NOT a fix-required signal. A review step
           // can disapprove because items are UNTESTABLE (pending owner action,
           // external upload, manual device install) — those produce zero
