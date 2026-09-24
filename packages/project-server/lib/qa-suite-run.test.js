@@ -701,3 +701,22 @@ test('uiTestIdentifiers skips support files with no XCTestCase, keeps unreadable
     ['AppUITests/RealUITests', 'AppUITests/Gone'],
   );
 });
+
+test('uiTestIdentifiers lists every test class a file declares, not the file name', () => {
+  const { uiTestIdentifiers } = require('./qa-suite-run');
+  const src = {
+    'ios/AppUITests/BasisUITests.swift': [
+      'import XCTest',
+      'private enum Kit { static func tap() {} }',
+      'final class TargetsStepUITests: XCTestCase {}',
+      '@MainActor',
+      'final class EditorUITests: XCTestCase {}',
+      '@MainActor final class SeededUITests: XCTestCase {}',
+    ].join('\n'),
+    'ios/AppUITests/Base.swift': 'class PRD024BaseUITestCase: XCTestCase {}\nfinal class ScreenUITests: PRD024BaseUITestCase {}',
+  };
+  assert.deepStrictEqual(
+    uiTestIdentifiers(Object.keys(src), { readFile: (f) => src[f] }),
+    ['AppUITests/TargetsStepUITests', 'AppUITests/EditorUITests', 'AppUITests/SeededUITests', 'AppUITests/ScreenUITests'],
+  );
+});

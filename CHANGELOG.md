@@ -21,6 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-24 — Scoped QA runs every test class a changed UITest file declares
+
+### Fixed
+
+- **QA halted with "the scoped XCUITest step ran 0 tests" when a changed UITest
+  file declared classes not named after the file.** QA scoped the run to
+  `<UITestTarget>/<file name>`, so a file such as `BasisUITests.swift` holding
+  four classes (`TargetsStepUITests`, `EditorUITests`, …) produced a filter
+  that matched nothing. xcodebuild reports that as a pass ("Executed 0
+  tests"), and the new tests never ran. The class names are now read from the
+  file: every class subclassing `XCTestCase`, or a project base class named
+  `…TestCase`, is scoped. Base classes themselves are left out, and a file with
+  no test class (shared support code) adds nothing.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-22 — Approving a QA round cap no longer loops back into fix planning
 
 ### Fixed

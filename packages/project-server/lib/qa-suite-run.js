@@ -131,26 +131,45 @@ function buildXcodebuildArgs({ project, scheme, destination, parallelTesting, on
  * parent directory. A test filed in a subfolder
  * (`ios/AppUITests/Onboarding/FooUITests.swift`) used to yield
  * `Onboarding/FooUITests`; xcodebuild rejects an unknown target while loading
- * the project, so the whole run — unit tests included — aborted in under a
- * second with zero tests executed.
+ * the project, so the whole run aborted in under a second with zero tests.
  *
- * Files that declare no XCTestCase (shared support code living beside the
- * tests) are skipped when `readFile` is given: they name no runnable class.
+ * The class is read from the file, not assumed from its name. A file may
+ * declare several test classes, none of them named after the file
+ * (`PRD143MaintenanceBasisUITests.swift` declares four); `-only-testing:` on
+ * the file name then matches nothing and xcodebuild reports "Executed 0
+ * tests" as a pass. A test class is one that subclasses `XCTestCase` or a
+ * project base class named `…TestCase`; the base classes themselves are left
+ * out. A file with no such class (shared support code) contributes nothing.
+ * Only an unreadable file falls back to its name: dropping a real test
+ * silently is the worse error.
  */
+const TEST_CLASS_DECL = /^[ \t]*(?:@\w+(?:\([^)]*\))?[ \t]+)*(?:(?:final|open|public|internal|private|fileprivate)[ \t]+)*class[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*:[ \t]*([A-Za-z_][A-Za-z0-9_.]*)/gm;
+
+function testClassesIn(src) {
+  const out = [];
+  for (const m of src.matchAll(TEST_CLASS_DECL)) {
+    const [, name, base] = m;
+    const baseName = base.split('.').pop();
+    if (baseName !== 'XCTestCase' && !/TestCase$/.test(baseName)) continue;
+    if (/TestCase$/.test(name)) continue; // a base class, not a suite
+    out.push(name);
+  }
+  return out;
+}
+
 function uiTestIdentifiers(files, { readFile = null } = {}) {
   const out = [];
+  const add = (id) => { if (!out.includes(id)) out.push(id); };
   for (const f of files) {
     const parts = f.split('/');
     const target = parts.slice(0, -1).find((seg) => /UITests$/.test(seg));
     if (!target) continue;
+    let src = null;
     if (readFile) {
-      let src = null;
       try { src = readFile(f); } catch (_) { src = null; }
-      // Unreadable: keep it. Dropping a real test silently is the worse error.
-      if (src !== null && !/\bXCTestCase\b/.test(src)) continue;
     }
-    const id = `${target}/${path.basename(f, '.swift')}`;
-    if (!out.includes(id)) out.push(id);
+    if (src === null) { add(`${target}/${path.basename(f, '.swift')}`); continue; }
+    for (const cls of testClassesIn(src)) add(`${target}/${cls}`);
   }
   return out;
 }
