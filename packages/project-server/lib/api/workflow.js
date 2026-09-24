@@ -4783,6 +4783,13 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       const step = wf.steps[wf.currentStep];
       if (!step) return res.status(400).json({ error: 'no step to relaunch' });
       console.log(`[workflow] Relaunching step=${wf.currentStep}`);
+      // A relaunch is the owner's "fixed it, try again", the same as re-enabling
+      // auto-advance. Without this the refusal pause from the PREVIOUS attempt
+      // survives it: the relaunched step finishes, the tick silently skips it
+      // ("paused after 3 refusals" is logged only once, back when it happened),
+      // and the run sits with a done agent and no error (fazon, 2026-09-24).
+      if (_aaReject.step === wf.currentStep) _aaReject = { step: null, count: 0, error: null };
+      if (step.autoAdvanceError) delete step.autoAdvanceError;
       // Stop a server-run test suite first.
       //
       // It is OUR child, not an agent, so the tmux window sweep below never

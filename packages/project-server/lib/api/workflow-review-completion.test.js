@@ -187,3 +187,12 @@ test('the 0-task gate counts triaged blocking findings, not blocking plus failin
   assert.doesNotMatch(line, /failureCount \+ blockingCount/);
   assert.match(line, /blockingMatch \? blockingCount : failureCount/);
 });
+
+test('relaunching a step clears the auto-advance refusal pause for it', () => {
+  // Otherwise the pause from the previous attempt outlives the relaunch and the
+  // tick silently skips the fresh result (fazon, 2026-09-24).
+  const i = SRC.indexOf("if (action === 'relaunch') {");
+  assert.ok(i > 0, 'relaunch handler not found');
+  const branch = SRC.slice(i, i + 1200);
+  assert.match(branch, /_aaReject = \{ step: null, count: 0, error: null \}/);
+});

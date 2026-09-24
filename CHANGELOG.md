@@ -21,7 +21,7 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-09-24 — Scoped QA runs the right UITest classes, and finishes promptly on failure
+## 2026-09-24 — Scoped QA runs the right UITest classes, finishes promptly, and moves on after a relaunch
 
 ### Fixed
 
@@ -30,6 +30,10 @@ that move underneath you without your having edited anything.
   sysdiagnose (`simctl diagnose`, 600 s timeout) before exiting, at 0% CPU,
   with the results already in the log. The server-run suite now passes
   `-collect-test-diagnostics never`.
+- **A relaunched step finished but the run did not move on, with no error.**
+  After three refused auto-advances on a step, auto-advance pauses that step.
+  Relaunching the step did not lift the pause, so the fresh result was skipped
+  silently. Relaunch now clears it, as re-enabling auto-advance already did.
 - **QA halted with "the scoped XCUITest step ran 0 tests" when a changed UITest
   file declared classes not named after the file.** QA scoped the run to
   `<UITestTarget>/<file name>`, so a file such as `BasisUITests.swift` holding
