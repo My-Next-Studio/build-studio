@@ -720,3 +720,11 @@ test('uiTestIdentifiers lists every test class a file declares, not the file nam
     ['AppUITests/TargetsStepUITests', 'AppUITests/EditorUITests', 'AppUITests/SeededUITests', 'AppUITests/ScreenUITests'],
   );
 });
+
+test('buildXcodebuildArgs turns off the post-failure sysdiagnose', () => {
+  const { buildXcodebuildArgs } = require('./qa-suite-run');
+  const args = buildXcodebuildArgs({ project: 'ios/A.xcodeproj', scheme: 'A', destination: 'platform=iOS Simulator,id=X' });
+  const i = args.indexOf('-collect-test-diagnostics');
+  assert.ok(i > 0, 'flag missing — one failing test would add up to 10 minutes of simctl diagnose');
+  assert.equal(args[i + 1], 'never');
+});

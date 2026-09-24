@@ -21,10 +21,15 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-09-24 — Scoped QA runs every test class a changed UITest file declares
+## 2026-09-24 — Scoped QA runs the right UITest classes, and finishes promptly on failure
 
 ### Fixed
 
+- **A QA run with one failing test sat for up to ten minutes after the last
+  test, looking hung.** On any failure xcodebuild collects a simulator
+  sysdiagnose (`simctl diagnose`, 600 s timeout) before exiting, at 0% CPU,
+  with the results already in the log. The server-run suite now passes
+  `-collect-test-diagnostics never`.
 - **QA halted with "the scoped XCUITest step ran 0 tests" when a changed UITest
   file declared classes not named after the file.** QA scoped the run to
   `<UITestTarget>/<file name>`, so a file such as `BasisUITests.swift` holding

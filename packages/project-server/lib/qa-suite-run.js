@@ -111,6 +111,12 @@ function buildXcodebuildArgs({ project, scheme, destination, parallelTesting, on
   }
   const args = ['test', '-project', project, '-scheme', scheme, '-destination', destination];
   args.push(...parallelArgs(parallelTesting));
+  // No sysdiagnose on failure. With the default (on-failure) a single failing
+  // test makes xcodebuild run `simctl diagnose --timeout=600` after the last
+  // test: up to ten silent minutes at 0% CPU with every result already in the
+  // log, which reads as a hung run (fazon, 2026-09-24). Nobody reads those
+  // bundles here; the failure excerpt and the log are what the QA agent uses.
+  args.push('-collect-test-diagnostics', 'never');
   for (const t of onlyTesting) {
     if (!t) continue;
     // A scope target is built from the scheme too (`<Scheme>Tests`), so it
