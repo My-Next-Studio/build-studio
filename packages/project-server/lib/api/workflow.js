@@ -20,6 +20,7 @@ const exitRecovery = require('../exit-recovery');
 const agentSkills = require('../agent-skills');
 const gateBlocked = require('../gate-blocked');
 const qaSuite = require('../qa-suite-run');
+const { reconcilePrdPath } = require('../prd-path');
 const { suggestBuilderRole } = require('../builder-role-hint');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
@@ -4778,6 +4779,13 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     const wf = state.loadWorkflow();
     if (!wf) return res.status(404).json({ error: 'no active workflow' });
 
+    // Follow a PRD renamed mid-run (see prd-path.js) before any step reads it.
+    const moved = reconcilePrdPath(wf, { projectRoot, docsPath: config.docsPath });
+    if (moved.changed) {
+      console.log(`[workflow] PRD moved: ${moved.from} → ${moved.to} (per the backlog item's prd: field)`);
+      state.saveWorkflow(wf);
+    }
+
     // --- Relaunch: reset current step and re-enter it ---
     if (action === 'relaunch') {
       const step = wf.steps[wf.currentStep];
@@ -6515,6 +6523,18 @@ Fix only the issues raised. Commit your changes.`,
       // via the designer role between the review and execution workflows.
       allSpecs = allSpecs.filter(s => !(/\.pen\b/i.test(s.fileCell) || /\.pen\b/i.test(s.desc)));
 
+      if (allSpecs.length === 0 && wf.prdPath && !fs.existsSync(path.join(projectRoot, wf.prdPath))) {
+        // Not "the PM forgot §10": the file is not there to read. Say so, or the
+        // owner goes looking for a missing table in a PRD that has one.
+        wf.steps.companion_specs = {
+          status: 'blocked',
+          error: `The PRD file ${wf.prdPath} does not exist, so its §10 Companion Specs could not be read. `
+            + `If the PRD was renamed, set the backlog item's prd: field to the new path and relaunch this step.`,
+        };
+        state.saveWorkflow(wf);
+        broadcast('workflow-updated', {});
+        return res.json({ workflow: wf });
+      }
       if (allSpecs.length === 0) {
         // No §10 companion specs found. This was historically a silent
         // skip-to-completed path, but that masks a PM authoring oversight:

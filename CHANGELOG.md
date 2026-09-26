@@ -21,6 +21,33 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-26 — A PRD renamed mid-run no longer blocks companion specs
+
+### Fixed
+
+- **A review run blocked on "No §10 Companion Specs section found in the PRD"
+  when the PRD had one.** The run records its PRD path when it starts. If the
+  PRD is renamed while the run is in flight (renumbered after colliding with
+  another PRD, say) and the backlog item's `prd:` field is updated, the run
+  kept reading the old path, found no file, and reported it as a missing
+  section. Every workflow action now follows the backlog item's `prd:` field
+  when the recorded file is gone. When there is nothing to follow, the step
+  says the file does not exist instead of blaming the PM for a missing table.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-26 — A resumed draft is told what changed since the last one
 
 ### Added
