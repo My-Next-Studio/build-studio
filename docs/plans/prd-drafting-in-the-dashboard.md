@@ -1,6 +1,8 @@
 # Plan: PRD drafting as a first-class, interactive step
 
-> **Status: proposed 2026-09-06.**
+> **Status: partially implemented 2026-09-26** (proposed 2026-09-06).
+> Increments 1, 2 (Claude) and 4 are built; see *Where this stands* at the end.
+> Increment 2 for Codex and OpenCode is open; increment 3 is dropped.
 >
 > Owner request: a **Draft** button on backlog items in status `Backlog`,
 > alongside Review and Execute, opening a session the owner can talk to — and
@@ -239,3 +241,67 @@ retrofitting later.
 - Abandoning a draft leaves the item in `Backlog` with no PRD reference.
 - A second draft in the same session shows the delta since the first, and names
   any ADR superseded in between.
+
+## Where this stands (2026-09-26)
+
+### Built
+
+- **Increment 1 — the button and the session.** Draft appears on `Backlog`
+  items, and on nothing else: not on Bugs (they go straight to a bugfix run and
+  carry no PRD), and not on items that already reference a PRD. The session runs
+  in its own tmux window beside the workflow slot, so review and execution
+  continue while a draft is open. The terminal is a panel above the backlog that
+  can be minimised and maximised; `End draft` exits the agent and keeps the
+  conversation.
+- **Increment 2, Claude only — continuity.** One drafting conversation per
+  project, pinned with `--session-id` at launch and continued with `--resume`.
+  The next Draft resumes it with a short "next item" prompt instead of the full
+  briefing.
+- **Increment 4 — delta re-grounding.** A resumed draft is told what changed
+  since the session's previous draft (`lib/draft-delta.js`): decisions added to
+  the decisions log, and ADRs, PRDs and backlog items that are new or whose
+  status changed, with the old status beside the new one. A body edit that
+  leaves the status alone is counted, not listed, because one sweeping commit
+  would otherwise bury the one superseded ADR the delta exists to surface. The
+  session's own drafts are listed and tagged rather than hidden: a review round
+  that revised one of them is news to it. The source is the committed record
+  only.
+
+### Dropped
+
+- **Increment 3 — skill distribution.** The problem it addressed, a non-Claude
+  agent with no `draft_prd` skill behind the button, is solved another way: the
+  skill's definition is inlined into the opening prompt for Codex and OpenCode
+  (`agent-skills.js`). Installing it into each CLI's own skill directory would
+  add a second copy to keep in sync, for no behaviour the inlining lacks.
+  Revisit only if an inlined definition proves insufficient in practice.
+
+### Open
+
+- **Continuity on Codex and OpenCode.** Neither lets the id be chosen at launch,
+  so both need it read back (for Codex, from the pane log, as the telemetry work
+  already does) before `codex resume <id>` / `opencode --session <id>` can be
+  used. Until then every Draft on those CLIs starts a fresh conversation, and the
+  delta never applies there.
+- **Scorecard and idle reaping** remain as described under *Other
+  considerations*. Neither has caused a problem yet.
+
+### Decisions taken
+
+1. **Session boundary: manual.** The owner cuts the session with `/clear` in the
+   terminal. No release or phase boundary is enforced, and there is no Start
+   fresh button — a button that duplicates `/clear` is one that can disagree
+   with it. The delta is what makes an uncut session safe.
+2. **State: a third file**, `.build-studio/draft-state.json`, gitignored and
+   ensured ignored before the first write.
+3. **Redrafting over an existing PRD: not offered.** The button is hidden on
+   items with a PRD, and the route refuses them.
+4. **Scorecard:** still open.
+5. **CLI or model change mid-session:** a model change resumes the same
+   conversation under the new model, unmarked on the PRD. A switch to a CLI that
+   cannot resume starts a fresh one. Neither is offered as a choice yet.
+6. **OpenCode's unpinnable id:** matters, and is the open item above.
+7. **One draft at a time per project.** Sending a second item into a live
+   conversation typed into whatever the agent was showing — a menu included —
+   so a running session refuses another Draft until it is ended.
+

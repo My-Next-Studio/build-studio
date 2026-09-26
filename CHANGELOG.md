@@ -21,6 +21,48 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-26 — A resumed draft is told what changed since the last one
+
+### Added
+
+- **Drafting re-grounds a resumed session on what changed in the project.**
+  The drafting conversation is kept across items and cleared by hand, so it can
+  be weeks old, and everything it read is a snapshot. When Draft resumes it, the
+  opening prompt now lists what changed since that session's previous draft:
+  - new entries in the decisions log (`docs/project-state.md` → Key Decisions
+    Log);
+  - ADRs, PRDs and backlog items that are new or whose status changed, with the
+    old status next to the new one, so "Superseded by ADR-…" stands out.
+
+  Edits that leave a document's status unchanged are counted rather than
+  listed. The session's own earlier drafts are included but tagged. Only
+  committed history counts. A fresh session gets no delta, since it reads
+  everything anyway. The delta currently applies only to Claude, the one CLI
+  whose drafting sessions resume.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do. Projects that keep ADRs in
+`docs/adrs/`, PRDs in `docs/prds/`, backlog items in `docs/backlog/` and a
+"Key Decisions Log" table in `docs/project-state.md` get the full delta. Other
+layouts get whatever parts match, and nothing breaks.
+
+### Notes for forks
+
+- `lib/draft-delta.js` reads the committed record only (`git log --since`, and
+  the tree at the last commit before that time). Keep it that way: uncommitted
+  edits are the owner's work in progress, not a change the project has made.
+
+---
+
 ## 2026-09-26 — A CI-fix PR carries the fix, not your unpushed commits
 
 ### Fixed

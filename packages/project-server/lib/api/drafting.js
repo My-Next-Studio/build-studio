@@ -15,6 +15,7 @@ const {
 } = require('@build-studio/shared/cli');
 const { readItem } = require('../backlog');
 const agentSkills = require('../agent-skills');
+const { computeDraftDelta, formatDraftDelta } = require('../draft-delta');
 
 /**
  * Drafting runs OUTSIDE the workflow slot — see lib/drafting.js for why that is
@@ -210,8 +211,22 @@ function createDraftingRouter(config, state, tmuxOps) {
       ? prior.cliSessionId
       : (canPinSession(cli) ? crypto.randomUUID() : null);
 
+    // A resumed session knows the project as it was when it last read it. Tell
+    // it what has changed since its previous draft, so it re-reads the parts
+    // that are stale instead of drafting against its memory of them. A fresh
+    // session reads everything anyway and gets no delta. See draft-delta.js.
+    let delta = '';
+    if (resuming && prior.lastUsedAt) {
+      try {
+        delta = formatDraftDelta(computeDraftDelta({
+          projectRoot, docsPath: config.docsPath, since: prior.lastUsedAt, own: prior.items || [],
+        }), prior.lastUsedAt);
+      } catch (e) {
+        console.warn(`[draft] could not compute the change delta: ${e.message}`);
+      }
+    }
     const prompt = resuming
-      ? continuePrompt({ itemId, title: item && item.title })
+      ? continuePrompt({ itemId, title: item && item.title }) + delta
       : draftPrompt({ itemId, title: item && item.title });
     const inlined = agentSkills.inlineReferencedDefinitions(prompt, { cli, roots: [projectRoot], fs });
     if (inlined) {
@@ -263,7 +278,7 @@ function createDraftingRouter(config, state, tmuxOps) {
       resumable: canPinSession(cli),
     };
     saveDraftState(config.statePath, { ...state, sessionName, session });
-    res.json({ ok: true, sessionName, mode: resuming ? 'resumed' : 'fresh', ...session });
+    res.json({ ok: true, sessionName, mode: resuming ? 'resumed' : 'fresh', deltaLines: delta ? delta.split('\n').filter((l) => l.startsWith('- ')).length : 0, ...session });
   });
 
   return router;
