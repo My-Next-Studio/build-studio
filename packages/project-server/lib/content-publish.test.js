@@ -204,3 +204,58 @@ test('what a failed command left behind is reported, not removed', async () => {
   assert.ok(fs.existsSync(path.join(p.root, 'content/blog/half.md')), 'left in place');
   assert.match(fs.readFileSync(r.logFile, 'utf8'), /left in the working tree/);
 });
+
+// ── after_push_command: for a project whose push does not deploy ─────────────
+
+test('after_push_command runs after the push, and sees the pushed commit', async () => {
+  const p = makeProject();
+  const envFile = path.join(p.base, 'after-push.env');
+  const [post] = cp.scanStaged(p.root, 'docs/marketing/content/staged');
+  const r = await publish(p, post, {
+    after_push_command: `printf '%s|%s|%s|%s' "$BUILD_STUDIO_PUBLISH_SHA" "$BUILD_STUDIO_PUBLISH_ID" "$BUILD_STUDIO_PUBLISH_BRANCH" "$BUILD_STUDIO_PUBLISH_URLS" > '${envFile}'`,
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.deploy, 'started');
+  const [sha, id, branch, urls] = fs.readFileSync(envFile, 'utf8').split('|');
+  // The commit it sees is the one ORIGIN has — i.e. it ran after the push.
+  assert.equal(sha, git(p.remote, 'rev-parse', 'main').trim());
+  assert.match(git(p.remote, 'log', '-1', '--format=%s', 'main'), /^content: publish/);
+  assert.equal(id, 'a-post');
+  assert.equal(branch, 'main');
+  assert.match(urls, /https:\/\/example\.test\/blog\/a-post/);
+});
+
+test('a failing after_push_command reports a failed deploy, not a failed publish', async () => {
+  const p = makeProject();
+  const [post] = cp.scanStaged(p.root, 'docs/marketing/content/staged');
+  const r = await publish(p, post, { after_push_command: 'echo "gh: not logged in" >&2; exit 4' });
+  assert.equal(r.ok, true, 'committed and pushed — rerunning would double-publish');
+  assert.equal(r.state, 'published');
+  assert.equal(r.deploy, 'failed');
+  assert.match(r.deployReason, /exited 4/);
+  assert.match(fs.readFileSync(r.logFile, 'utf8'), /gh: not logged in/);
+  assert.match(git(p.remote, 'log', '-1', '--format=%s', 'main'), /^content: publish/);
+});
+
+test('without after_push_command nothing extra runs and no deploy field is set', async () => {
+  const p = makeProject();
+  const [post] = cp.scanStaged(p.root, 'docs/marketing/content/staged');
+  const r = await publish(p, post);
+  assert.equal(r.ok, true);
+  assert.equal('deploy' in r, false);
+});
+
+test('a failed deploy raises its own Monitor alert on the published post', async () => {
+  const p = makeProject();
+  const pub = createPublisher({
+    projectRoot: p.root, name: 'proj', statePath: p.statePath, logsPath: p.logsPath,
+    content_publishing: { enabled: true, command: 'sh scripts/publish.sh', verify_url: false, after_push_command: 'exit 1' },
+  });
+  const [post] = cp.scanStaged(p.root, 'docs/marketing/content/staged');
+  const r = await pub.publishOne(post, 'manual');
+  assert.equal(r.deploy, 'failed');
+  const alerts = pub.alerts();
+  assert.equal(alerts.length, 1);
+  assert.equal(alerts[0].kind, 'deploy-failed');
+  assert.match(alerts[0].detail, /do not publish it again/);
+});

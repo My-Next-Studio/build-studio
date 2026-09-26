@@ -144,6 +144,15 @@ function createPublisher(config, deps = {}) {
           url: null, since: p.lastAttempt.at,
         });
       }
+      if (p.state === 'published' && p.lastAttempt && p.lastAttempt.deploy === 'failed') {
+        out.push({
+          source: 'publishing', kind: 'deploy-failed', project: projectName, id: `publishing:deploy-failed:${p.id}`,
+          severity: 'high', title: `Published but the deploy did not start: ${p.title || p.id}`,
+          detail: `${p.lastAttempt.deployReason || 'after_push_command failed'}. The post is committed and pushed — `
+            + `do not publish it again; start the deploy by hand.${p.lastAttempt.logFile ? ` Log: ${p.lastAttempt.logFile}` : ''}`,
+          url: null, since: p.lastAttempt.at,
+        });
+      }
       if (p.verify && p.verify.state === 'not-live') {
         out.push({
           source: 'publishing', kind: 'not-live', project: projectName, id: `publishing:not-live:${p.id}`,

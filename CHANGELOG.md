@@ -23,6 +23,22 @@ that move underneath you without your having edited anything.
 
 ## 2026-09-26 — The Publishing tab shows the queue before publishing is switched on
 
+### Added
+
+- **`content_publishing.after_push_command`: start a deploy after a publish.**
+  For a project whose push does not deploy (production behind a manual
+  `workflow_dispatch`), a scheduled post used to be pushed on time and then wait
+  for someone to press Deploy, while the live check raised an alert. The new
+  command runs from the project root after a successful push, for example
+  `gh workflow run ci.yml --ref main`. It cannot go in `command`: that runs
+  before the commit, so a deploy started there would ship the previous commit.
+  It receives `BUILD_STUDIO_PUBLISH_ID`, `_SHA` (the pushed commit), `_BRANCH`
+  and `_URLS`, and has its own timeout, `after_push_timeout_minutes` (default
+  5). If it fails, the post stays published, since it is committed and pushed.
+  The tab shows "deploy failed" with the log, and Monitor raises a
+  `deploy-failed` alert that says to start the deploy by hand rather than
+  publish again.
+
 ### Changed
 
 - **Operations → Publishing now appears as soon as `content_publishing` is

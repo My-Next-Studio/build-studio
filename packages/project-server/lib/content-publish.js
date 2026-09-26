@@ -50,6 +50,14 @@ const DEFAULTS = {
   // Verify the live URL answers after the push, and how long to keep trying.
   verify_url: true,
   verify_timeout_minutes: 20,
+  // Run after a successful push, from the project root — for a project whose
+  // push does not deploy (a manual workflow_dispatch, say). It cannot live in
+  // `command`: that runs BEFORE the commit, so a deploy started there ships the
+  // previous tip. Env: BUILD_STUDIO_PUBLISH_ID, _SHA (the pushed commit),
+  // _BRANCH, _URLS (space-separated). A failure here does not unpublish: the
+  // post is committed and pushed, so it is reported as a failed deploy.
+  after_push_command: null,
+  after_push_timeout_minutes: 5,
 };
 
 function resolveConfig(config) {
@@ -335,7 +343,36 @@ async function publishPost({ projectRoot, statePath, logsPath, defaultBranch, cf
     return finish({ ok: false, state: 'push-failed', reason: 'committed locally, but git push failed — see log', urls: Object.fromEntries(urls) });
   }
 
-  return finish({ ok: true, state: 'published', urls: Object.fromEntries(urls), publishedAt, verify: cfg.verify_url ? 'pending' : 'skipped' });
+  let deploy = null;
+  if (cfg.after_push_command) {
+    const sha = (await git(projectRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+    say(`$ ${cfg.after_push_command}`);
+    const d = await run('/bin/sh', ['-c', cfg.after_push_command], {
+      cwd: projectRoot,
+      timeout: cfg.after_push_timeout_minutes * 60 * 1000,
+      env: {
+        ...process.env,
+        BUILD_STUDIO_PUBLISH_ID: post.id,
+        BUILD_STUDIO_PUBLISH_SHA: sha,
+        BUILD_STUDIO_PUBLISH_BRANCH: defaultBranch,
+        BUILD_STUDIO_PUBLISH_URLS: [...urls.values()].join(' '),
+      },
+    });
+    say('--- after_push stdout ---'); say(d.stdout.trimEnd());
+    say('--- after_push stderr ---'); say(d.stderr.trimEnd());
+    say(`--- after_push exit ${d.code}${d.timedOut ? ' (timed out)' : ''} ---`);
+    deploy = d.code === 0
+      ? { state: 'started' }
+      : { state: 'failed', reason: d.timedOut ? `after_push_command timed out after ${cfg.after_push_timeout_minutes} min` : `after_push_command exited ${d.code}` };
+  }
+
+  // Still ok: the post is committed, pushed and stamped. A failed deploy is
+  // reported beside it — rerunning the publish would double-publish.
+  return finish({
+    ok: true, state: 'published', urls: Object.fromEntries(urls), publishedAt,
+    verify: cfg.verify_url ? 'pending' : 'skipped',
+    ...(deploy ? { deploy: deploy.state, ...(deploy.reason ? { deployReason: deploy.reason } : {}) } : {}),
+  });
 }
 
 module.exports = {

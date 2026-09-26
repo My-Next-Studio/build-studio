@@ -16,6 +16,7 @@ interface StagedFile { path: string; lang: string | null; status: string | null 
 interface Attempt {
   at: string; id: string; title?: string; trigger: string; ok: boolean; state: string
   reason?: string; logFile?: string | null; urls?: Record<string, string>; dirtyPaths?: string[]
+  deploy?: 'started' | 'failed'; deployReason?: string
 }
 interface Post {
   id: string; title: string | null; status: string; publish_date: string | null
@@ -189,6 +190,12 @@ export function PublishingTab() {
                   <td style={TD}>{p.posted_to ? <a href={p.posted_to} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{p.posted_to}</a> : '—'}</td>
                   <td style={{ ...TD, whiteSpace: 'nowrap', color: p.verify?.state === 'not-live' ? 'var(--red)' : p.verify?.state === 'live' ? 'var(--green)' : 'var(--muted)' }}>
                     {p.verify ? (p.verify.state === 'pending' ? 'checking…' : p.verify.state) : ''}
+                  </td>
+                  <td style={{ ...TD, whiteSpace: 'nowrap', color: p.lastAttempt?.deploy === 'failed' ? 'var(--red)' : 'var(--muted)' }}
+                    title={p.lastAttempt?.deployReason || undefined}>
+                    {p.lastAttempt?.deploy === 'failed'
+                      ? <>deploy failed{p.lastAttempt.logFile && <> · <a onClick={() => void openLog(p.lastAttempt!.logFile!)} style={{ color: 'var(--accent)', cursor: 'pointer' }}>log</a></>}</>
+                      : p.lastAttempt?.deploy === 'started' ? 'deploy started' : ''}
                   </td>
                 </tr>
               ))}
