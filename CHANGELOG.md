@@ -21,6 +21,50 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-26 — A CI-fix PR carries the fix, not your unpushed commits
+
+### Fixed
+
+- **Accepting a CI fix in PR mode opened a PR containing every unpushed local
+  commit, and the fix never reached your local branch.** The fix branch was cut
+  from the local HEAD. When local `main` ran ahead of `origin` (the normal state
+  if you push rarely), the "fix(ci)" PR carried all of that in-flight work too:
+  one real case was 24 commits and 78 files under a one-line title. After the
+  PR was squash-merged, local `main` still lacked the fix, and the next rebase
+  replayed the local history against a squash of its own early snapshot and
+  conflicted. Now the fix is applied on the remote default branch in a
+  throwaway worktree and pushed from there, so the PR holds exactly the agent's
+  change. The same change is also committed on the local branch, so when the
+  squash-merged PR is pulled back a rebase drops it as already applied. A fix
+  that only works on top of unpushed commits is refused with a message saying
+  so. The working tree is left as it was, and you push first or switch to the
+  push strategy.
+- **The CI-fix PR title was the agent's whole summary paragraph.** The title is
+  now its first sentence, capped at 72 characters. The full summary goes in
+  the PR body and commit body.
+
+### Changed
+
+- PR-mode accept runs `git fetch origin` first and opens the PR against the
+  remote's default branch (`origin/HEAD`) explicitly.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do. If a project already has a
+squash-merged CI-fix PR that swept in local commits, its local branch and
+`origin` have diverged. Compare them before rebasing: files identical on both
+sides can keep the local version.
+
+---
+
 ## 2026-09-24 — Scoped QA runs the right UITest classes, finishes promptly, and moves on after a relaunch
 
 ### Fixed

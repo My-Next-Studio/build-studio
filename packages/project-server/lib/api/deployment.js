@@ -5,6 +5,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { runOneShot: defaultRunOneShot, getOneShotStatus: defaultGetOneShotStatus } = require('../oneshot');
 const { createMonitor } = require('../monitor');
 const { createCache } = require('../github-cache');
@@ -191,6 +192,31 @@ function resolveDeployTargets(config) {
   return list.map((t, i) => normalizeDeployTarget(t, i));
 }
 
+/**
+ * A CI-fix commit/PR message. The agent's summary is a paragraph; used whole as
+ * a title it made a 600-character PR title. Title = first sentence, capped;
+ * the full summary goes in the body.
+ */
+function ciFixMessage(summary) {
+  const text = String(summary || '').trim();
+  if (!text) return { title: 'fix(ci): repair failing pipeline', body: '' };
+  const first = text.split(/(?<=[.!?])\s|\n/)[0].replace(/[.:;,\s]+$/, '');
+  const MAX = 72 - 'fix(ci): '.length;
+  const head = first.length > MAX ? `${first.slice(0, MAX - 1).replace(/\s+\S*$/, '')}…` : first;
+  return { title: `fix(ci): ${head}`, body: head === text ? '' : text };
+}
+
+function defaultCreatePr({ repo, base, head, title, body, cwd }) {
+  try {
+    return execFileSync('gh', ['pr', 'create', ...(repo ? ['--repo', repo] : []),
+      '--base', base, '--head', head, '--title', title, '--body', body],
+    { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  } catch (e) {
+    console.warn(`[ci-fix] gh pr create failed: ${e.stderr || e.message}`);
+    return '';
+  }
+}
+
 function createDeploymentRouter(config, gitOps, {
   runOneShotFn = defaultRunOneShot,
   getOneShotStatusFn = defaultGetOneShotStatus,
@@ -198,6 +224,9 @@ function createDeploymentRouter(config, gitOps, {
   // Defaulted rather than required: a project with no `deployment.repo` makes
   // no GitHub calls through it at all, so constructing one is free.
   monitor = createMonitor(config),
+  // Opens the PR for a CI fix; returns its URL or ''. Injected so tests can run
+  // the whole accept flow against a local bare remote without GitHub.
+  createPrFn = defaultCreatePr,
 } = {}) {
   const router = express.Router();
   const { projectRoot } = config;
@@ -962,29 +991,14 @@ function createDeploymentRouter(config, gitOps, {
 
     const strategy = resolveCiFixStrategy(config);
     const summary = String(req.body?.summary || '').trim();
-    const commitMsg = `fix(ci): ${summary || 'repair failing pipeline'}`;
+    const { title: commitMsg, body: commitBody } = ciFixMessage(summary);
+
+    if (strategy === 'pr') return acceptAsPr(res, { commitMsg, commitBody, summary });
 
     try {
-      if (strategy === 'pr') {
-        const orig = execGit(['branch', '--show-current']) || 'main';
-        const branch = `ci-fix-${Date.now()}`;
-        execGit(['checkout', '-b', branch]);
-        execGit(['add', '-A']);
-        execGit(['commit', '-m', commitMsg]);
-        execGit(['push', '-u', 'origin', branch]);
-        let prUrl = '';
-        try {
-          prUrl = execFileSync('gh', ['pr', 'create', '--repo', config.deployment.repo,
-            '--head', branch, '--title', commitMsg, '--body', summary || 'Automated CI fix.'],
-            { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-        } catch {}
-        try { execGit(['checkout', orig]); } catch {}
-        clearCurrentInvestigation();
-        return res.json({ ok: true, mode: 'pr', branch, prUrl });
-      }
       // push
       execGit(['add', '-A']);
-      execGit(['commit', '-m', commitMsg]);
+      execGit(['commit', '-m', commitMsg, ...(commitBody ? ['-m', commitBody] : [])]);
       const branch = execGit(['branch', '--show-current']);
       execGit(['push', 'origin', branch]);
       const hash = execGit(['rev-parse', '--short', 'HEAD']);
@@ -994,6 +1008,105 @@ function createDeploymentRouter(config, gitOps, {
       return res.status(500).json({ error: `Accept failed: ${e.stderr || e.message}` });
     }
   });
+
+  /**
+   * PR-mode accept: the PR carries the fix and nothing else.
+   *
+   * It used to branch from the local HEAD. In a project whose main runs ahead
+   * of origin — every managed project here, since work stays local until the
+   * owner pushes — that put every unpushed commit into the "CI fix" PR:
+   * launch-studio PR #19 (2026-09-21) was 24 commits and 78 files of in-flight
+   * feature work under a one-line fix(ci) title, squash-merged minutes later.
+   * The fix itself never landed on local main, so the next rebase replayed 84
+   * local commits against a squash of their own early snapshot and conflicted.
+   *
+   * Now: the fix is taken as a patch, applied in a throwaway worktree on the
+   * remote's default branch, and pushed from there. If it does not apply
+   * without the unpushed commits, the fix depends on them and a PR against
+   * origin cannot carry it honestly — refuse and say so. On success the same
+   * change is also committed locally, so when the squash-merged PR comes back a
+   * rebase recognises it as already applied instead of conflicting.
+   */
+  function acceptAsPr(res, { commitMsg, commitBody, summary }) {
+    const orig = execGit(['branch', '--show-current']);
+    if (!orig) return res.status(400).json({ error: 'HEAD is detached — check out a branch before accepting a fix.' });
+    if (!hasOrigin()) return res.status(400).json({ error: 'No origin remote to open a PR against.' });
+    try { execGit(['fetch', 'origin']); } catch { /* offline: use the last fetched state */ }
+    let base = null;
+    try { base = execGit(['rev-parse', '--abbrev-ref', 'origin/HEAD']); } catch {}
+    if (!base) {
+      try { execGit(['rev-parse', '--verify', `origin/${orig}`]); base = `origin/${orig}`; } catch {}
+    }
+    if (!base) return res.status(400).json({ error: 'Could not resolve the remote default branch (origin/HEAD) to base the PR on.' });
+    const baseBranch = base.replace(/^origin\//, '');
+
+    // The fix as a binary patch of everything the agent changed, new files
+    // included. Staging is undone on every failure path, so a refused accept
+    // leaves the working tree exactly as the agent left it.
+    let patch;
+    try {
+      execGit(['add', '-A']);
+      patch = execFileSync('git', ['diff', '--cached', '--binary'], { cwd: projectRoot, maxBuffer: 64 * 1024 * 1024 });
+    } catch (e) {
+      try { execGit(['reset', '-q']); } catch {}
+      return res.status(500).json({ error: `Could not capture the fix: ${e.stderr || e.message}` });
+    }
+
+    const branch = `ci-fix-${Date.now()}`;
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'bs-ci-fix-'));
+    const inWt = (args, input) => execFileSync('git', args, {
+      cwd: wt, encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const cleanup = () => {
+      try { execGit(['worktree', 'remove', '--force', wt]); } catch {}
+      try { fs.rmSync(wt, { recursive: true, force: true }); } catch {}
+      try { execGit(['worktree', 'prune']); } catch {}
+      try { execGit(['branch', '-D', branch]); } catch {}
+    };
+
+    let prUrl = '';
+    try {
+      // `worktree add` wants a path that does not exist yet.
+      fs.rmdirSync(wt);
+      execGit(['worktree', 'add', '-q', '-b', branch, wt, base]);
+      try {
+        inWt(['apply', '--index', '--binary', '-'], patch);
+      } catch (e) {
+        cleanup();
+        try { execGit(['reset', '-q']); } catch {}
+        const ahead = (() => { try { return execGit(['rev-list', '--count', `${base}..HEAD`]); } catch { return '?'; } })();
+        return res.status(409).json({
+          error: `The fix does not apply to ${base} on its own — it depends on the ${ahead} commit(s) on ${orig} `
+            + `that are not pushed yet. A PR against ${baseBranch} would have to carry them too. Push ${orig} first, `
+            + 'then accept again — or set deployment.ci_fix_strategy: push. The fix is still in your working tree.',
+          detail: String(e.stderr || e.message).slice(0, 2000),
+        });
+      }
+      inWt(['commit', '-q', '-m', commitMsg, ...(commitBody ? ['-m', commitBody] : [])]);
+      inWt(['push', '-q', '-u', 'origin', branch]);
+      prUrl = createPrFn({
+        repo: config.deployment && config.deployment.repo, base: baseBranch, head: branch,
+        title: commitMsg, body: summary || 'Automated CI fix.', cwd: projectRoot,
+      }) || '';
+    } catch (e) {
+      cleanup();
+      try { execGit(['reset', '-q']); } catch {}
+      return res.status(500).json({ error: `Accept failed: ${e.stderr || e.message}` });
+    }
+    cleanup(); // the branch lives on origin; the local copy and worktree are scaffolding
+
+    // The same change on the local branch. Without it local main never gets the
+    // fix until a pull, and the squash that comes back from GitHub conflicts.
+    let localCommit = null;
+    try {
+      execGit(['commit', '-q', '-m', commitMsg, ...(commitBody ? ['-m', commitBody] : [])]);
+      localCommit = execGit(['rev-parse', '--short', 'HEAD']);
+    } catch (e) {
+      console.warn(`[ci-fix] PR opened but the local commit failed: ${e.stderr || e.message}`);
+    }
+    clearCurrentInvestigation();
+    return res.json({ ok: true, mode: 'pr', branch, base: baseBranch, prUrl, localCommit });
+  }
 
   // POST /api/deployment/ci-fix-dismiss — revert the agent's working-tree changes.
   router.post('/deployment/ci-fix-dismiss', (req, res) => {
@@ -1030,4 +1143,4 @@ function checkPort(port) {
   });
 }
 
-module.exports = { createDeploymentRouter, getDeployState, resolveDeployTargets, normalizeDeployTarget, resolveCiFixStrategy, composeCiInvestigatePrompt, truncateTail };
+module.exports = { createDeploymentRouter, getDeployState, resolveDeployTargets, normalizeDeployTarget, resolveCiFixStrategy, composeCiInvestigatePrompt, truncateTail, ciFixMessage };
