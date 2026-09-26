@@ -113,6 +113,13 @@ export function PublishingTab() {
         {' '}Last check: {when(data.lastTick)}.
       </div>
 
+      {!data.enabled && (
+        <Banner tone="orange">
+          Publishing is <b>off</b>. Nothing is published — not on schedule, not by hand. This is what the job would
+          do: posts marked <b>due</b> publish on the first check after you set{' '}
+          <b>content_publishing.enabled: true</b> (no restart needed, commit the change).
+        </Banner>
+      )}
       {!data.configured && (
         <Banner tone="red">No <b>content_publishing.command</b> is set, so nothing can be published. Point it at the project&apos;s own publish script.</Banner>
       )}
@@ -154,10 +161,10 @@ export function PublishingTab() {
                 <td style={{ ...TD, textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button
                     onClick={() => void publishNow(p)}
-                    disabled={!data.configured || data.busy || publishing !== null}
+                    disabled={!data.enabled || !data.configured || data.busy || publishing !== null}
                     className="wf-btn secondary"
                     style={{ fontSize: 10, padding: '3px 9px' }}
-                    title={p.state === 'failed'
+                    title={!data.enabled ? 'Publishing is off for this project' : p.state === 'failed'
                       ? 'Retry. The scheduler never retries a failure on its own.'
                       : p.state === 'scheduled' ? 'Publish before its date' : 'Publish now'}
                   >

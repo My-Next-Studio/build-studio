@@ -21,6 +21,40 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-26 — The Publishing tab shows the queue before publishing is switched on
+
+### Changed
+
+- **Operations → Publishing now appears as soon as `content_publishing` is
+  configured, whether it is on or off.** It used to need `enabled: true`, so the
+  first time you saw the queue was after flipping the switch, and anything due
+  was published within the minute. While off, the tab lists the staged posts
+  with the state each would have and an "off" banner. Nothing is published,
+  and `Publish now` is disabled. Projects with no `content_publishing` block
+  still see no tab.
+
+### Fixed
+
+- **Resuming a paused draft of the same item told the agent to start a new
+  one.** A draft ended before its PRD was written, then resumed from the same
+  item, opened with "Next: draft a PRD for …". It now says to continue where the
+  conversation left off and to re-check any file it had started.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server changed:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+Then restart the app and the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-26 — A PRD renamed mid-run no longer blocks companion specs
 
 ### Fixed

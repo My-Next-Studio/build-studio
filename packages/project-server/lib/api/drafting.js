@@ -226,7 +226,7 @@ function createDraftingRouter(config, state, tmuxOps) {
       }
     }
     const prompt = resuming
-      ? continuePrompt({ itemId, title: item && item.title }) + delta
+      ? continuePrompt({ itemId, title: item && item.title, sameItem: prior.lastItemId === itemId }) + delta
       : draftPrompt({ itemId, title: item && item.title });
     const inlined = agentSkills.inlineReferencedDefinitions(prompt, { cli, roots: [projectRoot], fs });
     if (inlined) {

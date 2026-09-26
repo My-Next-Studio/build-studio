@@ -194,7 +194,14 @@ conversation with what you need to know.`;
  * was discussed; repeating the full briefing would spend context re-teaching it
  * what it just did, which is the cost continuity exists to avoid.
  */
-function continuePrompt({ itemId, title }) {
+function continuePrompt({ itemId, title, sameItem = false }) {
+  // Resuming the draft that was ended before its PRD was written is not a new
+  // item: "Next: draft…" told the agent to start over on work it had half done.
+  if (sameItem) {
+    return `Continue drafting the PRD for backlog item ${itemId}${title ? ` — "${title}"` : ''} where we left off.`
+      + ` The draft was paused before the PRD was written. Pick up from the last open question,`
+      + ` and check the item and any file you had started before assuming it is unchanged.`;
+  }
   return `Next: draft a PRD for backlog item ${itemId}${title ? ` — "${title}"` : ''}.`
     + ` Same skill and the same conventions as the previous draft in this session.`
     + ` Read the item first, then ask what you need to know.`;

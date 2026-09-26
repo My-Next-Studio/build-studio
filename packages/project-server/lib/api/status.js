@@ -310,11 +310,14 @@ function createStatusRouter(config, gitOps, state) {
       config: { name: config.name, port: config.port },
       functions: config.functions,
       portals: config.portals || [],
-      // The Publishing tab is shown only where content publishing is enabled, so
-      // an installation that never turns it on never sees it.
+      // The Publishing tab is shown where content publishing is CONFIGURED, on or
+      // off, so an installation that never sets it up never sees it — and one
+      // that has can look at the queue before switching it on. It used to need
+      // `enabled: true`, which meant the first sight of the tab came after the
+      // switch that publishes whatever is due, within the minute.
       operationsTabs: {
         ...(config.operations_tabs || {}),
-        ...((config.content_publishing && config.content_publishing.enabled === true) ? { publishing: true } : {}),
+        ...((config.content_publishing && typeof config.content_publishing === 'object') ? { publishing: true } : {}),
       },
       hasBacklog,
     });

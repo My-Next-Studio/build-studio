@@ -104,7 +104,9 @@ function createPublisher(config, deps = {}) {
     const c = cfg();
     const history = cp.readHistory(config.statePath);
     const last = cp.lastAttempts(history);
-    const posts = c.enabled ? cp.scanStaged(projectRoot, c.staged_dir).map((p) => {
+    // Scanned whether or not publishing is on: reading the queue is harmless,
+    // and seeing it before enabling is the point of showing the tab while off.
+    const posts = cp.scanStaged(projectRoot, c.staged_dir).map((p) => {
       const attempt = last.get(p.id) || null;
       const failing = !!(attempt && !attempt.ok && p.status === 'draft');
       return {
@@ -116,7 +118,7 @@ function createPublisher(config, deps = {}) {
         lastAttempt: attempt,
         verify: verify.get(p.id) || null,
       };
-    }) : [];
+    });
     return {
       enabled: c.enabled,
       configured: !!c.command,

@@ -163,3 +163,11 @@ test('a .gitignore with no trailing newline is not corrupted', () => {
   ensureIgnored(dir);
   assert.deepEqual(fs.readFileSync(path.join(dir, '.gitignore'), 'utf8').split('\n').filter(Boolean), ['dist', IGNORE_RULE]);
 });
+
+test('continuePrompt: the same unfinished item continues, a different item is next', () => {
+  const { continuePrompt } = require('./drafting');
+  const same = continuePrompt({ itemId: 'X-7', title: 'Thing', sameItem: true });
+  assert.match(same, /^Continue drafting the PRD for backlog item X-7 — "Thing" where we left off\./);
+  assert.doesNotMatch(same, /Next:/);
+  assert.match(continuePrompt({ itemId: 'X-8' }), /^Next: draft a PRD for backlog item X-8\./);
+});

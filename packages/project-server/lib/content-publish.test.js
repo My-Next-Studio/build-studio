@@ -174,12 +174,17 @@ test('the timer does not retry a failed post; a manual publish does', async () =
   assert.match(pub.alerts()[0].detail, /publish-a-post-.*\.log/, 'the alert points at the log');
 });
 
-test('a disabled project never ticks and shows no posts', async () => {
+// Off means nothing publishes. The queue is still shown, so the owner can see
+// what the first check would publish BEFORE switching it on.
+test('a disabled project never ticks, but shows its queue', async () => {
   const p = makeProject();
   const pub = createPublisher({ projectRoot: p.root, name: 'proj', statePath: p.statePath, logsPath: p.logsPath });
   assert.deepEqual(await pub.tick(), { ran: false });
-  assert.equal(pub.overview().enabled, false);
-  assert.deepEqual(pub.overview().posts, []);
+  const o = pub.overview();
+  assert.equal(o.enabled, false);
+  assert.equal(o.posts.length, 1);
+  assert.equal(o.posts[0].status, 'draft');
+  assert.deepEqual(o.history, []);
 });
 
 test('an undated draft is listed as unscheduled and waits for a click', () => {
