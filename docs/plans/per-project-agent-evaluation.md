@@ -1,7 +1,7 @@
 # Plan: evaluate and adapt agent configuration per project
 
-> **Status: Tier 2 largely implemented 2026-09-13; Tiers 1 and 3 and the
-> adaptation loop still proposed** (proposed 2026-09-01). See *Status by tier*
+> **Status: Tier 2 implemented 2026-09-14, including the convergence metric;
+> Tiers 1 and 3 and the adaptation loop still proposed** (proposed 2026-09-01). See *Status by tier*
 > below for what each turned out to mean, and for two places the build diverged
 > from this plan.
 >
@@ -32,12 +32,27 @@ Tier 2 exists for.
 
 ### Two divergences worth naming
 
-**1. The convergence metric was not built.** This plan's central quantity is
-*fix rounds to converge* — "2.5 in one project and 1.1 in another". What shipped
-is a `max round` column: `max(round)`, the highest round the role appeared in.
-That is a property of the RUN, not of the role, so it reads 4–6 on nearly every
-row and discriminates nothing. The column looks like the metric this plan asked
-for and is not it. Replacing it is the single highest-value piece of Tier 2 left.
+**1. The convergence metric shipped late, after a stand-in that measured
+nothing.** This plan's central quantity is *fix rounds to converge* — "2.5 in
+one project and 1.1 in another". The first build shipped a `max round` column
+instead: `max(round)` across all runs, a property of the run rather than the
+role. It saturated at the review-round cap, read 4–6 on nearly every row, and
+discriminated nothing — while looking like the metric this plan asked for.
+
+It was replaced on 2026-09-14 by **rounds to converge**: the highest round a
+role reached within one workflow is what that run needed, and the mean across
+runs is the metric. It is a different aggregation of records already written, so
+history gained it retroactively, and on existing data it separated at once — the
+same role and step at 3.75 in one project against 1.52 in another, on rows the
+old column had shown as 5 and 6. It is null, never 0, when no round was recorded:
+a 0 would rank an unmeasured role as the best in the table. `maxRound` was
+removed from the API rather than kept beside it, so it cannot be read as the
+metric again.
+
+Two limits, both stated in the column's tooltip: read the mean beside the run
+count, and on a step where several roles run together in one round every role
+shares the round number, so there the column separates projects rather than
+roles.
 
 **2. Cost columns landed early, and the blind spot this plan predicted arrived
 with them.** The plan said fix-rounds, findings and gate trips should carry the
@@ -74,8 +89,8 @@ file still describes its project.
 
 **Tier 3 — not started, and correctly deferred.** Its precondition was that
 Tiers 1 and 2 exist and have identified a role file whose changes need guarding.
-Tier 2 now exists but has not yet produced that finding, partly because the
-metric that would produce it is divergence 1 above.
+Tier 2 now exists, with the metric that could produce that finding; no role
+file has yet been singled out by it.
 
 **The adaptation loop — not started.** Scorecards are read by a human today.
 Nothing proposes a role-file change from them.
