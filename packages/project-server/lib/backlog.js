@@ -350,7 +350,20 @@ function normalizePrdField(rawPrd, projectRoot, docsPath, id) {
   // Otherwise it's a path (plain, relative, or extracted from a link). Resolve it
   // relative to the backlog dir (where the item lives) → repo-root, rejecting escapes.
   const itemRel = path.posix.join(docsPath, 'backlog', `${id || 'X'}.md`);
-  return normalizeSpecPath(s, projectRoot, itemRel) || rawPrd;
+  const resolved = normalizeSpecPath(s, projectRoot, itemRel);
+  if (resolved && fs.existsSync(path.join(projectRoot, resolved))) return resolved;
+  // Not there as written. An agent writing the field from inside docs/ tends to
+  // drop the docs/ prefix (`prds/PRD-099-….md`), which reads as repo-relative and
+  // names nothing, so the review refused to start on a PRD that was right there
+  // (valkomna VK-174, 2026-09-26). Try it relative to the docs dir, then by file
+  // name in the prds dir. Only an EXISTING match is taken; otherwise the value
+  // is kept as written, so a genuinely missing PRD is still reported as one.
+  const fallbacks = [
+    normalizeSpecPath(path.posix.join(docsPath, s), projectRoot, itemRel),
+    normalizeSpecPath(path.posix.join(docsPath, 'prds', path.posix.basename(s)), projectRoot, itemRel),
+  ];
+  const found = fallbacks.find((c) => c && fs.existsSync(path.join(projectRoot, c)));
+  return found || resolved || rawPrd;
 }
 
 /**

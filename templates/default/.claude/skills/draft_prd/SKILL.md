@@ -132,7 +132,8 @@ Three things this skill insists on:
 
 ## 7. Close the handoff
 
-- Set the item's status to `Drafted` and its `prd:` field to the new file.
+- Set the item's status to `Drafted` and its `prd:` field to the new file's path from the
+  repository root, e.g. `docs/prds/PRD-042-short-name.md` — the form the other items use.
 - Update the backlog row in `docs/project-state.md`.
 - Report, in three lines: what you resolved from documents, what the owner
   decided, and what you left as open questions for review.

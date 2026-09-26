@@ -502,6 +502,19 @@ test('normalizePrdField resolves bare ID, markdown link, relative + canonical pa
   assert.equal(normalizePrdField(null, root, 'docs', 'EX-026'), null);
 });
 
+test('normalizePrdField resolves a docs-relative path to the PRD that exists', () => {
+  const root = tmpProject();
+  fs.mkdirSync(path.join(root, 'docs', 'prds'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'docs', 'prds', 'PRD-099-publish.md'), '# PRD-099');
+  const canonical = 'docs/prds/PRD-099-publish.md';
+  // written from inside docs/ — the docs/ prefix dropped
+  assert.equal(normalizePrdField('prds/PRD-099-publish.md', root, 'docs', 'VK-174'), canonical);
+  // a wrong directory, right file name → found by name in the prds dir
+  assert.equal(normalizePrdField('specs/PRD-099-publish.md', root, 'docs', 'VK-174'), canonical);
+  // a path naming nothing that exists stays as written, so it is still reported missing
+  assert.equal(normalizePrdField('prds/PRD-404-gone.md', root, 'docs', 'VK-174'), 'prds/PRD-404-gone.md');
+});
+
 test('listItems normalizes a bare-ID prd field to the resolved path', () => {
   const root = tmpProject();
   fs.mkdirSync(path.join(root, 'docs', 'prds'), { recursive: true });

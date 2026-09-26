@@ -21,6 +21,38 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-26 — A PRD referenced without the docs/ prefix is found
+
+### Fixed
+
+- **"VK-… references a PRD ("prds/PRD-….md") that does not exist on disk" when
+  the file was there.** The `prd:` field is resolved from the repository root.
+  An agent writing it from inside `docs/` tends to drop the `docs/` prefix, and
+  the review then refused to start. When the path as written names nothing,
+  Build Studio now also tries it relative to the docs directory, then by file
+  name in `docs/prds/`, and takes the first one that exists. A path that
+  matches nothing is still reported as missing. The `draft_prd` skill template
+  now spells out the expected form (`docs/prds/PRD-042-short-name.md`).
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing required: the resolver accepts both
+forms. To give the skill the clearer wording anyway (per project, then commit):
+
+```bash
+sed -i '' 's|and its `prd:` field to the new file\.$|and its `prd:` field to the new file'"'"'s path from the repository root, e.g. `docs/prds/PRD-042-short-name.md`.|' .claude/skills/draft_prd/SKILL.md
+```
+
+---
+
 ## 2026-09-26 — The Publishing tab shows the queue before publishing is switched on
 
 ### Added
