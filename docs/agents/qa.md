@@ -57,16 +57,17 @@ If the PRD ships any user-visible UI (a screen, sheet, modal, empty state, icon 
 
 **Platform commands:**
 
-- **iOS**: navigation is done by an XCUITest, screenshots by `simctl`. There is
-  no hand-driving tool on this machine: `Simulator.app` no longer exists (Xcode 27
-  replaced it with DeviceHub), `idb` is not installed, and `simctl` has no tap
-  command — do not go looking for one, and do not report its absence as a gate
-  that could not run. Write (or reuse) a UITest that walks to each surface and
-  pauses, or has the test itself call `XCUIScreen.main.screenshot()` and write
-  the PNG under `docs/pr-evidence/<PRD-basename>/visual/`; from outside the
-  test, `xcrun simctl io <udid> screenshot <file>` captures whatever the booted
-  simulator shows. Run it with the project's pinned destination and derived-data
-  path. `xcrun simctl ui <udid> appearance light|dark` switches mode.
+- **iOS**: navigation is done by an XCUITest, screenshots by `simctl`. Do not
+  depend on driving the simulator by hand: you run headless in a terminal,
+  `simctl` has no tap command, and a GUI app or third-party tool (Simulator.app,
+  `idb`) may not be installed, and its absence is not a gate that could not
+  run. Write (or reuse)
+  a UITest that walks to each surface, and either have the test call
+  `XCUIScreen.main.screenshot()` and write the PNG under
+  `docs/pr-evidence/<PRD-basename>/visual/`, or capture from outside the test
+  with `xcrun simctl io <udid> screenshot <file>`. Run it with the project's
+  pinned destination and derived-data path. `xcrun simctl ui <udid> appearance
+  light|dark` switches mode.
 - **Android**: `adb shell screencap -p > /tmp/qa-<screen>.png`
 - **Web**: use the `qa-browser-testing` skill (`playwright-cli` — see Skills section)
 
