@@ -21,6 +21,35 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-27 — Changes made during a QA suite run are no longer undone by it
+
+### Fixed
+
+- **Switching auto-advance off while QA's test suite ran turned it back on by
+  itself, and any other change made during the run could be reverted too.**
+  The server-run suite kept the copy of the workflow it loaded when it started
+  and saved that copy on every progress update, which on an iOS suite means
+  every few seconds for up to hours. Anything changed in between went back to
+  how it was at the start: the auto-advance switch, a relaunch, or a step the
+  run had since moved on to. Progress and completion now re-read the current
+  workflow before writing. A suite whose step was relaunched or moved on is
+  recorded as finished without applying its result or starting a QA agent.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers. A project-server restart stops a suite
+that is running at that moment.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-26 — A PRD referenced without the docs/ prefix is found
 
 ### Fixed

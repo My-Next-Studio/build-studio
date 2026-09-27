@@ -8308,10 +8308,33 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
 
       // What happens when the suite ends. Defined here because the spawn now
       // sits inside the pre-flight's callback rather than in the handler body.
+      // The suite outlives this request by up to hours; `wf` here is the copy
+      // loaded when it started. Swap in the current one before touching state.
+      // False when the workflow is gone or is a different run.
+      const runId = wf.id;
+      const adoptCurrentWorkflow = () => {
+        const cur = state.loadWorkflow();
+        if (!cur || cur.id !== runId) return false;
+        wf = cur;
+        return true;
+      };
+      // Is this suiteRun record the one this process started? A relaunch
+      // replaces it (new pid) or marks it cancelled.
+      const isThisRun = (sr, pid = sr && sr.pid) =>
+        !!sr && sr.status !== 'cancelled' && sr.serverPid === process.pid && (sr.pid == null || pid == null || sr.pid === pid);
+
       function attachSuiteCompletion(handle, runTimeoutMs) {
         handle.promise.then((result) => {
+          // Same rule as onProgress: act on the workflow as it is NOW. A run
+          // that was relaunched, sent on, or cancelled while this suite ran must
+          // not be dragged back to the launch-time copy, and a superseded suite
+          // must not launch a QA agent over the step's new state.
+          if (!adoptCurrentWorkflow()) return;
           const step = wf.steps.qa_validation;
-          if (!step) return;
+          if (!step || !step.suiteRun || !isThisRun(step.suiteRun, handle.pid)) {
+            console.log(`[qa-suite] finished (pid ${handle.pid}) after its step moved on — result not applied`);
+            return;
+          }
           step.suiteRun = { ...step.suiteRun, ...result, status: result.status, finishedAt: new Date().toISOString() };
           console.log(`[qa-suite] ${result.status} in ${Math.round(result.durationMs / 1000)}s — `
             + `${result.counts.casesPassed} passed, ${result.counts.casesFailed} failed`);
@@ -8322,8 +8345,9 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
             require('child_process').spawn(process.execPath, [path.join(__dirname, '..', 'xctest-clean.js'), '--quiet'], { detached: true, stdio: 'ignore' }).unref();
           } catch (_) { /* hygiene only */ }
         }).catch((e) => {
+          if (!adoptCurrentWorkflow()) return;
           const step = wf.steps.qa_validation;
-          if (!step) return;
+          if (!step || !step.suiteRun || !isThisRun(step.suiteRun, handle.pid)) return;
           console.warn('[qa-suite] run failed, falling back to agent-run:', e.message);
           step.suiteRun = { ...step.suiteRun, status: 'error', error: e.message, finishedAt: new Date().toISOString() };
           launchQaAgent(qaSuite.formatSuiteSection({ status: 'unavailable', error: `the run failed to start (${e.message})` }));
@@ -8389,8 +8413,14 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
             logCapBytes,
             env: { ...process.env, BUILD_STUDIO_SIMULATOR_DESTINATION: config.simulator.destination },
             onProgress: (p) => {
+              // Re-read, never save the object captured at launch. That copy is
+              // hours old by now; saving it on every passing test wrote the whole
+              // workflow back as it was when the suite started — reverting an
+              // auto-advance switched off mid-run within seconds (fazon,
+              // 2026-09-27), and anything else changed since.
+              if (!adoptCurrentWorkflow()) return;
               const s = wf.steps.qa_validation;
-              if (!s || !s.suiteRun) return;
+              if (!s || !s.suiteRun || !isThisRun(s.suiteRun)) return;
               s.suiteRun.progress = p;
               state.saveWorkflow(wf);
             },

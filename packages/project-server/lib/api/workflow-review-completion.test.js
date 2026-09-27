@@ -196,3 +196,27 @@ test('relaunching a step clears the auto-advance refusal pause for it', () => {
   const branch = SRC.slice(i, i + 1200);
   assert.match(branch, /_aaReject = \{ step: null, count: 0, error: null \}/);
 });
+
+// A server-run suite lasts hours. Its callbacks must act on the workflow as it
+// is when they fire, not on the copy loaded when the suite started: saving that
+// copy on every passing test reverted auto-advance switched off mid-run within
+// seconds (fazon, 2026-09-27).
+test('suite progress re-reads the workflow before saving', () => {
+  const i = SRC.indexOf('onProgress: (p) => {');
+  assert.ok(i > 0, 'onProgress not found');
+  const body = SRC.slice(i, SRC.indexOf('},', i));
+  const adopt = body.indexOf('adoptCurrentWorkflow()');
+  const save = body.indexOf('state.saveWorkflow(wf)');
+  assert.ok(adopt > 0 && save > adopt, 'must adopt the current workflow before saving');
+  assert.match(body, /isThisRun\(/);
+});
+
+test('suite completion ignores a run its step has moved past', () => {
+  const i = SRC.indexOf('function attachSuiteCompletion(handle, runTimeoutMs) {');
+  assert.ok(i > 0, 'attachSuiteCompletion not found');
+  const body = SRC.slice(i, i + 1600);
+  const adopt = body.indexOf('adoptCurrentWorkflow()');
+  const launch = body.indexOf('launchQaAgent(');
+  assert.ok(adopt > 0 && launch > adopt, 'must adopt the current workflow before launching the QA agent');
+  assert.match(body, /isThisRun\(step\.suiteRun, handle\.pid\)/);
+});
