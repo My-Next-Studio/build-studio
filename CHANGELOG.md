@@ -21,6 +21,48 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-27 — Desktop apps can show QA their screens: `features.screenshot_command`
+
+### Added
+
+- **`features.screenshot_command`: the project renders its own screens for
+  QA and for the builder.** Visual smoke needs a rendered screen, and Build
+  Studio could only get one from a browser (`playwright_cli`) or an iOS
+  simulator. A desktop app has neither, so QA declared visual smoke "not
+  applicable" and no agent ever looked at a screen it had built. For an
+  Electron project that meant layout defects surfaced only when the owner saw
+  them. A project can now name a command, with this protocol, run from the
+  project root:
+
+  ```
+  <command> list                  # one view id per line ("id<TAB>description" allowed)
+  <command> <view-id> <out.png>   # render that view to a PNG, exit 0
+  ```
+
+  With it set, QA captures every view the PRD adds or changes into
+  `docs/pr-evidence/<PRD>/visual/`, opens each PNG, and reports layout defects
+  as findings. A command that fails is reported as a gate that could not run,
+  not as a defect. Roles that build UI (frontend, fullstack) are told to
+  render and inspect their screens before reporting done, and to add a view id
+  for any changed screen the harness lacks.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing, unless it is a desktop app without a
+browser or simulator. Such a project writes a capture harness (for Electron,
+on Playwright's `_electron`) and sets `features.screenshot_command` in
+`.build-studio/config.yaml`.
+
+---
+
 ## 2026-09-27 — A QA suite run no longer undoes changes made during it; owner-directed fix rounds
 
 ### Fixed

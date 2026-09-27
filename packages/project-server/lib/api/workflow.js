@@ -21,6 +21,7 @@ const agentSkills = require('../agent-skills');
 const gateBlocked = require('../gate-blocked');
 const qaSuite = require('../qa-suite-run');
 const { reconcilePrdPath } = require('../prd-path');
+const { resolveScreenshotCommand, qaScreenshotInstructions, builderScreenshotInstructions } = require('../screenshot-tool');
 const { suggestBuilderRole } = require('../builder-role-hint');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
@@ -5041,6 +5042,10 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     }
 
     const pencilMcpCheck = `\n\n### PENCIL MCP — CHECK BEFORE READING .pen FILES\nBefore reading any .pen design file, call \`get_editor_state\` to verify the Pencil MCP is available.\nIf the call fails (tool not found, connection refused, timeout), **STOP IMMEDIATELY**.\nDo NOT skip design verification. Do NOT proceed without reading the design.\nReport in your feedback: "BLOCKED: Pencil MCP unavailable — please start the Pencil app and re-run this step."`;
+    // Any role that builds UI checks its own screens when the project can
+    // render them without a browser (desktop apps; see screenshot-tool.js).
+    const shotCmd = resolveScreenshotCommand(config);
+    const screenshotContext = shotCmd && /frontend|fullstack/i.test(role.role) ? builderScreenshotInstructions(shotCmd) : '';
     const designContext = isFrontend && penFiles.length > 0
       ? `\n\n## VISUAL DESIGN — MANDATORY\nFollow the Pencil design: ${penFiles.join(', ')}\nRead the .pen file before coding. Match it pixel-for-pixel.${pencilMcpCheck}${usePlaywright ? `\n\n### Self-verification with playwright-cli (REQUIRED before reporting done)\n1. Export the design: Pencil MCP \`export_nodes\` → PNG at 2x scale → \`/tmp/design.png\`\n2. Screenshot your implementation:\n\`\`\`bash\nplaywright-cli open http://localhost:${config.port || 3000}/<path>\nplaywright-cli resize 1440 900\nplaywright-cli screenshot --filename /tmp/impl.png --full-page\nplaywright-cli close\n\`\`\`\n3. Run the heatmap diff (see docs/wow/web-design-workflow.md)\n4. Fix if < 85% match, report match % in feedback` : ' Run heatmap verification before reporting done.'}`
       : '';
@@ -5110,7 +5115,7 @@ ${taskIdx > 0 ? `Tasks 1–${taskIdx} are already implemented and committed. You
 
 ## SCOPE — CRITICAL
 Only implement what this task describes. Do NOT implement other tasks.
-Do NOT refactor code outside this task scope.${companionContext}${designContext}${testImpactContext}${goalContext}
+Do NOT refactor code outside this task scope.${companionContext}${designContext}${screenshotContext}${testImpactContext}${goalContext}
 
 Use the /${role.skill} skill. Commit your changes when done. ${COMMIT_ON_CURRENT_BRANCH}`,
     }];
@@ -7742,6 +7747,8 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       const devAgents = (config.roles.execution || []).map(r => {
         const isFrontend = r.role.toLowerCase().includes('frontend');
         let designContext = '';
+        const shotCmdR = resolveScreenshotCommand(config);
+        if (shotCmdR && /frontend|fullstack/i.test(r.role)) designContext += builderScreenshotInstructions(shotCmdR);
 
         if (isFrontend) {
           // Always include companion specs reference
@@ -8060,7 +8067,10 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       // that need launch/console verification should wire it through their E2E
       // suite (e.g. Playwright `_electron`, run in step 3) instead of this step
       // trying to launch something ad hoc.
-      const hasVisualSmokeTarget2 = !!(hasBrowserTesting2 || (config.simulator && config.simulator.destination));
+      // A desktop app has neither a browser nor a simulator; it can bring its
+      // own capture instead (see screenshot-tool.js).
+      const shotCmd2 = resolveScreenshotCommand(config);
+      const hasVisualSmokeTarget2 = !!(hasBrowserTesting2 || (config.simulator && config.simulator.destination) || shotCmd2);
       // Name the tool, do not just say "capture screenshots". An agent given a
       // requirement with no runnable command attached picks its own way to
       // satisfy it, and the one it picks is whatever its CLI advertises: the
@@ -8071,9 +8081,11 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       // playwright-cli was installed the whole time and never invoked once.
       const visualSmokeTool = hasBrowserTesting2
         ? `\n   - **Use \`playwright-cli\` for this** (it is installed and is the only browser this environment has). Point it at the app's URL — the dev-server section above says whether one is running and, if not, how to serve it from the project's own configuration: \`playwright-cli open <url>\`, \`playwright-cli resize 1440 900\` / \`resize 390 844\`, \`playwright-cli screenshot --filename <path>\`. Do NOT use a CLI-native or in-app browser tool (\`agent.browsers\`, Computer Use, an "in-app browser" skill) — there is no such browser in this session and it will fail with "No browser is available". That failure is an environment characteristic, NOT a defect: if you hit it, you used the wrong tool — switch to \`playwright-cli\` rather than reporting a finding.`
-        : '';
+        : shotCmd2
+          ? qaScreenshotInstructions(shotCmd2, path.basename(wf.prdPath || '', '.md'))
+          : '';
       const visualSmokeSection2 = hasVisualSmokeTarget2
-        ? `\n4. **Visual smoke — REQUIRED for visual PRDs** (see your /${skill} role's "Visual smoke" section for the full protocol).${visualSmokeTool}\n   - If this PRD ships any visible UI surface, capture simulator/device screenshots of every AC surface and inspect for: fallback colors (e.g. system-blue tab tint, system-gray text), missing UI elements (gear icons rendering as blurred backgrounds, empty MetricRow cards, missing empty-state copy), letterbox / safe-area breaks, layout regressions vs the design bundle reference at \`design-system/project/<screen>.html\` if the project has one.\n   - Visual regressions are **BLOCKING** even if the XCUITest / Playwright suite is green. Accessibility queries return matches for invisible text — the visual smoke is the only check that catches "tests pass but the user sees a blank screen".\n   - Write screenshots to \`docs/pr-evidence/<PRD-basename>/visual/\` — that directory is gitignored and must NOT be committed; the files are a run artifact that only needs to exist on disk. The AC verification gate resolves cited paths against the working tree, so a missing directory still blocks it from marking visual ACs as MET.\n   - **Scope evidence to THIS PRD only.** Capture or regenerate evidence ONLY under \`docs/pr-evidence/<PRD-basename>/\`. Do NOT run other PRDs' screenshot/evidence-capture tests. If a test run leaves OTHER PRDs' committed evidence modified (PDFs/PNGs drift byte-wise even when visually identical), \`git checkout --\` those files before finishing — never commit cross-PRD evidence churn into this run.\n   - **Brand-token check (mechanical)**: for each visible color in your screenshots, confirm it appears in \`docs/brand/brand-guidelines.md\` or the project's locked palette. Any color NOT in the locked palette is a fallback render — BLOCKING (even if the asset catalog has the right hex values committed; namespace mismatches mean the production code reaches nil at runtime and tests don't catch it).\n5. **Runtime warnings are BLOCKING.** Scan the launch console output for warnings like \`[Invalid Configuration]\`, \`No color named\`, \`Could not load nib\`, asset-not-found patterns. Any such warning that fires on every app launch means the implementation has a structural bug that the test suite doesn't catch. Report as **Approved: no**, **Blocking: <n>**, NOT as a Medium finding.`
+        ? `\n4. **Visual smoke — REQUIRED for visual PRDs** (see your /${skill} role's "Visual smoke" section for the full protocol).${visualSmokeTool}\n   - If this PRD ships any visible UI surface, capture screenshots (simulator, browser, or the project's screenshot command — whichever is named above) of every AC surface and inspect for: fallback colors (e.g. system-blue tab tint, system-gray text), missing UI elements (gear icons rendering as blurred backgrounds, empty MetricRow cards, missing empty-state copy), letterbox / safe-area breaks, layout regressions vs the design bundle reference at \`design-system/project/<screen>.html\` if the project has one.\n   - Visual regressions are **BLOCKING** even if the XCUITest / Playwright suite is green. Accessibility queries return matches for invisible text — the visual smoke is the only check that catches "tests pass but the user sees a blank screen".\n   - Write screenshots to \`docs/pr-evidence/<PRD-basename>/visual/\` — that directory is gitignored and must NOT be committed; the files are a run artifact that only needs to exist on disk. The AC verification gate resolves cited paths against the working tree, so a missing directory still blocks it from marking visual ACs as MET.\n   - **Scope evidence to THIS PRD only.** Capture or regenerate evidence ONLY under \`docs/pr-evidence/<PRD-basename>/\`. Do NOT run other PRDs' screenshot/evidence-capture tests. If a test run leaves OTHER PRDs' committed evidence modified (PDFs/PNGs drift byte-wise even when visually identical), \`git checkout --\` those files before finishing — never commit cross-PRD evidence churn into this run.\n   - **Brand-token check (mechanical)**: for each visible color in your screenshots, confirm it appears in \`docs/brand/brand-guidelines.md\` or the project's locked palette. Any color NOT in the locked palette is a fallback render — BLOCKING (even if the asset catalog has the right hex values committed; namespace mismatches mean the production code reaches nil at runtime and tests don't catch it).\n5. **Runtime warnings are BLOCKING.** Scan the launch console output for warnings like \`[Invalid Configuration]\`, \`No color named\`, \`Could not load nib\`, asset-not-found patterns. Any such warning that fires on every app launch means the implementation has a structural bug that the test suite doesn't catch. Report as **Approved: no**, **Blocking: <n>**, NOT as a Medium finding.`
         : `\n4. **Visual smoke / launch-console check — NOT APPLICABLE to this project.** No browser (\`features.playwright_cli\` is false/unset) or iOS simulator target is configured, so there is no way to launch a browser or device here — do NOT attempt to (e.g. via a generic browser tool); it will fail with something like "No browser is available". That failure is an environment characteristic of this project, NOT a defect — do NOT report it as a blocking (or any) finding. If this project has its own launch/console verification (e.g. an Electron E2E suite using Playwright \`_electron\`), that already ran as part of step 3 — rely on its output instead. Any console/runtime warnings surfaced by the test suite itself in steps 1-3 are still BLOCKING; only the ad hoc "launch it and look" check is skipped.`;
 
       // iOS-specific QA guidance — injected only when the project has a pinned
