@@ -21,7 +21,7 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-09-27 — Changes made during a QA suite run are no longer undone by it
+## 2026-09-27 — A QA suite run no longer undoes changes made during it; owner-directed fix rounds
 
 ### Fixed
 
@@ -34,6 +34,17 @@ that move underneath you without your having edited anything.
   run had since moved on to. Progress and completion now re-read the current
   workflow before writing. A suite whose step was relaunched or moved on is
   recorded as finished without applying its result or starting a QA agent.
+
+### Added
+
+- **An owner-directed fix round from QA without a QA report.** If you stop a QA
+  run on purpose (for example, the suite is moot until a change you want is
+  made), `send_to_devs` used to refuse for lack of a QA report, and the only
+  way on was to run the suite you had just stopped. It now accepts
+  `{"action":"send_to_devs","override":true,"notes":"<what to fix>"}`. The notes
+  become what the fix planner works from, the override is logged on the step,
+  and the next QA round re-tests as normal. Without both the override and
+  non-empty notes, the old refusal stands.
 
 ### Upgrade steps
 

@@ -9389,10 +9389,30 @@ Before adding new entries, scan existing files in docs/learnings/:
       // the planner produces 0 tasks and the step ends up blocked anyway —
       // block early so the user re-runs qa_validation against the live pane
       // content (or submits feedback manually) before fix_plan even spins up.
+      // One exception: an owner-directed round. The owner has stopped QA on
+      // purpose (a suite made moot by a change they want first) and says what
+      // to fix in `notes`. Requiring a QA report there meant re-running the very
+      // suite they stopped (fazon, 2026-09-27). Explicit override + non-empty
+      // notes only; the notes become the source the planner works from.
+      const ownerDirected = !qaFeedback.trim() && body.override === true && typeof notes === 'string' && notes.trim();
+      if (ownerDirected) {
+        console.log('[workflow] qa_validation → fix_plan: owner-directed round, no QA report');
+        wf.steps.qa_validation.status = 'completed';
+        if (wf.steps.qa_validation.error) delete wf.steps.qa_validation.error;
+        wf.steps.qa_validation.overrides = (wf.steps.qa_validation.overrides || []).concat({
+          at: new Date().toISOString(), step: 'qa_validation', round: wf.round || 1,
+          reason: body.overrideReason || 'owner-directed fix round without a QA report',
+        });
+        launchFixPlan(wf, 'qa_validation',
+          '## QA\n\nNo QA report this round: the owner stopped the suite and directs this fix round. Work from the owner notes. The next qa_validation round re-tests.',
+          notes, prdId);
+        return res.json({ workflow: wf });
+      }
       if (!qaFeedback.trim()) {
         const errored = (wf.steps.qa_validation.agents || []).some(a => a.status === 'error');
         return res.status(400).json({
-          error: `Cannot send to devs: qa_validation has no feedback${errored ? ' (an agent errored — likely stalled by the watchdog)' : ''}. Re-run qa_validation so it produces structured findings, or submit feedback manually, before send_to_devs.`,
+          error: `Cannot send to devs: qa_validation has no feedback${errored ? ' (an agent errored — likely stalled by the watchdog)' : ''}. Re-run qa_validation so it produces structured findings, or submit feedback manually, before send_to_devs. `
+            + 'To direct a fix round yourself instead, POST {"action":"send_to_devs","override":true,"notes":"<what to fix>"}.',
         });
       }
       // A gate that could not EXECUTE is an environment problem, not a defect.

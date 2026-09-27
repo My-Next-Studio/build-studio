@@ -220,3 +220,13 @@ test('suite completion ignores a run its step has moved past', () => {
   assert.ok(adopt > 0 && launch > adopt, 'must adopt the current workflow before launching the QA agent');
   assert.match(body, /isThisRun\(step\.suiteRun, handle\.pid\)/);
 });
+
+test('send_to_devs without a QA report needs an override AND notes', () => {
+  const i = SRC.indexOf("if (wf.currentStep === 'qa_validation' && action === 'send_to_devs') {");
+  assert.ok(i > 0, 'send_to_devs handler not found');
+  const body = SRC.slice(i, i + 3000);
+  assert.match(body, /const ownerDirected = !qaFeedback\.trim\(\) && body\.override === true && typeof notes === 'string' && notes\.trim\(\);/);
+  // The plain no-feedback refusal still exists for every other case.
+  assert.match(body, /Cannot send to devs: qa_validation has no feedback/);
+  assert.ok(body.indexOf('ownerDirected') < body.indexOf('Cannot send to devs: qa_validation has no feedback'));
+});
