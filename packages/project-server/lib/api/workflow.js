@@ -462,7 +462,7 @@ function qaStrictGateVerdict(qaFeedback, config, operatorOverride) {
 //   - AUTOMATED + MET     → under `strict`, must cite a test name or a file path,
 //                           catching the "tests pass so the AC is met" cop-out.
 // Rows that aren't MET (UNMET/PARTIAL/UNTESTABLE/…) are never gated here.
-function collectMissingAcArtifacts(acFb, { projectRoot, strict = false, exists }) {
+function collectMissingAcArtifacts(acFb, { projectRoot, strict = false, exists, commitExists = null }) {
   const missing = [];
   // Match matrix rows: `| <id> | <desc> | <status> | <type> | <evidence> |`
   const rowRe = /^\|\s*(AC-[\w.]+|US-[\w.]+)\s*\|[^|]*\|\s*(MET|PARTIAL|UNMET|UNTESTABLE|MOCK-ONLY|AT-RISK)\s*\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|/gm;
@@ -498,7 +498,20 @@ function collectMissingAcArtifacts(acFb, { projectRoot, strict = false, exists }
         if (exists(abs)) foundAny = true;
         else missing.push({ ac: id, path: rel });
       }
-      if (!foundAny && !/(docs\/pr-evidence|\.png|\.jpg|\.md|\.html|\.txt|\.json)/.test(evidence)) {
+      // A commit is evidence too, when the AC is about the commit itself (its
+      // message, what it contains): "Commit 6084d44d message lists each …".
+      // Without this the gate reported "(no path cited)" for a row the verifier
+      // had checked with `git log` (launch-studio PRD-077 AC-9, 2026-09-28).
+      // Only a hash introduced by the word "commit" counts, so a stray hex
+      // string is never taken for one, and it must resolve in this repo.
+      if (commitExists) {
+        for (const c of evidence.matchAll(/\bcommit\s+`?([0-9a-f]{7,40})\b/gi)) {
+          if (commitExists(c[1])) foundAny = true;
+          else missing.push({ ac: id, path: `commit ${c[1]} (not in this repository)` });
+        }
+      }
+      if (!foundAny && !/(docs\/pr-evidence|\.png|\.jpg|\.md|\.html|\.txt|\.json)/.test(evidence)
+          && !(commitExists && /\bcommit\s+`?[0-9a-f]{7,40}\b/i.test(evidence))) {
         missing.push({ ac: id, path: '(no path cited)' });
       }
       continue;
@@ -8684,6 +8697,12 @@ This is round ${wf.round}.`,
             projectRoot,
             strict: acStrict,
             exists: p => fs.existsSync(p),
+            commitExists: (sha) => {
+              try {
+                require('child_process').execFileSync('git', ['cat-file', '-e', `${sha}^{commit}`], { cwd: projectRoot, stdio: 'ignore' });
+                return true;
+              } catch (_) { return false; }
+            },
           })
         : [];
       if (missingArtifacts.length > 0) {

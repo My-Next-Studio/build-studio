@@ -21,6 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-28 — AC verification accepts a commit as evidence
+
+### Fixed
+
+- **AC verification blocked with "(no path cited)" on a MANUAL criterion
+  that is about a commit.** A criterion such as "the commit message lists
+  each change not taken, and why" is evidenced by the commit itself, and the
+  verifier checked it with `git log`. The evidence gate only accepted file
+  paths, so it treated the row as having no evidence. A MANUAL row may now
+  cite `commit <hash>`. The gate accepts it when that commit exists in the
+  project's repository, and reports it by hash when it doesn't. Only a hash
+  introduced by the word "commit" counts, so a stray hex string such as a
+  colour value is never mistaken for one.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-27 — Desktop apps can show QA their screens: `features.screenshot_command`
 
 ### Added

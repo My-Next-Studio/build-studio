@@ -92,3 +92,24 @@ test('strict mode scans every AUTOMATED row (sticky regex state is reset)', () =
   assert.equal(out.length, 1);
   assert.equal(out[0].ac, 'AC-10');
 });
+
+// A MANUAL AC about a commit (its message, its contents) is evidenced by the
+// commit. launch-studio PRD-077 AC-9: "Commit 6084d44d message lists …" was
+// verified with git log, and the gate still reported "(no path cited)".
+test('MANUAL row citing an existing commit is not flagged', () => {
+  const fb = row('AC-9', 'MET', 'MANUAL', 'Commit 6084d44d message, "held back": reasons listed (reviewed with git log -1)');
+  const out = collectMissingAcArtifacts(fb, opts({ commitExists: (sha) => sha === '6084d44d' }));
+  assert.deepEqual(out, []);
+});
+
+test('MANUAL row citing a commit that does not exist is flagged by its hash', () => {
+  const fb = row('AC-9', 'MET', 'MANUAL', 'commit deadbeef1 message lists the reasons');
+  assert.deepEqual(collectMissingAcArtifacts(fb, opts({ commitExists: () => false })),
+    [{ ac: 'AC-9', path: 'commit deadbeef1 (not in this repository)' }]);
+});
+
+test('a hex string not introduced by "commit" is not taken for a commit', () => {
+  const fb = row('AC-9', 'MET', 'MANUAL', 'colour token #8891f5 renders in the header');
+  assert.deepEqual(collectMissingAcArtifacts(fb, opts({ commitExists: () => true })),
+    [{ ac: 'AC-9', path: '(no path cited)' }]);
+});
