@@ -273,6 +273,14 @@ function createOverseer(config, state, broadcast) {
   function detectTaskWallclockOverrun(wf) {
     const candidates = [];
     if (!wf.taskExecution?.taskStates) return candidates;
+    // Fine-grained runs only. In a monolithic run the single "task" is the
+    // whole PRD build, which normally runs for hours, so 45 minutes means
+    // nothing, and the escalation's advice (the task is oversized; Kill-and-
+    // skip) would discard the entire build. fazon FAZ-361 (2026-09-28) raised
+    // it on a build that had committed that minute. Monolithic health has its
+    // own signals — minutes since the last commit, pane activity, compaction —
+    // in computePathologySignals (api/workflow.js).
+    if (wf.taskPlan && wf.taskPlan.monolithic) return candidates;
     for (const [idx, ts] of Object.entries(wf.taskExecution.taskStates)) {
       if (ts.status !== 'running') continue;
       for (const agent of (ts.agents || [])) {

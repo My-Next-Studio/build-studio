@@ -21,6 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-28 — No "task overrun" escalation on a monolithic build
+
+### Fixed
+
+- **A monolithic build was flagged after 45 minutes as "task 1 has been
+  running without POSTing feedback. Likely an oversized task", with
+  Force-complete and Kill-and-skip offered.** That rule is for fine-grained
+  runs, where one task running 45 minutes is a warning sign. In a monolithic
+  run the single task is the whole PRD build, which normally takes hours, and
+  Kill-and-skip would discard it. The rule now skips monolithic runs. Their
+  health is already tracked by the run's own signals: minutes since the last
+  commit, pane activity, and compaction.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers. An escalation already raised stays until
+dismissed.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-28 — The drafting panel's minimised state is per project
 
 ### Fixed
