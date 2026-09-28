@@ -26,6 +26,56 @@ const TMUX_TIMEOUT_MS = 5000;
 const execFileSync = (file, args, opts) =>
   rawExecFileSync(file, args, { timeout: TMUX_TIMEOUT_MS, ...(opts || {}) });
 
+/**
+ * tmux 3.6a segfaults when a session that belongs to a session GROUP is
+ * destroyed by killing its last window (server_kill_window →
+ * server_destroy_session_group → session_destroy → notify_session →
+ * cmd_find_from_nothing, NULL + 0x1b8). The crash takes down the whole server,
+ * so every agent, every drafting session and every terminal the owner had open
+ * in Build Studio goes with it. It happened three times in four days
+ * (2026-09-25, -27, -28; crash reports in ~/Library/Logs/DiagnosticReports).
+ * Upstream's fix ("grouped sessions sometimes being left as unusable command
+ * targets while they are being killed", issue 5180) is listed for 3.8.
+ *
+ * Build Studio creates exactly that shape: the hub terminal attaches through a
+ * `view-*` session grouped with the agent's session (server.js openAgentPty),
+ * and that view lives as long as the agent window does. So before anything that
+ * can destroy a session — killing its last window, or the session itself —
+ * remove the view sessions grouped with it. The base session is then alone,
+ * and destroying it never enters the group path. Killing a view only detaches
+ * the hub's terminal for a window that is about to disappear anyway.
+ */
+function releaseGroupedViews(sessionName) {
+  if (!sessionName) return 0;
+  let rows = [];
+  try {
+    rows = execFileSync('tmux', ['list-sessions', '-F', '#{session_name}\t#{session_group}'], { stdio: ['pipe', 'pipe', 'pipe'] })
+      .toString().split('\n').filter(Boolean).map((l) => l.split('\t'));
+  } catch (_) { return 0; }
+  const base = rows.find(([name]) => name === sessionName);
+  if (!base || !base[1]) return 0;               // not grouped: nothing to do
+  const group = base[1];
+  let n = 0;
+  for (const [name, g] of rows) {
+    if (name === sessionName || g !== group || !name.startsWith('view-')) continue;
+    try { execFileSync('tmux', ['kill-session', '-t', `=${name}`], { stdio: 'ignore' }); n++; } catch (_) {}
+  }
+  return n;
+}
+
+/** Kill one window without ever destroying a still-grouped session (see above). */
+function killWindowSafely(target) {
+  if (!target) return;
+  const sessionName = String(target).split(':')[0];
+  let windows = 0;
+  try {
+    windows = execFileSync('tmux', ['list-windows', '-t', `=${sessionName}`, '-F', '#{window_index}'], { stdio: ['pipe', 'pipe', 'pipe'] })
+      .toString().split('\n').filter(Boolean).length;
+  } catch (_) { /* session gone already */ }
+  if (windows <= 1) releaseGroupedViews(sessionName);
+  try { execFileSync('tmux', ['kill-window', '-t', target], { stdio: 'ignore' }); } catch (_) {}
+}
+
 function createTmuxOps(config) {
   const projectName = config.name;
 
@@ -96,7 +146,7 @@ function createTmuxOps(config) {
       } catch (_) { break; }
       const dup = names.find(([, n]) => n === windowName);
       if (!dup) break;
-      try { execFileSync('tmux', ['kill-window', '-t', `${sessionName}:${dup[0]}`], { stdio: 'ignore' }); } catch (_) { break; }
+      killWindowSafely(`${sessionName}:${dup[0]}`);
     }
     const out = execFileSync('tmux', ['new-window', '-t', `${sessionName}:`, '-n', windowName, '-P', '-F', '#{window_index}'], { cwd });
     return out.toString().trim();
@@ -113,6 +163,7 @@ function createTmuxOps(config) {
   }
 
   function killSession(sessionName) {
+    releaseGroupedViews(sessionName);
     try { execFileSync('tmux', ['kill-session', '-t', sessionName], { stdio: 'ignore' }); } catch (_) {}
   }
 
@@ -131,9 +182,7 @@ function createTmuxOps(config) {
         }
       } catch (_) {}
     }
-    if (target) {
-      try { execFileSync('tmux', ['kill-window', '-t', target], { stdio: 'ignore' }); } catch (_) {}
-    }
+    if (target) killWindowSafely(target);
   }
 
   // Kill all processes holding the given ports, then kill the tmux session.
@@ -151,6 +200,7 @@ function createTmuxOps(config) {
         }
       } catch (_) {}
     }
+    releaseGroupedViews(sessionName);
     try { execFileSync('tmux', ['kill-session', '-t', sessionName], { stdio: 'ignore' }); } catch (_) {}
   }
 
@@ -360,4 +410,4 @@ function stripAnsi(str) {
 }
 
 module.exports = {
-  renderPipePaneLog, createTmuxOps, stripAnsi };
+  renderPipePaneLog, createTmuxOps, stripAnsi, releaseGroupedViews, killWindowSafely };

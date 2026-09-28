@@ -21,6 +21,49 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-28 — Stop tmux from crashing and taking every session with it
+
+### Fixed
+
+- **Every agent, drafting session and Build Studio terminal vanished at once,
+  and steps reported "Session lost — the tmux session is gone".** The tmux
+  server itself crashed: a segfault in tmux 3.6a, three times in four days,
+  with the same stack each time (`server_kill_window` →
+  `server_destroy_session_group` → `session_destroy` → `notify_session` →
+  `cmd_find_from_nothing`). It happens when a session that is still in a
+  session group is destroyed by killing its last window. Build Studio creates
+  that shape: the hub's terminal attaches through a `view-*` session grouped
+  with the agent's session, and that view lives as long as the agent window.
+  Build Studio now removes the grouped view sessions before anything that can
+  destroy a session (killing its last window, or the session itself), so a
+  session is never destroyed while grouped. Upgrading tmux does not help yet.
+  Upstream lists the matching fix ("grouped sessions sometimes being left as
+  unusable command targets while they are being killed", issue 5180) for 3.8,
+  not 3.7c.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers. If tmux crashes before then, check
+`~/Library/Logs/DiagnosticReports/tmux-*.ips`. The fix is for this exact
+stack.
+
+**In each managed project** — nothing to do.
+
+### Known issues
+
+- The crash did not reproduce on a scratch server with a detached or attached
+  view, so its exact trigger is not pinned down. The fix does not depend on
+  it: the crashing function is only reached when the session being destroyed
+  is still grouped, and it no longer is.
+
+---
+
 ## 2026-09-28 — No "task overrun" escalation on a monolithic build
 
 ### Fixed

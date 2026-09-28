@@ -22,6 +22,7 @@ const gateBlocked = require('../gate-blocked');
 const qaSuite = require('../qa-suite-run');
 const { reconcilePrdPath } = require('../prd-path');
 const { resolveScreenshotCommand, qaScreenshotInstructions, builderScreenshotInstructions } = require('../screenshot-tool');
+const { killWindowSafely } = require('../tmux');
 const { suggestBuilderRole } = require('../builder-role-hint');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
@@ -4844,7 +4845,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
           }
           // Kill in reverse order to avoid index shifting
           for (const idx of toKill.reverse()) {
-            try { execFileSync('tmux', ['kill-window', '-t', `${wf.sessionName}:${idx}`], { stdio: 'ignore' }); } catch {}
+            killWindowSafely(`${wf.sessionName}:${idx}`); // never destroys a still-grouped session (tmux 3.6a crash)
           }
         } catch {}
       }
