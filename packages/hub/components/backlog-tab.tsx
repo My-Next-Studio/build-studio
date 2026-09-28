@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useProjectApi } from '@/lib/use-project-api'
+import { useProject } from '@/lib/project-context'
 import { AgentTerminal } from './agent-terminal'
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDroppable,
@@ -161,12 +162,18 @@ export function BacklogTab({
   //
   // Persisted per project: the panel is a fixture of this view now, and one that
   // un-minimises itself on every reload is worse than no memory at all.
+  // The key carries the project name. It used to be one global key, so
+  // minimising in one project minimised the panel in every project. The
+  // dashboard remounts per project (key={name}), so reading once at mount is
+  // enough.
+  const { name: projectName } = useProject()
+  const draftMinKey = `bs.draftMin.${projectName}`
   const [draftMin, setDraftMin] = useState(() => {
-    try { return localStorage.getItem('bs.draftMin') === '1' } catch { return false }
+    try { return localStorage.getItem(draftMinKey) === '1' } catch { return false }
   })
   useEffect(() => {
-    try { localStorage.setItem('bs.draftMin', draftMin ? '1' : '0') } catch { /* private mode */ }
-  }, [draftMin])
+    try { localStorage.setItem(draftMinKey, draftMin ? '1' : '0') } catch { /* private mode */ }
+  }, [draftMin, draftMinKey])
 
   // Track the project's drafting session: restore its view, and know whether a
   // draft is running so the buttons can say so.

@@ -21,6 +21,31 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-28 — The drafting panel's minimised state is per project
+
+### Fixed
+
+- **Minimising the drafting panel in one project minimised it in every
+  project.** The state was saved under one browser-storage key shared by all
+  projects. It is now saved per project, so each project's panel stays the
+  way you left it. Existing saved state is not carried over: each project's
+  panel starts expanded once.
+
+### Upgrade steps
+
+**In Build Studio** — hub changed:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+Then restart the app.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-28 — AC verification accepts a commit as evidence
 
 ### Fixed
