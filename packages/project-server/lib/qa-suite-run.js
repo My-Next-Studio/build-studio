@@ -498,13 +498,38 @@ function isPidAlive(pid) {
  * decline to start rather than queue, and the caller falls back to letting the
  * agent handle it with the pre-existing "one xcodebuild at a time" guidance.
  */
-function xcodebuildInFlight() {
+/**
+ * Is an xcodebuild TEST run in flight on this machine?
+ *
+ * Matched by process NAME, then by its arguments. The old check was
+ * `pgrep -f 'xcodebuild.*test'`, which matches any command line containing
+ * that text — and a codex agent receives its whole prompt as an argument, so
+ * a QA agent in ANY project, whose prompt names the xcodebuild command, read as
+ * a running suite. fazon's QA then refused to run ("another xcodebuild test is
+ * already running on this machine") with no xcodebuild anywhere (2026-09-28).
+ */
+function isXcodebuildTestArgs(args) {
+  // `xcodebuild [options] test …` / `test-without-building`; an option VALUE
+  // such as a scheme named "FooTests" or `-only-testing:X` must not count.
+  const tokens = String(args || '').trim().split(/\s+/);
+  return tokens.slice(1).some((t) => t === 'test' || t === 'test-without-building');
+}
+
+function xcodebuildInFlight({ run = execFileSync } = {}) {
+  let pids = [];
   try {
-    const out = execFileSync('pgrep', ['-f', 'xcodebuild.*test'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    return out.split('\n').map(s => s.trim()).filter(Boolean).length > 0;
+    pids = run('pgrep', ['-x', 'xcodebuild'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      .split('\n').map((s) => s.trim()).filter(Boolean);
   } catch (_) {
     return false; // pgrep exits non-zero when nothing matched
   }
+  for (const pid of pids) {
+    try {
+      const args = run('ps', ['-o', 'args=', '-p', pid], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      if (isXcodebuildTestArgs(args)) return true;
+    } catch (_) { /* exited meanwhile */ }
+  }
+  return false;
 }
 
 /**
@@ -825,6 +850,7 @@ function formatSuiteSection(run) {
 
 module.exports = {
   uiTestIdentifiers,
+  isXcodebuildTestArgs,
   DEFAULT_TIMEOUT_MINUTES,
   PROGRESS_INTERVAL_MS,
   parallelArgs,

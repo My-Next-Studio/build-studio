@@ -728,3 +728,25 @@ test('buildXcodebuildArgs turns off the post-failure sysdiagnose', () => {
   assert.ok(i > 0, 'flag missing — one failing test would add up to 10 minutes of simctl diagnose');
   assert.equal(args[i + 1], 'never');
 });
+
+// fazon 2026-09-28: `pgrep -f 'xcodebuild.*test'` matched a codex QA agent whose
+// prompt (passed as argv) named the xcodebuild command, and QA refused to run.
+test('xcodebuildInFlight only counts real xcodebuild processes running a test action', () => {
+  const { xcodebuildInFlight, isXcodebuildTestArgs } = require('./qa-suite-run');
+  assert.equal(isXcodebuildTestArgs('/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project a -scheme A'), true);
+  assert.equal(isXcodebuildTestArgs('xcodebuild -project a -scheme A -destination x test-without-building'), true);
+  assert.equal(isXcodebuildTestArgs('xcodebuild build -scheme FooTests -only-testing:FooTests'), false);
+
+  const fake = (procs) => (cmd, args) => {
+    if (cmd === 'pgrep') {
+      const pids = Object.keys(procs);
+      if (!pids.length) { const e = new Error('no match'); e.status = 1; throw e; }
+      return pids.join('\n') + '\n';
+    }
+    return procs[args[args.length - 1]] + '\n';
+  };
+  // pgrep -x xcodebuild never lists a node/codex agent, whatever its argv says.
+  assert.equal(xcodebuildInFlight({ run: fake({}) }), false);
+  assert.equal(xcodebuildInFlight({ run: fake({ 101: 'xcodebuild build -scheme A' }) }), false);
+  assert.equal(xcodebuildInFlight({ run: fake({ 101: 'xcodebuild build -scheme A', 102: 'xcodebuild test -scheme A' }) }), true);
+});

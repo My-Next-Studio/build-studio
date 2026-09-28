@@ -21,6 +21,33 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-28 — QA no longer mistakes an agent's prompt for a running test suite
+
+### Fixed
+
+- **QA refused to run with "another xcodebuild test is already running on
+  this machine" when none was.** The check searched every process's command
+  line for `xcodebuild … test`. A Codex agent receives its whole prompt as a
+  command-line argument, and a QA prompt names the xcodebuild command, so any
+  QA agent running in any project counted as a test suite in flight. The check
+  now looks only at processes actually named `xcodebuild`, and counts one only
+  when its action is `test` or `test-without-building`. A scheme or
+  `-only-testing:` value containing "test" does not count.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-28 — Stop tmux from crashing and taking every session with it
 
 ### Fixed
