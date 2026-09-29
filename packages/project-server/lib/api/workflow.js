@@ -463,6 +463,30 @@ function qaStrictGateVerdict(qaFeedback, config, operatorOverride) {
 //   - AUTOMATED + MET     → under `strict`, must cite a test name or a file path,
 //                           catching the "tests pass so the AC is met" cop-out.
 // Rows that aren't MET (UNMET/PARTIAL/UNTESTABLE/…) are never gated here.
+/**
+ * Does this project configure Playwright anywhere it would be run from?
+ * The repo root, one level down (web/, frontend/, app/), and packages/*.
+ *
+ * QA prompts used to assume every JS/TS project has Playwright E2E. fazon's
+ * web app runs its browser tests inside Vitest and has no Playwright config;
+ * the QA agent ran `npx playwright test` as told, got "No tests found", and
+ * reported a gate that could not run — blocking a run whose tests had all been
+ * executed (FAZ-362, 2026-09-29).
+ */
+function findPlaywrightConfigs(projectRoot) {
+  const names = ['playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs', 'playwright.config.cjs', 'playwright.config.mts'];
+  const dirs = [projectRoot];
+  const skip = new Set(['node_modules', '.git', 'dist', 'build', 'out', 'tmp', 'ios', 'android']);
+  const kids = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && !skip.has(e.name) && !e.name.startsWith('.')).map((e) => path.join(d, e.name)); } catch (_) { return []; } };
+  for (const c of kids(projectRoot)) {
+    dirs.push(c);
+    if (path.basename(c) === 'packages' || path.basename(c) === 'apps') dirs.push(...kids(c));
+  }
+  const found = [];
+  for (const d of dirs) for (const n of names) if (fs.existsSync(path.join(d, n))) found.push(path.relative(projectRoot, path.join(d, n)) || n);
+  return found;
+}
+
 function collectMissingAcArtifacts(acFb, { projectRoot, strict = false, exists, commitExists = null }) {
   const missing = [];
   // Match matrix rows: `| <id> | <desc> | <status> | <type> | <evidence> |`
@@ -8024,8 +8048,9 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
           + `Many E2E suites start the server themselves, in which case running the suite is enough.\n\n`
           + `If you cannot serve it from the project's own configuration, say so and skip the browser `
           + `check — that is an environment characteristic of this run, NOT a finding.`;
+      const playwrightConfigs = findPlaywrightConfigs(projectRoot);
       const preTestCmd = config.pre_test_command || '';
-      const preTestSection = preTestCmd ? `\n\n## PRE-TEST SETUP\n\nRun this command FIRST before any tests:\n\`\`\`\n${preTestCmd}\n\`\`\`\nThis ensures test dependencies (browsers, tools) are available in the worktree.` : '\n\n## PRE-TEST SETUP\n\nBefore running E2E tests, ensure Playwright browsers are installed in the worktree:\n```\nnpx playwright install chromium\n```';
+      const preTestSection = preTestCmd ? `\n\n## PRE-TEST SETUP\n\nRun this command FIRST before any tests:\n\`\`\`\n${preTestCmd}\n\`\`\`\nThis ensures test dependencies (browsers, tools) are available in the worktree.` : playwrightConfigs.length ? '\n\n## PRE-TEST SETUP\n\nBefore running E2E tests, ensure Playwright browsers are installed in the worktree:\n```\nnpx playwright install chromium\n```' : '';
       // Extract test file list from qa_tests feedback to focus validation
       const qaTestFeedback2 = (wf.steps.qa_tests?.agents || []).map(a => a.feedback || '').join('\n');
       const testFileMatches2 = qaTestFeedback2.match(/`([^`]+\.test\.[^`]+)`/g) || [];
@@ -8041,7 +8066,9 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
 
       const e2eInstruction = e2eAlreadyRan
         ? `\n\n**E2E tests were already run during task execution — do NOT re-run them.** The results are included below for reference. Only re-run E2E if the task execution report indicates they were NOT completed.\n\n### E2E results from task execution:\n${taskE2EFeedback.slice(0, 3000)}`
-        : '\nThen run any E2E/Playwright .spec.* files written for this PRD.';
+        : playwrightConfigs.length
+          ? '\nThen run any E2E/Playwright .spec.* files written for this PRD.'
+          : '\nThen run any browser or E2E tests written for this PRD, through the project\'s own test scripts.';
 
       const testFileList2 = testFiles2.length > 0
         ? `\n\n## TEST FILES TO RUN\nThese unit test files were written by the QA step for this PRD:\n${testFiles2.map(f => `- ${f}`).join('\n')}\n\nRun these FIRST. If they all pass, run the broader unit test suite (vitest/jest) to check for regressions.${e2eAlreadyRan ? '' : e2eInstruction}`
@@ -8275,7 +8302,7 @@ xcodebuild test \\\\
 
 ---
 
-You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: \`npx vitest run\` or \`npm test\`, plus Playwright (\`npx playwright test\`) for E2E\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
+You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. ${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
       }];
 
       // Launch the agent with the suite result appended. Shared by the direct
@@ -10055,7 +10082,7 @@ module.exports = {
   validateBuilderRole,
   buildBugfixTask,
   markPrdDoneContent,
-  collectMissingAcArtifacts,
+  collectMissingAcArtifacts, findPlaywrightConfigs,
   qaStrictGateVerdict,
   extractOwnerChecklist,
   findIncompleteRequiredSpecs,

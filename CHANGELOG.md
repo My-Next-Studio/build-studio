@@ -21,6 +21,36 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-29 — QA runs a project's own test runner, not Playwright by default
+
+### Fixed
+
+- **QA reported "a check could not run" after running `npx playwright test`
+  in a project that doesn't use Playwright.** The QA prompt told every JS/TS
+  project to run Playwright for E2E and to install its browsers. A project
+  whose browser tests run inside Vitest got "No tests found", which QA filed
+  as a gate that could not run, blocking a run whose tests had all passed.
+  Build Studio now looks for a `playwright.config.*` (at the root, one level
+  down, and in `packages/*`). With one, QA runs Playwright with that config.
+  Without one, QA runs the project's own `package.json` test scripts, is told
+  not to run Playwright, and is told that a runner the project doesn't use is
+  not a check that could not run. The default "install Playwright browsers"
+  setup step appears only when a config exists.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-28 — QA no longer mistakes an agent's prompt for a running test suite
 
 ### Fixed
