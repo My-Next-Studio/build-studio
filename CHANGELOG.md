@@ -21,6 +21,50 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-29 — QA skips the iOS suite when a branch doesn't touch the app
+
+### Changed
+
+- **The server-run native test suite now runs only when the branch touches
+  what the app is built from.** In a project with a simulator configured,
+  every QA round ran the iOS unit suite first, about 7 minutes of the one
+  simulator, even for a story that only changed the web app. QA now compares
+  the branch with the default branch and runs the suite when any of these
+  changed:
+  - the folder holding the `.xcodeproj`, e.g. `ios/`;
+  - any file the Xcode project references outside that folder, read from
+    `project.pbxproj`. This is how shared contracts such as
+    `contracts/nutrient-fields-v1.json` reach the app and its tests;
+  - anything listed in the new `qa_validation.native_suite_paths`.
+
+  Otherwise the suite is skipped, the QA agent is told it was skipped on
+  purpose and why (and not to run xcodebuild or report it as a check that
+  could not run), and the step records `nativeSuiteSkipped`. If the diff
+  can't be read, the suite runs.
+
+```yaml
+qa_validation:
+  native_suite_paths:      # optional: more paths that should trigger the native suite
+    - shared/rules/
+```
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing, unless the app depends on files outside
+its project folder that the Xcode project does not reference directly (a
+build script that copies them, say). List those in
+`qa_validation.native_suite_paths`.
+
+---
+
 ## 2026-09-29 — QA runs a project's own test runner, not Playwright by default
 
 ### Fixed

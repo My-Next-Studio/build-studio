@@ -8160,7 +8160,28 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
           suiteTarget = null;
         }
       }
-      const hoistSuite = !!suiteTarget;
+      // A branch that changes nothing the app builds from (a web-only story)
+      // doesn't need the native suite at all: skip it, and tell the agent so,
+      // instead of spending the one simulator for ~7 minutes on unchanged code.
+      let nativeSkip = null;
+      if (suiteTarget) {
+        let changedFiles = null;
+        try {
+          const base = wf.defaultBranch || 'main';
+          const head = wf.branch || 'HEAD';
+          changedFiles = require('child_process').execFileSync('git', ['diff', '--name-only', `${base}...${head}`], { cwd: projectRoot, encoding: 'utf8' })
+            .split('\n').map((l) => l.trim()).filter(Boolean);
+        } catch (_) { changedFiles = null; }
+        const rel = qaSuite.nativeSuiteRelevance({
+          projectRoot, projectPath: suiteTarget.project, changedFiles,
+          extraPaths: (config.qa_validation && config.qa_validation.native_suite_paths) || [],
+        });
+        if (!rel.relevant) {
+          nativeSkip = rel;
+          console.log(`[qa-suite] skipping the native suite: ${rel.reason}`);
+        }
+      }
+      const hoistSuite = !!suiteTarget && !nativeSkip;
       // Parallel XCUITest cloning halves wallclock but, on some iOS-26 simulator
       // cohorts, the clones crash on boot (FBSOpenApplicationServiceError cascade),
       // making tests flaky and tripping the QA gate run after run. Let a project
@@ -8315,8 +8336,12 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
       };
 
       if (!hoistSuite) {
-        wf.steps.qa_validation = { status: 'running', agents: [] };
-        launchQaAgent('');
+        wf.steps.qa_validation = { status: 'running', agents: [], ...(nativeSkip ? { nativeSuiteSkipped: nativeSkip.reason } : {}) };
+        launchQaAgent(nativeSkip
+          ? `\n\n## iOS SUITE — NOT RUN THIS ROUND (by design)\n\n${nativeSkip.reason.charAt(0).toUpperCase() + nativeSkip.reason.slice(1)}, so nothing the iOS app is built or tested from has changed. `
+            + `**Do NOT run xcodebuild or the simulator this round**, and do not report the iOS suite as a check that could not run: it was skipped on purpose. `
+            + `Test what the branch did change with that code's own test commands, and say in your report that the iOS suite was skipped and why.`
+          : '');
         return res.json({ workflow: wf });
       }
 

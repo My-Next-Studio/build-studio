@@ -750,3 +750,32 @@ test('xcodebuildInFlight only counts real xcodebuild processes running a test ac
   assert.equal(xcodebuildInFlight({ run: fake({ 101: 'xcodebuild build -scheme A' }) }), false);
   assert.equal(xcodebuildInFlight({ run: fake({ 101: 'xcodebuild build -scheme A', 102: 'xcodebuild test -scheme A' }) }), true);
 });
+
+// The iOS unit suite ran in every QA round of a project with a simulator,
+// including web-only stories. It is skipped only when the branch changes
+// nothing the app is built or tested from.
+test('nativeSuiteRelevance: app folder, pbxproj references outside it, and configured paths', () => {
+  const { nativeSuiteRelevance } = require('./qa-suite-run');
+  const pbx = 'x /* a */ = {isa = PBXFileReference; path = "../contracts/fields-v1.json"; sourceTree = "<group>"; };\n'
+    + 'y = {isa = PBXFileReference; path = Foo.swift; };';
+  const base = { projectRoot: '/p', projectPath: 'ios/App.xcodeproj', readFile: () => pbx };
+  const r = (changedFiles, extra) => nativeSuiteRelevance({ ...base, changedFiles, extraPaths: extra });
+
+  assert.equal(r(['web/src/a.ts', 'docs/x.md']).relevant, false, 'web-only story skips');
+  assert.deepEqual(r(['web/src/a.ts']).watched, ['ios/', 'contracts/fields-v1.json']);
+  assert.equal(r(['web/a.ts', 'ios/App/Thing.swift']).relevant, true, 'any app file runs it');
+  assert.equal(r(['contracts/fields-v1.json']).relevant, true, 'a contract the project references runs it');
+  assert.equal(r(['contracts/other.json']).relevant, false, 'an unreferenced contract does not');
+  assert.equal(r(['shared/rules.json'], ['shared/']).relevant, true, 'configured native_suite_paths count');
+  assert.equal(r([]).relevant, false, 'no changes at all skips');
+});
+
+test('nativeSuiteRelevance runs the suite whenever it cannot tell', () => {
+  const { nativeSuiteRelevance } = require('./qa-suite-run');
+  assert.equal(nativeSuiteRelevance({ projectRoot: '/p', projectPath: 'ios/App.xcodeproj', changedFiles: null }).relevant, true);
+  assert.equal(nativeSuiteRelevance({ projectRoot: '/p', projectPath: null, changedFiles: ['web/a.ts'] }).relevant, true);
+  assert.equal(nativeSuiteRelevance({ projectRoot: '/p', projectPath: 'App.xcodeproj', changedFiles: ['web/a.ts'] }).relevant, true, 'project at repo root: everything is the app');
+  const unreadable = nativeSuiteRelevance({ projectRoot: '/p', projectPath: 'ios/App.xcodeproj', changedFiles: ['web/a.ts'], readFile: () => { throw new Error('ENOENT'); } });
+  assert.equal(unreadable.relevant, false);
+  assert.deepEqual(unreadable.watched, ['ios/']);
+});

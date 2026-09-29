@@ -515,6 +515,43 @@ function isXcodebuildTestArgs(args) {
   return tokens.slice(1).some((t) => t === 'test' || t === 'test-without-building');
 }
 
+/**
+ * Does this branch touch anything the native app builds from?
+ *
+ * The server ran the whole iOS unit suite (~7 min of the one simulator) in
+ * every QA round of a project with a simulator configured, including stories
+ * that only changed the web app. Skip it when the branch changes nothing the
+ * app is built or tested from:
+ *   - the folder holding the .xcodeproj (e.g. `ios/`),
+ *   - every file the project references OUTSIDE that folder (read from
+ *     project.pbxproj: `path = "../contracts/nutrient-fields-v1.json"`), which
+ *     is how shared contracts reach the app and its tests,
+ *   - anything listed in `qa_validation.native_suite_paths`.
+ * When in doubt it says relevant: an unknown diff, or no project file,
+ * runs the suite.
+ */
+function nativeSuiteRelevance({ projectRoot, projectPath, changedFiles, extraPaths = [], readFile = (f) => fs.readFileSync(f, 'utf8') }) {
+  if (!Array.isArray(changedFiles)) return { relevant: true, reason: 'the branch diff is unknown', watched: [] };
+  if (!projectPath) return { relevant: true, reason: 'no Xcode project resolved', watched: [] };
+  const projDir = path.posix.dirname(projectPath.replace(/\\/g, '/'));            // e.g. "ios"
+  const appDir = projDir === '.' ? '' : `${projDir}/`;
+  const watched = new Set();
+  if (appDir) watched.add(appDir); else return { relevant: true, reason: 'the Xcode project sits at the repo root', watched: [] };
+  try {
+    const pbx = readFile(path.join(projectRoot, projectPath, 'project.pbxproj'));
+    for (const m of pbx.matchAll(/path = "?(\.\.\/[^";]+)"?;/g)) {
+      const rel = path.posix.normalize(path.posix.join(projDir, m[1]));
+      if (!rel.startsWith('..')) watched.add(rel);
+    }
+  } catch (_) { /* no project file readable: the app folder alone is watched */ }
+  for (const p of extraPaths || []) if (typeof p === 'string' && p.trim()) watched.add(p.trim());
+  const list = [...watched];
+  const hit = changedFiles.find((f) => list.some((w) => (w.endsWith('/') ? f.startsWith(w) : f === w || f.startsWith(`${w}/`))));
+  return hit
+    ? { relevant: true, reason: `the branch changes ${hit}`, watched: list }
+    : { relevant: false, reason: `the branch changes nothing under ${list.join(', ')}`, watched: list };
+}
+
 function xcodebuildInFlight({ run = execFileSync } = {}) {
   let pids = [];
   try {
@@ -851,6 +888,7 @@ function formatSuiteSection(run) {
 module.exports = {
   uiTestIdentifiers,
   isXcodebuildTestArgs,
+  nativeSuiteRelevance,
   DEFAULT_TIMEOUT_MINUTES,
   PROGRESS_INTERVAL_MS,
   parallelArgs,
