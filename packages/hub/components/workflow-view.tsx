@@ -37,6 +37,14 @@ interface WorkflowAgent {
   tokenUsage?: { inputTokens: number; outputTokens: number; cacheCreate: number; cacheRead: number; costUSD: number }
   /** ISO time the agent launched (server-set). */
   startedAt?: string
+  /** Alive but not progressing — project-server/lib/agent-stalled.js. On
+   *  'awaiting_decision', `question` is the dialog the agent is holding at. */
+  stalled?: { reason: string; title: string; detail: string; action: string; question?: string }
+}
+
+/** The agent is holding at a question for the owner — not working, not failed. */
+function isAwaitingAnswer(agent: WorkflowAgent | null | undefined): boolean {
+  return !!agent && !agent.feedback && agent.status !== 'done' && agent.stalled?.reason === 'awaiting_decision'
 }
 
 /** Server-derived halt reason — project-server/lib/needs-attention.js.
@@ -46,6 +54,8 @@ interface NeedsAttention {
   reason: 'completed_not_finished' | 'review_cap_reached' | 'dead_step' | 'blocked' | 'human_gate'
     | 'auth_blocked' | 'finished_not_reported' | 'agent_waiting' | 'awaiting_decision' | 'gate_blocked' | 'owner_action'
   step: string | null
+  /** tmux window of the agent concerned, when there is one. */
+  window?: string
   title: string
   detail: string
   action: string
@@ -1376,6 +1386,20 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
               <span style={{ whiteSpace: 'pre-wrap' }}>{needsAttention.detail}</span>
               <br />
               <span style={{ color: 'var(--muted)' }}>{needsAttention.action}</span>
+              {needsAttention.reason === 'awaiting_decision' && needsAttention.window && (
+                <span style={{ display: 'block', marginTop: 8 }}>
+                  <button
+                    onClick={() => setViewingLog(needsAttention.window!)}
+                    style={{
+                      padding: '4px 10px', borderRadius: 4,
+                      border: '1px solid var(--orange)', background: 'color-mix(in srgb, var(--orange) 15%, transparent)',
+                      color: 'var(--orange)', fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                    }}
+                  >
+                    Open terminal to answer →
+                  </button>
+                </span>
+              )}
               {/* The agent finished but never reported — its output is on disk.
                   Offered above the relaunch because relaunching discards work
                   that already exists, and because a wedged agent cannot be
@@ -2124,6 +2148,7 @@ function TaskBoard({ wf, onSkipBlocked, onViewLog }: { wf: Workflow; onSkipBlock
 
           // Running agent activity
           const runningAgent = isRunning ? (ts.agents || []).find((a: WorkflowAgent) => a.status === 'running' || a.status === 'pending') : null
+          const waitingAgent = (ts.agents || []).find((a: WorkflowAgent) => isAwaitingAnswer(a))
 
           return (
             <div key={i} style={{
@@ -2163,7 +2188,12 @@ function TaskBoard({ wf, onSkipBlocked, onViewLog }: { wf: Workflow; onSkipBlock
                       {task.description}
                     </div>
                   )}
-                  {isRunning && (runningAgent as any)?.activity && (
+                  {waitingAgent && (
+                    <div style={{ fontSize: 11, color: 'var(--orange)', lineHeight: 1.4, whiteSpace: 'pre-wrap' }}>
+                      {waitingAgent.stalled?.question || 'The agent asked a question — answer it in its terminal.'}
+                    </div>
+                  )}
+                  {!waitingAgent && isRunning && (runningAgent as any)?.activity && (
                     <div style={{ fontSize: 11, color: 'var(--blue)', lineHeight: 1.4, fontStyle: 'italic' }}>
                       {(runningAgent as any).activity}
                     </div>
@@ -2177,7 +2207,9 @@ function TaskBoard({ wf, onSkipBlocked, onViewLog }: { wf: Workflow; onSkipBlock
 
                 {/* Status + meta */}
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-                  {isRunning && (
+                  {waitingAgent ? (
+                    <span style={{ fontSize: 11, fontFamily: 'var(--mono)', fontWeight: 600, color: 'var(--orange)' }}>⏸ waiting for you</span>
+                  ) : isRunning && (
                     <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--blue)' }}>running</span>
                   )}
                   {isDone && (
@@ -2195,7 +2227,7 @@ function TaskBoard({ wf, onSkipBlocked, onViewLog }: { wf: Workflow; onSkipBlock
                       )}
                     </>
                   )}
-                  {isError && (
+                  {isError && !waitingAgent && (
                     <>
                       <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--red)' }}>error</span>
                       <button
@@ -3049,7 +3081,7 @@ function Empty({ icon, text }: { icon: string; text: string }) {
 
 // --- Feedback verdict detection ---
 
-type Verdict = 'approved' | 'changes' | 'blocking' | 'working' | 'error'
+type Verdict = 'approved' | 'changes' | 'blocking' | 'working' | 'waiting' | 'error'
 
 // Parse the structured comment counts a reviewer reports
 // ("**Blocking:** 0  |  **Medium:** 0  |  **Low:** 1"). Returns null when the
@@ -3064,6 +3096,9 @@ function parseCommentCounts(feedback?: string): { blocking: number; medium: numb
 }
 
 function detectVerdict(agent: WorkflowAgent): Verdict {
+  // Before 'error': the idle timeout used to stamp a waiting agent 'error', and
+  // a run parked on an old server still carries that stamp.
+  if (isAwaitingAnswer(agent)) return 'waiting'
   if (agent.status === 'error') return 'error'
   if (agent.status === 'running' || agent.status === 'pending') return 'working'
   if (!agent.feedback) return 'working'
@@ -3140,6 +3175,7 @@ const VERDICT_CONFIG: Record<Verdict, { label: string; icon: string; color: stri
   approved: { label: 'Approved', icon: '✓', color: 'var(--green)', borderColor: 'rgba(61,220,132,0.3)', bgColor: 'rgba(61,220,132,0.06)' },
   changes:  { label: 'Changes requested', icon: '↻', color: 'var(--orange)', borderColor: 'rgba(249,115,22,0.3)', bgColor: 'rgba(249,115,22,0.06)' },
   blocking: { label: 'Blocking issues', icon: '✗', color: 'var(--red)', borderColor: 'rgba(255,95,95,0.3)', bgColor: 'rgba(255,95,95,0.06)' },
+  waiting:  { label: 'Waiting for your answer', icon: '⏸', color: 'var(--orange)', borderColor: 'var(--orange)', bgColor: 'color-mix(in srgb, var(--orange) 10%, transparent)' },
   working:  { label: 'Working...', icon: '◌', color: 'var(--yellow)', borderColor: 'rgba(245,197,24,0.2)', bgColor: 'transparent' },
   error:    { label: 'Error', icon: '!', color: 'var(--red)', borderColor: 'rgba(255,95,95,0.3)', bgColor: 'rgba(255,95,95,0.06)' },
 }
@@ -3412,7 +3448,7 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
 
         {/* Actions */}
         <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          {(agent.status === 'error' || agent.logError) && onRelaunchTask && agent.taskIndex !== undefined && (
+          {(agent.status === 'error' || agent.logError) && verdict !== 'waiting' && onRelaunchTask && agent.taskIndex !== undefined && (
             <button
               onClick={(e) => { e.stopPropagation(); onRelaunchTask(agent.taskIndex!) }}
               style={{
@@ -3439,13 +3475,17 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
           {agent.window && (
             <button
               onClick={(e) => { e.stopPropagation(); onViewLog(agent.window!) }}
-              style={{
+              style={verdict === 'waiting' ? {
+                padding: '2px 8px', borderRadius: 4,
+                border: '1px solid var(--orange)', background: 'color-mix(in srgb, var(--orange) 15%, transparent)',
+                color: 'var(--orange)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600, cursor: 'pointer',
+              } : {
                 padding: '2px 8px', borderRadius: 4,
                 border: '1px solid var(--border)', background: 'none',
                 color: 'var(--muted)', fontFamily: 'var(--mono)', fontSize: 10, cursor: 'pointer',
               }}
             >
-              Log
+              {verdict === 'waiting' ? 'Answer in terminal →' : 'Log'}
             </button>
           )}
           {hasFullFeedback && (
@@ -3455,6 +3495,21 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
           )}
         </span>
       </div>
+
+      {/* The question the agent is holding at, so the owner can see what is
+          asked without opening the terminal first. */}
+      {verdict === 'waiting' && (
+        <div style={{ padding: '8px 14px 10px', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text)' }}>
+          <div style={{ color: 'var(--orange)', marginBottom: 4 }}>
+            This agent asked you a question and will not continue until you answer it in its terminal.
+          </div>
+          {agent.stalled?.question && (
+            <div style={{ whiteSpace: 'pre-wrap', padding: '6px 10px', borderLeft: '2px solid var(--orange)', background: 'var(--surface)' }}>
+              {agent.stalled.question}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Expanded feedback */}
       {expanded && agent.feedback && (

@@ -3603,6 +3603,20 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         if (story.status !== requiredStatus) {
           return res.status(409).json({ error: `${storyId} is "${story.status || 'unset'}", but a ${type} run requires status "${requiredStatus}". Move the item to ${requiredStatus} first.` });
         }
+        // Gate 3 — what it depends on must be built. Overridable: the owner
+        // may know a dependency is only nominal, or be building both at once.
+        if (type !== 'review' && !startOverride) {
+          const unbuilt = require('../backlog').unbuiltDependencies(projectRoot, relDocsPath, story);
+          if (unbuilt.length > 0) {
+            const lines = unbuilt.map((d) => `  - ${d.id}${d.title ? ` — ${d.title}` : ''}: ${d.status ? `"${d.status}"` : 'no backlog item found'}`);
+            return res.status(409).json({
+              error: `Cannot start execution: ${storyId} depends on ${unbuilt.length === 1 ? 'an item that is' : 'items that are'} not built yet:\n\n${lines.join('\n')}\n\n`
+                + `Build ${unbuilt.length === 1 ? 'it' : 'them'} first (status Implemented or Done), or retry with {"override": true} to build ${storyId} anyway.`,
+              unbuiltDependencies: unbuilt,
+              canOverride: true,
+            });
+          }
+        }
         prdPath = prdRef;
         itemId = storyId;
       } else {

@@ -795,12 +795,20 @@ function startServer(projectRoot, opts = {}) {
                 waitConfirmMs: AGENT_DEAD_CONFIRM_MS,
               });
               if (stalled) {
-                if (agent.stalledReason !== stalled.reason) {
+                if (agent.stalledReason !== stalled.reason
+                    || (agent.stalled && agent.stalled.question) !== stalled.question) {
                   console.warn(`[agent-stalled] ${agent.role} in ${activeWf.currentStep}: ${stalled.reason} — ${stalled.action}`);
                   changed = true;
                 }
                 agent.stalled = stalled;
                 agent.stalledReason = stalled.reason;
+                // Waiting for a person is not a failure. An agent the idle
+                // timeout already stamped 'error' goes back to running.
+                if (stalled.reason === 'awaiting_decision' && agent.status === 'error') {
+                  agent.status = 'running';
+                  delete agent.error;
+                  changed = true;
+                }
               } else if (agent.stalledReason) {
                 // It recovered on its own — clear rather than leave a stale
                 // "needs you", which is worse than none.
@@ -811,7 +819,12 @@ function startServer(projectRoot, opts = {}) {
             } catch (_) { /* advisory — never let detection break the tick */ }
           }
 
-          if (idleMs > AGENT_IDLE_TIMEOUT_MS) {
+          // An agent holding at a question produces no output by design, so
+          // the idle timeout must not call it failed: the step then read as
+          // "cannot advance — all agents failed" while it waited for an answer
+          // (launch-studio LS-167, 2026-09-30).
+          const waitingForOwner = !!(agent.stalled && agent.stalled.reason === 'awaiting_decision');
+          if (idleMs > AGENT_IDLE_TIMEOUT_MS && !waitingForOwner) {
             agent.status = 'error';
             // Say which of the two it is. An agent on a CLI with no resumable
             // session (codex, opencode) is downgraded from 'dead' to 'alive'

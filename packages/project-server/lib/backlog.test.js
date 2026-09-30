@@ -524,3 +524,26 @@ test('listItems normalizes a bare-ID prd field to the resolved path', () => {
   const item = listItems(root, 'docs').find(i => i.id === 'EX-026');
   assert.equal(item.prd, 'docs/prds/PRD-028-coach.md');
 });
+
+// ─── unbuiltDependencies — the execution start gate (2026-09-30) ────────────
+const { unbuiltDependencies } = require('./backlog');
+
+test('unbuiltDependencies lists what is not Implemented/Done, and ids with no item', () => {
+  const root = tmpProject();
+  writeItem(root, 'docs', { id: 'EX-001', title: 'Base', type: 'Feature', status: 'Done', body: '' });
+  writeItem(root, 'docs', { id: 'EX-002', title: 'Shell', type: 'Feature', status: 'Implemented', body: '' });
+  writeItem(root, 'docs', { id: 'EX-003', title: 'Tokens', type: 'Feature', status: 'Reviewed', body: '' });
+  const story = { id: 'EX-004', depends_on: ['EX-001', 'EX-002', 'EX-003', 'EX-099'] };
+  assert.deepEqual(unbuiltDependencies(root, 'docs', story), [
+    { id: 'EX-003', title: 'Tokens', status: 'Reviewed' },
+    { id: 'EX-099', title: '', status: null },
+  ]);
+});
+
+test('unbuiltDependencies is empty with no depends_on, and accepts a scalar', () => {
+  const root = tmpProject();
+  writeItem(root, 'docs', { id: 'EX-001', title: 'Base', type: 'Feature', status: 'Drafted', body: '' });
+  assert.deepEqual(unbuiltDependencies(root, 'docs', { id: 'EX-002' }), []);
+  assert.deepEqual(unbuiltDependencies(root, 'docs', { id: 'EX-002', depends_on: [] }), []);
+  assert.equal(unbuiltDependencies(root, 'docs', { id: 'EX-002', depends_on: 'EX-001' })[0].status, 'Drafted');
+});

@@ -103,6 +103,32 @@ function isAwaitingInput(paneText) {
  * @param {number} [p.waitConfirmMs] how long a bare prompt must persist
  * @returns {{reason,title,detail,action}|null}
  */
+/**
+ * The question an agent is holding at, as the pane shows it: the dialog's
+ * heading and options, up to the navigation footer. So the card can show what
+ * is being asked, not just that something is (launch-studio LS-167,
+ * 2026-09-30: an agent waited ten hours on a dependency question nobody saw).
+ */
+function extractQuestion(paneText) {
+  const lines = String(paneText || '').split('\n').map((l) => l.replace(/\s+$/, ''));
+  let end = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (WAITING_MARKERS.some((re) => re.test(lines[i]))) { end = i; break; }
+  }
+  if (end < 0) return null;
+  // The dialog starts at the last rule line (────) or checkbox heading (☐)
+  // above the footer; fall back to the previous 16 lines.
+  let start = Math.max(0, end - 16);
+  for (let i = end - 1; i >= Math.max(0, end - 40); i--) {
+    if (/^\s*[☐☒]/.test(lines[i]) || /^\s*[─━]{8,}/.test(lines[i])) { start = i; if (/[☐☒]/.test(lines[i])) break; }
+  }
+  const body = lines.slice(start, end)
+    .filter((l) => !/^\s*[─━]{8,}\s*$/.test(l))
+    .map((l) => l.replace(/^\s*[│|]\s?/, '').replace(/^\s*[☐☒]\s*/, ''))
+    .join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return body ? body.slice(0, 2000) : null;
+}
+
 function classifyStalledAgent({
   paneText, idleMs, hasFeedback, hasRecoverableReport = false, waitConfirmMs = 2 * 60 * 1000,
 }) {
@@ -144,8 +170,10 @@ function classifyStalledAgent({
   //    blocked on a pre-commit hook question, reported as finished, ~50 minutes
   //    of work one Recover click away from being silently discarded).
   if (WAITING_MARKERS.some((re) => re.test(text))) {
+    const question = extractQuestion(text);
     return {
       reason: 'awaiting_decision',
+      ...(question ? { question } : {}),
       title: 'An agent is waiting for your decision',
       detail: 'The agent asked a question and is holding at its own prompt. It has not finished — its context and any uncommitted work are intact, and it will wait indefinitely.',
       action: 'Open that agent\'s terminal and answer it. Do NOT recover or relaunch — recovering posts a partial report as the step result, and relaunching discards its context and any uncommitted work.',
@@ -173,4 +201,4 @@ function classifyStalledAgent({
   };
 }
 
-module.exports = { classifyStalledAgent, isAwaitingInput, AUTH_PATTERNS, WAITING_MARKERS };
+module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, AUTH_PATTERNS, WAITING_MARKERS };

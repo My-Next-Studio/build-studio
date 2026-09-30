@@ -262,6 +262,32 @@ test('the alive-but-stuck diagnosis outranks the dead-step rules', () => {
   assert.doesNotMatch(n.action, /relaunch/i);
 });
 
+// A task agent lives on taskExecution.taskStates, and the step's mirror is
+// routinely empty — so the rule never saw it, and the dead-step rule reported
+// "task_execution cannot advance — All 1 agent(s) failed" about an agent that
+// was waiting for an answer (launch-studio LS-167, 2026-09-30).
+test('a task-execution agent waiting for an answer surfaces, with the question', () => {
+  const wf = {
+    currentStep: 'task_execution',
+    steps: { task_execution: { status: 'running', agents: [] } },
+    taskExecution: { taskStates: { 0: { agents: [{
+      role: 'Fullstack Dev', status: 'running', feedback: null, window: 'task-0',
+      stalled: {
+        reason: 'awaiting_decision',
+        title: 'An agent is waiting for your decision',
+        detail: 'It asked a question and is holding at its own prompt.',
+        action: 'Open that agent\'s terminal and answer it.',
+        question: 'Dependency\nLS-179 is not built. How should I proceed?',
+      },
+    }] } } },
+  };
+  const n = deriveNeedsAttention(wf);
+  assert.equal(n.reason, 'awaiting_decision');
+  assert.equal(n.step, 'task_execution');
+  assert.equal(n.window, 'task-0');
+  assert.match(n.detail, /It is asking:\nDependency\nLS-179 is not built/);
+});
+
 test('a genuinely dead step is still reported as dead', () => {
   // The reordering must not shadow the rule it now sits in front of.
   const wf = {

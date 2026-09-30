@@ -112,8 +112,10 @@ function deriveNeedsAttention(wf) {
   //     computed correctly, stored on the agent, and never shown to anyone
   //     (2026-08-23). `a.stalled` only exists because the process check said the
   //     agent was alive, so it is the more specific answer wherever both apply.
+  // agentsOfStep, not st.agents: a task_execution agent lives on its task
+  // state, and the mirror is routinely empty (launch-studio LS-167).
   for (const [key, st] of Object.entries(wf.steps || {})) {
-    for (const a of st.agents || []) {
+    for (const a of agentsOfStep(wf, key, st)) {
       // 'done' still disqualifies — a flag must not outlive its condition. But
       // 'error' does not: that is the idle timeout's stamp, not a verdict about
       // the process, and it is the state a waiting agent always ends up in.
@@ -121,8 +123,9 @@ function deriveNeedsAttention(wf) {
         return {
           reason: a.stalled.reason,
           step: key,
+          ...(a.window ? { window: a.window } : {}),
           title: a.stalled.title,
-          detail: `${a.role}: ${a.stalled.detail}`,
+          detail: `${a.role}: ${a.stalled.detail}${a.stalled.question ? `\n\nIt is asking:\n${a.stalled.question}` : ''}`,
           action: a.stalled.action,
         };
       }

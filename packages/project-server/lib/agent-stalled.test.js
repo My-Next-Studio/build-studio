@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { classifyStalledAgent, isAwaitingInput } = require('./agent-stalled');
+const { classifyStalledAgent, isAwaitingInput, extractQuestion } = require('./agent-stalled');
 
 // Real pane tails, trimmed. The discriminator is what the pane ENDS with.
 const WORKING = '✻ Whirlpooling… (1m 6s · ↓ 4.0k tokens)\n⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents';
@@ -138,4 +138,37 @@ test('a genuinely working agent is still not flagged', () => {
 
 test('an agent that already reported is never flagged, dialog or not', () => {
   assert.equal(classifyStalledAgent({ paneText: QUESTION_MENU, idleMs: 20 * 60 * 1000, hasFeedback: true }), null);
+});
+
+// ─── The card says WHAT is being asked (launch-studio LS-167, 2026-09-30) ────
+// "An agent is waiting for your decision" was computed but read as a failure,
+// and nothing showed the question — the owner had to find the terminal to
+// learn it was a dependency question with three options.
+
+const DEPENDENCY_QUESTION = [
+  '⏺ Checking the dependency before building.',
+  '────────────────────────────────────────────────────────────',
+  ' ☐ Dependency',
+  '',
+  'LS-167 (PRD-083) depends on LS-179 (PRD-082), which is Reviewed but not built. How should I proceed?',
+  '',
+  '❯ 1. Stop, report blocked (Recommended)',
+  '  2. Build 082 + 083 here',
+  '  3. Minimal 082 subset',
+  '',
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n');
+
+test('the awaiting_decision verdict carries the question and its options', () => {
+  const v = classifyStalledAgent({ paneText: DEPENDENCY_QUESTION, idleMs: LONG, hasFeedback: false });
+  assert.equal(v.reason, 'awaiting_decision');
+  assert.match(v.question, /^Dependency\n/);
+  assert.match(v.question, /depends on LS-179/);
+  assert.match(v.question, /3\. Minimal 082 subset$/);
+  assert.doesNotMatch(v.question, /Checking the dependency|Enter to select|────/);
+});
+
+test('no dialog, no question', () => {
+  assert.equal(extractQuestion(WORKING), null);
+  assert.equal(extractQuestion(''), null);
 });

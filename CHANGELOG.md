@@ -21,6 +21,45 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-30 — An agent waiting for your answer says so; execution checks dependencies
+
+### Changed
+
+- **An execution run won't start if the story depends on work that isn't built
+  yet.** If a backlog item's `depends_on` lists an item whose status is not
+  Implemented or Done, the start is refused. The error names each such item
+  and its status. A `depends_on` id with no backlog item counts too. Before
+  this, the run started anyway, and the builder found the gap an hour later
+  and stopped to ask. To build it anyway, use the start dialog's override (or
+  `{"override": true}`). Review runs are not affected.
+
+### Fixed
+
+- **An agent waiting for your answer was shown as failed.** When an agent
+  stops at a question dialog, it produces no output, and after 15 minutes the
+  idle timeout marked it `error`. For task-execution agents it got worse.
+  The "waiting for your decision" check never looked at them, so the banner
+  said "task_execution cannot advance — All 1 agent(s) failed" and suggested
+  a relaunch. A relaunch would have thrown away the agent's context. Now:
+  - the idle timeout leaves a waiting agent running, and an agent already
+    marked `error` this way goes back to running;
+  - the banner says the agent is waiting for your decision, shows the question
+    and its options, and has an **Open terminal to answer** button;
+  - the agent card and the task row show **⏸ Waiting for your answer**, with
+    the question, instead of Error/Relaunch.
+
+### Upgrade steps
+
+**In Build Studio** — rebuild the hub, run the full inject, and restart the
+app (`cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`).
+
+**In each managed project** — nothing to do. `depends_on` is already part of
+the backlog item format. Check that it names only prerequisites that must be
+built first, since it is now enforced.
+
+---
+
 ## 2026-09-30 — Support-filed items pass a project's docs lint
 
 ### Fixed

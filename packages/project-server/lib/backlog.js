@@ -487,6 +487,31 @@ function transitionFeaturesForPRD(projectRoot, docsPath, prdRelPath, targetStatu
   return { transitioned };
 }
 
+/**
+ * The items `item` depends on that are not built yet (status not Implemented
+ * or Done), for the execution start gate. An id with no item file is listed
+ * with status null: an unverifiable dependency is worth a stop too, and the
+ * gate can be overridden.
+ *
+ * Without this an execution started on a story whose prerequisite was only
+ * Reviewed, and the builder found out an hour in, asking the owner at a
+ * dialog nobody was watching (launch-studio LS-167 on LS-179, 2026-09-30).
+ */
+function unbuiltDependencies(projectRoot, docsPath, item) {
+  const raw = item && item.depends_on;
+  const ids = (Array.isArray(raw) ? raw : (raw ? String(raw).split(/[\s,]+/) : []))
+    .map((d) => String(d || '').trim()).filter(Boolean);
+  const out = [];
+  for (const id of ids) {
+    let dep = null;
+    try { dep = isValidId(id) ? readItem(projectRoot, docsPath, id) : null; } catch (_) { dep = null; }
+    const status = dep ? (dep.status || null) : null;
+    if (status === 'Implemented' || status === 'Done') continue;
+    out.push({ id, title: dep ? (dep.title || '') : '', status });
+  }
+  return out;
+}
+
 module.exports = {
   BACKLOG_START,
   BACKLOG_END,
@@ -501,6 +526,7 @@ module.exports = {
   serializeItemFile,
   readItem,
   writeItem,
+  unbuiltDependencies,
   listItems,
   parseBacklogSection,
   renderBacklogSection,
