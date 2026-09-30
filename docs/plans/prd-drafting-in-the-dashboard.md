@@ -285,6 +285,9 @@ retrofitting later.
   delta never applies there.
 - **Scorecard and idle reaping** remain as described under *Other
   considerations*. Neither has caused a problem yet.
+- **The kickoff interview** is planned in `kickoff-owner-interview.md`. It
+  reuses this plan's launcher and interview method one level up (a
+  `kickoff_interview` skill), and hands story-level questions back to drafting.
 
 ### Decisions taken
 
