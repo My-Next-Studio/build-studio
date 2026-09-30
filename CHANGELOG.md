@@ -21,6 +21,42 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-30 — Support-filed items pass a project's docs lint
+
+### Fixed
+
+- **A bug filed through Support was left uncommitted, and then blocked your
+  next commit, in a project that lints docs on commit.** The triage agent
+  returns the item's body as markdown, and Build Studio writes the file and
+  auto-commits it. Agents often put a list straight under a bold lead-in
+  (`**Observed:**` then `- …`), which markdownlint rejects (MD032). The
+  project's pre-commit hook refused the auto-commit. The item stayed in the
+  working tree with a note on the support report, and the next commit of
+  anything tripped over it. Build Studio now tidies the body before writing
+  it:
+  - a blank line before a list;
+  - blank lines around headings and code fences;
+  - runs of blank lines collapsed to one.
+
+  Code blocks are left untouched. The triage prompt also asks for linter-clean
+  markdown.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do. An item filed before this, still
+uncommitted, can be fixed with the project's own linter, e.g.
+`npx --yes markdownlint-cli2 --fix docs/backlog/<ID>.md`.
+
+---
+
 ## 2026-09-30 — A blocker only you can clear says so
 
 ### Changed

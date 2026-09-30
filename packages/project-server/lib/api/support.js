@@ -27,6 +27,7 @@ const {
   readItem, writeItem, nextItemId, isValidId,
   backlogDir, projectStatePath, parseBacklogSection, writeBacklogSection,
 } = require('../backlog');
+const { tidyMarkdown } = require('../markdown-tidy');
 const { assertInside } = require('../path-guard');
 const { scopedCommit } = require('../scoped-commit');
 const {
@@ -144,6 +145,8 @@ function composeTriagePrompt({ reportId, reportText, attachmentPaths = [], propo
     '  "findings": "<what your investigation actually found>",',
     '  "reasoning": "<one paragraph justifying the verdict>"',
     '}',
+    '',
+    'Write `body` as markdown that passes a docs linter: a blank line before every list (also right after a bold lead-in line), and blank lines around headings and code fences.',
     '',
     'Verdict rules:',
     '- invalid = not reproducible / not this product / user error. Be conservative — when unsure, prefer bug.',
@@ -271,6 +274,9 @@ function createSupportRouter(config, {
         + ' Draft a PRD before implementing.';
     }
     body += `\n\n_Filed from support report ${report.id}._`;
+    // Agents put lists straight under bold lead-ins; a project that lints docs in
+    // pre-commit then refuses the auto-commit (fazon FAZ-382). See markdown-tidy.js.
+    body = tidyMarkdown(body);
 
     const item = {
       id: newId,
