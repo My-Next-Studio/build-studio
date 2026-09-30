@@ -326,7 +326,7 @@ export function SupportTab() {
 function ReportRow({ report, onRunTriage, onDecide }: {
   report: ReportSummary
   onRunTriage: (id: string) => void
-  onDecide: (id: string, accept: boolean, note: string) => void
+  onDecide: (id: string, accept: boolean, note: string) => Promise<void>
 }) {
   const isFixed = report.linkedItemStatus === 'Done'
   return (
@@ -393,10 +393,18 @@ function ReportRow({ report, onRunTriage, onDecide }: {
 // ─── Proposal card ──────────────────────────────────────────────────────────
 function ProposalCard({ report, onDecide }: {
   report: ReportSummary
-  onDecide: (id: string, accept: boolean, note: string) => void
+  onDecide: (id: string, accept: boolean, note: string) => Promise<void>
 }) {
   const p = report.proposal!
   const [note, setNote] = useState('')
+  // Filing waits for the project's pre-commit hook, which can take seconds.
+  // Without feedback that read as "nothing happened" and invited a second click.
+  const [deciding, setDeciding] = useState<null | 'accept' | 'reject'>(null)
+  const decideOnce = async (accept: boolean) => {
+    if (deciding) return
+    setDeciding(accept ? 'accept' : 'reject')
+    try { await onDecide(report.id, accept, note) } finally { setDeciding(null) }
+  }
   const decidable = report.status === 'proposed' && p.verdict !== 'bug'
 
   return (
@@ -446,10 +454,14 @@ function ProposalCard({ report, onDecide }: {
             }}
           />
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => onDecide(report.id, true, note)} style={primaryButtonStyle}>
-              {acceptLabel(p.verdict)}
+            <button onClick={() => decideOnce(true)} disabled={!!deciding}
+              style={{ ...primaryButtonStyle, ...(deciding ? { opacity: 0.6, cursor: 'wait' } : {}) }}>
+              {deciding === 'accept' ? 'Filing…' : acceptLabel(p.verdict)}
             </button>
-            <button onClick={() => onDecide(report.id, false, note)} style={ghostButtonStyle}>Reject</button>
+            <button onClick={() => decideOnce(false)} disabled={!!deciding}
+              style={{ ...ghostButtonStyle, ...(deciding ? { opacity: 0.6, cursor: 'wait' } : {}) }}>
+              {deciding === 'reject' ? 'Rejecting…' : 'Reject'}
+            </button>
           </div>
         </div>
       ) : (

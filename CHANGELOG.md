@@ -21,6 +21,29 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-30 — Accepting a support proposal twice no longer files it twice
+
+### Fixed
+
+- **Clicking Accept on a support proposal a second time filed a second,
+  identical backlog item.** Filing waits for the auto-commit, and in a project
+  with a pre-commit hook that can take several seconds. During that time the
+  button looked like nothing had happened. A second click was accepted,
+  because the report was still marked as awaiting a decision. Now the report
+  is saved as filed before the commit starts, so a repeat request is refused.
+  The button also disables itself and shows **Filing…** until the request
+  finishes.
+
+### Upgrade steps
+
+**In Build Studio** — rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project** — nothing to do. To check for duplicates filed
+earlier, look for backlog items with the same `reported_via:` report id.
+
+---
+
 ## 2026-09-30 — An agent waiting for your answer says so; execution checks dependencies
 
 ### Changed

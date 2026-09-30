@@ -344,6 +344,7 @@ function createSupportRouter(config, {
       try {
         report.linked_item = materializeItem(report, proposal);
         report.status = 'filed';
+        writeReport(reportDir, report); // before the await — see the decision route
         await autoCommitFiling(report, report.linked_item);
       } catch (e) {
         // Filing failed (e.g. no project-state.md markers) — surface the proposal
@@ -566,6 +567,11 @@ function createSupportRouter(config, {
         report.linked_item = materializeItem(report, proposal);
         report.status = 'filed';
         if (note) report.body = appendNote(report.body, `Filed: ${note}`);
+        // Persist 'filed' BEFORE awaiting the commit. The commit runs the
+        // project's pre-commit hook and can take seconds; while the report
+        // still read 'proposed', a second click on Accept passed the status
+        // check and filed the item again (fazon FAZ-383/384, 2026-09-30).
+        writeReport(reportDir, report);
         await autoCommitFiling(report, report.linked_item);
       }
     } catch (e) {

@@ -366,3 +366,40 @@ test('middleware ordering — create route bypasses the 100kb cap; every other r
     assert.equal(decision.status, 413);
   } finally { cleanDir(root); }
 });
+
+// A second Accept while the first was still committing (the project's
+// pre-commit hook takes seconds) passed the 'proposed' check and filed the item
+// twice (fazon FAZ-383/384, 2026-09-30).
+test('decision accept clicked twice during a slow commit files one item', async () => {
+  const root = makeProject();
+  try {
+    const { execFileSync } = require('child_process');
+    const git = (...a) => execFileSync('git', a, { cwd: root, stdio: 'pipe' });
+    git('init', '-q');
+    git('config', 'user.email', 't@example.com');
+    git('config', 'user.name', 'T');
+    git('add', '-A');
+    git('commit', '-qm', 'seed');
+    const hook = path.join(root, '.git', 'hooks', 'pre-commit');
+    fs.writeFileSync(hook, '#!/bin/sh\nsleep 1\n');
+    fs.chmodSync(hook, 0o755);
+
+    const proposal = {
+      verdict: 'feature', duplicate_of: null, title: 'Add dark mode',
+      body: '## Request\nSupport a dark theme.', role: 'Frontend Dev', severity: 'normal',
+      findings: 'No theming layer.', reasoning: 'New capability.',
+    };
+    const app = makeApp({ projectRoot: root, docs_path: 'docs', name: 'ex' }, stubDeps(proposal));
+    await req(app, 'POST', '/api/support/reports', { text: 'dark mode please' });
+    await req(app, 'POST', '/api/support/reports/RPT-001/triage', {});
+    await req(app, 'GET', '/api/support/reports/RPT-001/triage/status');
+    const first = req(app, 'POST', '/api/support/reports/RPT-001/decision', { accept: true });
+    await new Promise(r => setTimeout(r, 200));
+    const second = await req(app, 'POST', '/api/support/reports/RPT-001/decision', { accept: true });
+    const d = await first;
+    assert.equal(d.status, 200);
+    assert.equal(d.body.report.linked_item, 'EX-002');
+    assert.equal(second.status, 409);
+    assert.equal(fs.existsSync(path.join(root, 'docs', 'backlog', 'EX-003.md')), false);
+  } finally { cleanDir(root); }
+});
