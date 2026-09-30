@@ -179,7 +179,8 @@ test('a capped PRD review names both ways out, not the fix loop’s', () => {
   assert.match(n.title, /PRD review/);
   assert.match(n.detail, /FAZ-218/);
   assert.match(n.detail, /5 rounds/);
-  assert.match(n.action, /another review round/i);
+  assert.match(n.action, /next review round as if there were no cap/i);
+  assert.match(n.action, /companion specs/);
   assert.match(n.action, /companion specs/i);
 });
 
@@ -190,7 +191,8 @@ test('a capped execution fix loop keeps its own wording', () => {
   };
   const n = deriveNeedsAttention(wf);
   assert.match(n.title, /Fix loop/);
-  assert.match(n.action, /approve, override, or cancel/);
+  assert.match(n.action, /as if there were no cap/);
+  assert.match(n.action, /accept its open findings/);
 });
 
 // ── Alive but not progressing (2026-08-12) ─────────────────────────────────

@@ -44,7 +44,7 @@ test('the round cap halts for a decision instead of picking an outcome', () => {
   // Hitting the cap says the loop ran as long as it was allowed — not that the
   // PRD is finished. The engine must not choose; it stops and asks.
   const region = reviewRegion();
-  const cap = region.indexOf('wf.round > MAX_REVIEW_ROUNDS');
+  const cap = region.indexOf('if (capExceeded(wf)) {');
   assert.ok(cap > 0, 'round cap branch not found');
   const branch = region.slice(cap, cap + 1400);
   assert.match(branch, /wf\.currentStep = 'review_cap_reached'/);
@@ -165,12 +165,12 @@ test('the generated feedback curl carries the step it belongs to', () => {
 function executionCapRegion() {
   const i = SRC.indexOf("const source = wf.fixSource || wf.returnTo || 'code_review';");
   assert.ok(i > 0, 'execution cap handler not found');
-  return SRC.slice(i, i + 2200);
+  return SRC.slice(i, i + 3600);
 }
 
-test('approving the execution cap tells the delegated approve it is an operator override', () => {
+test('accepting findings at the execution cap (skip) tells the delegated approve it is an operator override', () => {
   const region = executionCapRegion();
-  const approve = region.indexOf("if (action === 'approve' || action === 'skip')");
+  const approve = region.indexOf("if (action === 'skip') {");
   assert.ok(approve > 0);
   const branch = region.slice(approve, approve + 1400);
   assert.match(branch, /override: true/);
@@ -229,4 +229,38 @@ test('send_to_devs without a QA report needs an override AND notes', () => {
   // The plain no-feedback refusal still exists for every other case.
   assert.match(body, /Cannot send to devs: qa_validation has no feedback/);
   assert.ok(body.indexOf('ownerDirected') < body.indexOf('Cannot send to devs: qa_validation has no feedback'));
+});
+
+
+// The cap is a loop guard. Continuing past it must lead where the loop would
+// have gone without it — back to the review that raised the findings — and
+// never skip that review (launch-studio LS-166, 2026-09-29: approving at the
+// cap merged a fix round nobody reviewed, with a BLOCKING finding open).
+test('execution cap: approve continues to the source review with a fresh budget', () => {
+  const region = executionCapRegion();
+  const i = region.indexOf("if (action === 'approve' || action === 'another_round') {");
+  assert.ok(i > 0, 'approve/continue branch missing');
+  const branch = region.slice(i, region.indexOf("if (action === 'skip') {"));
+  assert.match(branch, /restartCapBudget\(wf\)/);
+  assert.match(branch, /wf\.currentStep = source;/);
+  assert.doesNotMatch(branch, /handleExecutionAdvance/, 'must not run the source step\'s approve (that skips the review)');
+  assert.doesNotMatch(branch, /wf\.round = 1/, 'the run\'s round number is not rewritten');
+});
+
+test('review cap: approve reviews again; stopping for companion specs needs skip', () => {
+  const region = reviewRegion();
+  const i = region.indexOf("wf.currentStep === 'review_cap_reached'");
+  const handler = region.slice(i, i + 1800);
+  const cont = handler.slice(handler.indexOf("if (action === 'approve' || action === 'another_round') {"), handler.indexOf("if (action === 'skip') {"));
+  assert.match(cont, /wf\.currentStep = 'reviewing'/);
+  assert.match(cont, /restartCapBudget\(wf\)/);
+  const stop = handler.slice(handler.indexOf("if (action === 'skip') {"));
+  assert.match(stop, /wf\.currentStep = 'companion_specs'/);
+});
+
+test('every review and fix-loop cap counts from the budget base, not from round 1', () => {
+  const raised = SRC.split("wf.currentStep = 'review_cap_reached';").length - 1;
+  assert.equal(raised, 4, 'four places raise the cap');
+  assert.equal((SRC.match(/if \(capExceeded\(wf\)\) \{/g) || []).length, 4);
+  assert.match(SRC, /return \(wf\.round - \(wf\.capBaseRound \|\| 0\)\) > MAX_REVIEW_ROUNDS;/);
 });

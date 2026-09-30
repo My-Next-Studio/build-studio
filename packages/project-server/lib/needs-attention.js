@@ -91,8 +91,8 @@ function deriveNeedsAttention(wf) {
         ? `The review of ${wf.input || 'this item'} reached ${rounds} rounds. Hitting the cap says the loop ran as long as you allowed — not that the PRD is finished or unfinished — so the run stops here rather than deciding for you.`
         : `The ${(step && step.cap) || 'fix'} loop reached ${rounds} rounds. The engine stops here rather than looping indefinitely.`,
       action: isPrdReview
-        ? 'Run another review round, or move on to companion specs — the run finishes after those.'
-        : 'Review the outstanding findings, then approve, override, or cancel the run.',
+        ? 'Continue to run the next review round as if there were no cap, or stop reviewing and move on to companion specs.'
+        : `Continue to send the latest fixes back to ${(step && step.cap) || 'the review'} as if there were no cap, or accept its open findings and move on.`,
     };
   }
 

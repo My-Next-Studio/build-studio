@@ -1769,34 +1769,31 @@ function StepDetail({
 
       {/* Review cap — blocked, needs human decision to force-continue */}
       {isCurrentStep && activeKey === 'review_cap_reached' && (() => {
-        // Two loops reach this step and they offer different ways out. A PRD
-        // review can go round again or stop reviewing and write companion
-        // specs; an execution fix loop force-continues into the step it was
-        // called from. Hitting the cap is not a verdict either way — it only
-        // says the loop ran as long as it was allowed — so neither choice is
-        // preselected and the run never finishes from here.
+        // The cap is a loop GUARD, not a verdict. Continue leads exactly where
+        // the loop was going (the review again, on the latest changes); the
+        // guard then counts afresh. Leaving the loop early — accepting the open
+        // findings, or stopping a PRD review — is a separate, explicitly named
+        // choice, never the primary button.
         const isPrdReview = (step as any).cap === 'review'
         const rounds = (step as any).rounds ?? wf.round
+        const source = (step as any).cap && (step as any).cap !== 'review' && (step as any).cap !== 'fix'
+          ? String((step as any).cap).replace(/_/g, ' ')
+          : 'the review'
         return (
-          <ActionArea label={`${isPrdReview ? 'Review' : 'Fix loop'} capped after ${rounds} rounds:`}>
+          <ActionArea label={`${isPrdReview ? 'Review' : 'Fix loop'} paused after ${rounds} rounds:`}>
             <div style={{ marginBottom: 12, fontSize: 12, color: 'var(--text-dim)', fontFamily: 'var(--mono)', lineHeight: 1.5 }}>
               {isPrdReview
-                ? `The PRD has been through ${rounds} review rounds — the cap you set. That says the loop ran as long as you allowed, not that the PRD is done or undone. Either keep reviewing, or stop reviewing and move to companion specs; the run finishes after those.`
-                : `The workflow has cycled through ${rounds} fix rounds without fully resolving all issues. You can force-continue (re-merge and re-review) or cancel the workflow.`}
+                ? `The review loop has run ${rounds} rounds, the cap you set, so it paused to ask. Continue runs the next review round exactly as it would have without the cap. Stopping moves on to companion specs with the PRD as it is now.`
+                : `The fix loop has run ${rounds} rounds, the cap you set, so it paused to ask. Continue sends the latest fixes back to ${source}: if it's clean the run moves on, if not the fix loop carries on and pauses again after the same number of rounds. Accepting skips that review and takes ${source}'s last findings as they are.`}
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {isPrdReview ? (
-                <>
-                  <button onClick={() => onAdvance('another_round')} className="wf-btn secondary">
-                    ↻ Another review round
-                  </button>
-                  <button onClick={() => onAdvance('approve')} className="wf-btn primary">
-                    Move on to companion specs →
-                  </button>
-                </>
-              ) : (
-                <button onClick={() => onAdvance('approve')} className="wf-btn primary">
-                  Force Continue →
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => onAdvance('approve')} className="wf-btn primary">
+                {isPrdReview ? 'Continue reviewing →' : 'Continue →'}
+              </button>
+              {/* Bug-fix runs have no accept path: their cap only ever continues. */}
+              {(isPrdReview || wf.type !== 'bugfix') && (
+                <button onClick={() => onAdvance('skip')} className="wf-btn secondary">
+                  {isPrdReview ? 'Stop reviewing → companion specs' : 'Accept open findings & move on'}
                 </button>
               )}
               <button onClick={() => onAdvance('cancel')} className="wf-btn secondary">

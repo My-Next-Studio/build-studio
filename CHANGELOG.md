@@ -21,6 +21,56 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-30 — Continuing past a round cap no longer skips the review
+
+### Changed
+
+- **Continuing at a round cap now does exactly what the loop would have done
+  without the cap.** The cap is a guard against a loop that never converges,
+  not a verdict, so continuing must not change the outcome. Before, it did:
+  - **Execution runs:** the cap fires right after a fix round. "Force
+    Continue", whose text promised "re-merge and re-review", ran the source
+    step's *approve* instead. The last fix round went unreviewed, and the
+    review's open findings were accepted without being shown. In one real run
+    a BLOCKING final-review finding went to merge that way. **Continue** now
+    sends the latest fixes back to the review that raised the findings. If it's
+    clean, the run moves on; if not, the fix loop carries on.
+  - **PRD review runs:** the cap fires after the PM's revision. The primary
+    button moved on to companion specs. **Continue reviewing** now runs the
+    next review round.
+  - **The guard counts afresh** after you continue, so it pauses again after the
+    same number of rounds. The run's own round number is no longer reset to 1
+    (execution runs used to do that, which made the next re-validation read as
+    a first run to its agents).
+- **Leaving the loop early is a separate, explicitly named button:** **Accept
+  open findings & move on** (execution) or **Stop reviewing → companion
+  specs** (PRD review), sent as `skip`. Accepting is still recorded on
+  `wf.capOverrides`. Bug-fix runs have no accept path, and their cap only
+  continues, as before.
+- API: at `review_cap_reached`, `approve` (and the older `another_round`) means
+  continue; `skip` means accept or stop. Scripts that sent `approve` to accept
+  findings must send `skip`.
+
+### Known issues
+
+- The project-kickoff review still moves on to DevOps init by itself when it
+  reaches the cap, without asking. It runs once per project and was left as is.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server changed:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+Then restart the app and the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-29 — QA skips the iOS suite when a branch doesn't touch the app
 
 ### Changed

@@ -5502,6 +5502,19 @@ Fix only the issues raised. Commit your changes.`,
   // after round 2 is faster than another autonomous cycle.
   const MAX_REVIEW_ROUNDS = config.max_review_rounds || DEFAULT_MAX_REVIEW_ROUNDS;
 
+  // The round cap is a loop GUARD, not a verdict: it stops a loop that might
+  // never converge and asks the owner. Continuing past it must lead exactly
+  // where the loop would have gone without the guard, and the guard then counts
+  // afresh from that point. `capBaseRound` records where the current budget
+  // started, so the run's own round number (which agent prompts report as
+  // "Round N") is never rewritten.
+  function capExceeded(wf) {
+    return (wf.round - (wf.capBaseRound || 0)) > MAX_REVIEW_ROUNDS;
+  }
+  function restartCapBudget(wf) {
+    wf.capBaseRound = Math.max(0, (wf.round || 1) - 1);
+  }
+
   function autoAdvanceWorkflow(wf) {
     // Re-load to get latest state
     wf = state.loadWorkflow();
@@ -6400,7 +6413,7 @@ Fix only the issues raised. Commit your changes.`,
       // `status: 'blocked'` is load-bearing: the auto-advance tick refuses to
       // act on a blocked step, so the halt survives auto-advance, and
       // deriveNeedsAttention surfaces it as `review_cap_reached`.
-      if (wf.round > MAX_REVIEW_ROUNDS) {
+      if (capExceeded(wf)) {
         console.log(`[workflow] Review capped at ${MAX_REVIEW_ROUNDS} rounds — halting for a decision (another round, or move on to companion specs).`);
         wf.currentStep = 'review_cap_reached';
         wf.steps.review_cap_reached = { status: 'blocked', cap: 'review', rounds: wf.round };
@@ -6425,14 +6438,18 @@ Fix only the issues raised. Commit your changes.`,
     // companion specs — and both eventually reach the one completion path.
     if (wf.currentStep === 'review_cap_reached') {
       const rounds = (wf.steps.review_cap_reached && wf.steps.review_cap_reached.rounds) || wf.round;
-      if (action === 'another_round') {
+      // Continue = exactly where the loop was going: pm_fix just finished, so
+      // the next step is another review. `another_round` is the older name.
+      if (action === 'approve' || action === 'another_round') {
         wf.steps.review_cap_reached.status = 'skipped';
+        restartCapBudget(wf);
         wf.currentStep = 'reviewing';
         wf.steps.reviewing = { status: 'pending', agents: [] };
         state.saveWorkflow(wf);
         return res.json({ workflow: wf, needsAdvance: true });
       }
-      if (action === 'approve' || action === 'skip') {
+      // Stopping the review is a separate, explicit choice.
+      if (action === 'skip') {
         wf.steps.review_cap_reached.status = 'skipped';
         wf.currentStep = 'companion_specs';
         if (!wf.steps.companion_specs) wf.steps.companion_specs = { status: 'pending', agents: [] };
@@ -6440,7 +6457,7 @@ Fix only the issues raised. Commit your changes.`,
         return res.json({ workflow: wf, needsAdvance: true });
       }
       return res.status(400).json({
-        error: `Review reached its round cap at round ${rounds}. Choose "Another round" to keep reviewing, or "Move on" to stop reviewing and write companion specs.`,
+        error: `Review reached its round cap at round ${rounds}. Continue (approve) to review again, or skip to stop reviewing and write companion specs.`,
       });
     }
 
@@ -6726,15 +6743,24 @@ Fix only the issues raised. Commit your changes.`,
     if (wf.currentStep === 'review_cap_reached') {
       const rounds = (wf.steps.review_cap_reached && wf.steps.review_cap_reached.rounds) || wf.round;
       const source = wf.fixSource || wf.returnTo || 'code_review';
-      if (action === 'another_round') {
+      // Continue = exactly where the fix loop was going: a fix round just
+      // finished, so the next step is the review that raised the findings, on
+      // the new code. Approving used to skip that review and continue past the
+      // source step — merging a fix round nobody had reviewed, with the
+      // source's open findings silently accepted (launch-studio LS-166,
+      // 2026-09-29: an open BLOCKING final_review finding went to merge).
+      // `another_round` is the older name for the same thing.
+      if (action === 'approve' || action === 'another_round') {
         wf.steps.review_cap_reached.status = 'skipped';
-        wf.round = 1; // the cap counts rounds since the loop began; restart the budget
+        restartCapBudget(wf);
         wf.currentStep = source;
         wf.steps[source] = { status: 'pending', agents: [] };
         state.saveWorkflow(wf);
         return res.json({ workflow: wf, needsAdvance: true });
       }
-      if (action === 'approve' || action === 'skip') {
+      // Accepting the open findings without another review is a separate,
+      // explicit choice — never what a plain approve does.
+      if (action === 'skip') {
         wf.steps.review_cap_reached.status = 'skipped';
         wf.capOverrides = wf.capOverrides || [];
         wf.capOverrides.push({
@@ -6760,7 +6786,7 @@ Fix only the issues raised. Commit your changes.`,
       }
       return res.status(400).json({
         error: `The ${source} fix loop reached its round cap at round ${rounds}. `
-          + `Choose "Another round" to keep fixing, or approve to accept the outstanding findings and move on `
+          + `Continue (approve) to review the latest fixes and keep going, or skip to accept the outstanding findings and move on `
           + `(the override is recorded on wf.capOverrides).`,
       });
     }
@@ -9854,7 +9880,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
           wf.fixTaskIndex = fixPlan.tasks.length; // mark all done so the existing "all tasks done" path picks up
           wf.round++;
 
-          if (wf.round > MAX_REVIEW_ROUNDS) {
+          if (capExceeded(wf)) {
             wf.currentStep = 'review_cap_reached';
             wf.steps.review_cap_reached = { status: 'blocked', cap: wf.fixSource || 'fix', rounds: wf.round };
             state.saveWorkflow(wf);
@@ -9875,7 +9901,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
         fixStep.status = 'completed';
         wf.round++;
 
-        if (wf.round > MAX_REVIEW_ROUNDS) {
+        if (capExceeded(wf)) {
           console.log(`[workflow] Fix loop capped at ${MAX_REVIEW_ROUNDS} rounds (source: ${wf.fixSource}). Blocking — requires user decision.`);
           wf.currentStep = 'review_cap_reached';
           wf.steps.review_cap_reached = { status: 'blocked', cap: wf.fixSource || 'fix', rounds: wf.round };
@@ -9978,7 +10004,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
           fixStep.status = 'completed';
           wf.round++;
 
-          if (wf.round > MAX_REVIEW_ROUNDS) {
+          if (capExceeded(wf)) {
             console.log(`[workflow] Fix loop capped at ${MAX_REVIEW_ROUNDS} rounds (source: ${wf.fixSource}). Blocking.`);
             wf.currentStep = 'review_cap_reached';
             wf.steps.review_cap_reached = { status: 'blocked', cap: wf.fixSource || 'fix', rounds: wf.round };
@@ -10002,8 +10028,11 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
     // Review cap reached — user must explicitly choose to advance or cancel
     if (wf.currentStep === 'review_cap_reached') {
       const capInfo = wf.steps.review_cap_reached;
-      if (action === 'approve' || action === 'skip') {
+      // Continue = back to the review, as the loop would have gone; the guard
+      // then counts afresh (see capExceeded).
+      if (action === 'approve' || action === 'skip' || action === 'another_round') {
         wf.steps.review_cap_reached.status = 'skipped';
+        restartCapBudget(wf);
         const capReturnTo = wf.returnTo || 'code_review';
         wf.currentStep = capReturnTo;
         wf.steps[capReturnTo] = { status: 'pending', agents: [] };
