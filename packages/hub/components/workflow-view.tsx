@@ -44,7 +44,7 @@ interface WorkflowAgent {
  *  the rest is prose meant to be shown verbatim. */
 interface NeedsAttention {
   reason: 'completed_not_finished' | 'review_cap_reached' | 'dead_step' | 'blocked' | 'human_gate'
-    | 'auth_blocked' | 'finished_not_reported' | 'agent_waiting' | 'awaiting_decision' | 'gate_blocked'
+    | 'auth_blocked' | 'finished_not_reported' | 'agent_waiting' | 'awaiting_decision' | 'gate_blocked' | 'owner_action'
   step: string | null
   title: string
   detail: string
@@ -1369,11 +1369,11 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--orange)',
             display: 'flex', alignItems: 'flex-start', gap: 10,
           }}>
-            <span style={{ flexShrink: 0 }}>{['human_gate', 'auth_blocked', 'finished_not_reported', 'agent_waiting', 'awaiting_decision', 'gate_blocked'].includes(needsAttention.reason) ? '⏸' : '⚠'}</span>
+            <span style={{ flexShrink: 0 }}>{['human_gate', 'auth_blocked', 'finished_not_reported', 'agent_waiting', 'awaiting_decision', 'gate_blocked', 'owner_action'].includes(needsAttention.reason) ? '⏸' : '⚠'}</span>
             <span style={{ flex: 1 }}>
               <b>{needsAttention.title}</b>
               <br />
-              {needsAttention.detail}
+              <span style={{ whiteSpace: 'pre-wrap' }}>{needsAttention.detail}</span>
               <br />
               <span style={{ color: 'var(--muted)' }}>{needsAttention.action}</span>
               {/* The agent finished but never reported — its output is on disk.
@@ -1627,7 +1627,40 @@ function StepDetail({
       )}
 
       {/* Blocked-with-error banner — generic for any step that halted with a message but no validationFailure payload */}
-      {step.status === 'blocked' && step.error && !step.validationFailure && (
+      {/* Waiting on the owner: the fix planner found a blocking finding only the
+          owner can clear (a device check, an account, a decision) and listed the
+          steps. Shown as what to do, not as a planner failure. */}
+      {step.status === 'blocked' && activeKey === 'fix_plan' && (step as any).ownerAction?.text && (
+        <div style={{
+          background: 'color-mix(in srgb, var(--orange) 8%, transparent)', border: '1px solid var(--orange)',
+          borderRadius: 6, padding: '12px 16px', marginBottom: 16,
+        }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--orange)', marginBottom: 4 }}>
+            ⏸ Waiting on you — owner action required
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-dim)', fontFamily: 'var(--mono)', marginBottom: 10 }}>
+            A blocking finding from {(step as any).ownerAction.sourceStep || 'the review'} can only be cleared by you, so no agent task was planned.
+          </div>
+          <div className="md-rendered" style={{ fontSize: 12, marginBottom: 12 }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{(step as any).ownerAction.text}</ReactMarkdown>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--mono)', marginBottom: 8 }}>
+            Do it, or defer it on the record (and track it in the backlog). Then continue, with a note saying which: it is logged with the run.
+          </div>
+          <button
+            onClick={() => {
+              const reason = notes.trim()
+              if (!reason) { alert('Add a note first: what you did, or where it is deferred to.'); return }
+              onAdvance('approve', { override: true, overrideReason: reason })
+            }}
+            className="wf-btn primary"
+            title="Records your note as the reason and continues past the fix plan"
+          >
+            Done or deferred — continue →
+          </button>
+        </div>
+      )}
+      {step.status === 'blocked' && step.error && !step.validationFailure && !(activeKey === 'fix_plan' && (step as any).ownerAction?.text) && (
         <div style={{
           background: 'rgba(255, 140, 0, 0.1)', border: '1px solid var(--orange)',
           borderRadius: 6, padding: '12px 16px', marginBottom: 16,

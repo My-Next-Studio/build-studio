@@ -286,3 +286,17 @@ test('a completed step is not re-reported as gate-blocked', () => {
   ] }, code_review: { status: 'running', agents: [] } } };
   assert.equal(deriveNeedsAttention(wf), null);
 });
+
+test('an empty fix plan that names an owner action reads as waiting on the owner', () => {
+  const { deriveNeedsAttention } = require('./needs-attention');
+  const wf = {
+    type: 'execution', currentStep: 'fix_plan', input: 'FAZ-272',
+    steps: { fix_plan: { status: 'blocked', error: 'Waiting on you: owner action required.', agents: [{ role: 'Fix Planner', status: 'done', feedback: 'x' }],
+      ownerAction: { text: '1. Run the device script.\n2. Fill in the record.', sourceStep: 'code_review' } } },
+  };
+  const n = deriveNeedsAttention(wf);
+  assert.equal(n.reason, 'owner_action');
+  assert.match(n.title, /Waiting on you/);
+  assert.match(n.detail, /code_review/);
+  assert.match(n.detail, /Run the device script/);
+});

@@ -163,6 +163,17 @@ function deriveNeedsAttention(wf) {
 
     // 4. A guardrail blocked the step outright (validation failure, an empty fix
     //    plan against a flagged blocker, a failed precondition).
+    // 3a. The run is waiting on the owner, not on a fix: the planner found a
+    //     blocking finding only the owner can clear and listed the steps.
+    if (step.status === 'blocked' && step.ownerAction && step.ownerAction.text) {
+      return {
+        reason: 'owner_action',
+        step: stepKey,
+        title: 'Waiting on you: owner action required',
+        detail: `A blocking finding from ${step.ownerAction.sourceStep || 'the review'} can only be cleared by you, so no agent task was planned. What to do:\n\n${step.ownerAction.text}`,
+        action: 'Do those steps (or defer them on the record), then approve with an override reason saying which.',
+      };
+    }
     if (step.status === 'blocked') {
       return {
         reason: 'blocked',

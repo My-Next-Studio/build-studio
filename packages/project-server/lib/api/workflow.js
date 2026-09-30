@@ -23,6 +23,7 @@ const qaSuite = require('../qa-suite-run');
 const { reconcilePrdPath } = require('../prd-path');
 const { resolveScreenshotCommand, qaScreenshotInstructions, builderScreenshotInstructions } = require('../screenshot-tool');
 const { killWindowSafely } = require('../tmux');
+const { extractOwnerAction } = require('../owner-action');
 const { suggestBuilderRole } = require('../builder-role-hint');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
@@ -1751,6 +1752,8 @@ ${feedback}
 ${notes ? `\n## User Notes\n\n${notes}` : ''}
 
 Analyze the feedback and produce a JSON fix plan. Your final output MUST include a \`\`\`json code block containing a "tasks" array — this is machine-parsed.
+
+**A finding only the owner can clear is not a task.** Some blocking findings are not development work: a check that needs the owner's physical device or accounts, a store or console action, a product decision. Do not invent a task for one (an agent would only fake its evidence). Instead, under a heading exactly \`### Owner action required\`, list the concrete steps the owner must take, where the result goes, and what happens after. The workflow shows that section to the owner as the reason the run is waiting.
 
 **POSTING THE PLAN — write it to a file, then send the file.** Build the JSON in
 a file in the system temp directory — never in the project directory — and post
@@ -9686,6 +9689,29 @@ Before adding new entries, scan existing files in docs/learnings/:
           // returned 0 tasks but the old guard blocked it as rationalisation.
           const hasFindings = totalFindings > 0;
 
+          // The planner may have found that a finding can only be cleared by
+          // the owner (a device check, an account, a decision) and said so
+          // under `### Owner action required`. That is not a dodged finding:
+          // it is the run waiting on a person, and the card says what to do.
+          const ownerAction = hasFindings && !body.override ? extractOwnerAction(plannerFeedback) : null;
+          if (ownerAction) {
+            const summary = `${totalFindings} blocking finding(s)`;
+            wf.steps.fix_plan.status = 'blocked';
+            wf.steps.fix_plan.ownerAction = { text: ownerAction.slice(0, 4000), sourceStep, at: new Date().toISOString() };
+            wf.steps.fix_plan.error = `Waiting on you: owner action required. The fix planner found that ${summary} from "${sourceStep}" can only be cleared by you, so it planned no agent tasks. `
+              + `Do the steps it lists, or defer them on the record, then approve with an override reason saying which.`;
+            state.saveWorkflow(wf);
+            return res.status(400).json({
+              error: wf.steps.fix_plan.error,
+              needsOverride: true,
+              ownerAction: wf.steps.fix_plan.ownerAction,
+              sourceStep,
+              failureCount,
+              blockingCount,
+              approvedNo,
+            });
+          }
+
           if (hasFindings && !body.override) {
             const summary = totalFindings > 0
               ? `${totalFindings} blocking finding(s)`
@@ -9713,6 +9739,10 @@ Before adding new entries, scan existing files in docs/learnings/:
               reason: (body.overrideReason || '').toString().slice(0, 500) || '(no reason provided)',
             });
             console.log(`[workflow] fix_plan 0-task override accepted (source=${sourceStep}, failures=${failureCount}, blocking=${blockingCount}): ${body.overrideReason || '(no reason)'}`);
+            if (wf.steps.fix_plan.ownerAction) {
+              wf.fixPlanOverrides[wf.fixPlanOverrides.length - 1].ownerAction = wf.steps.fix_plan.ownerAction.text.slice(0, 1000);
+              delete wf.steps.fix_plan.ownerAction;
+            }
           }
         }
         // Advance to the step AFTER the source step in the workflow's OWN active

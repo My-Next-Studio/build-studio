@@ -21,6 +21,45 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-30 — A blocker only you can clear says so
+
+### Changed
+
+- **When a blocking finding can only be cleared by you, the run now says
+  "Waiting on you: owner action required" and lists what to do.** Some
+  review findings aren't development work: a check that needs your own
+  device or accounts, a store-console action, a product decision. The fix
+  planner correctly plans no agent task for them. But a gate that catches
+  planners dodging findings then blocked the run with "0 tasks against a
+  blocker is usually rationalisation", while the planner's explanation of
+  what you had to do sat unread in its report.
+  - The fix planner is now told to put such steps under `### Owner action
+    required` instead of inventing a task (whose evidence an agent could only
+    fake).
+  - When an empty plan has that section, the step records it as
+    `ownerAction`. The workflow view shows it as its own card with the steps
+    rendered, and **Done or deferred — continue** records your note as the
+    reason. The needs-attention banner (reason `owner_action`) shows the steps
+    too.
+  - An empty plan *without* that section still gets the old gate and error.
+  - Planners that wrote the older `**Owner action …:**` lead-in are recognised
+    as well.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server changed:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+Then restart the app and the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-09-30 — Continuing past a round cap no longer skips the review
 
 ### Changed
