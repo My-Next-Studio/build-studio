@@ -197,7 +197,9 @@ function deriveNeedsAttention(wf) {
       if (st && st.status === 'completed') continue;
       for (const a of st.agents || []) {
         const hit = a && a.feedback && gb.parseGateBlocked(a.feedback);
-        if (hit) {
+        // A report that also carries blocking defects implicates the code: those
+        // go to the fix loop, so this is not an environment-only stop.
+        if (hit && gb.blockingCount(a.feedback) === 0) {
           return {
             reason: 'gate_blocked',
             step: key,

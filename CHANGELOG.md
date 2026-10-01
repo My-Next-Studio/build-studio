@@ -21,6 +21,37 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-09-30 — QA defects reach the devs even when another check could not run
+
+### Fixed
+
+- **A QA report with a real blocking defect stalled if any other check could
+  not run.** QA can report both at once. It lists defects from the checks that
+  ran, and names a check that could not execute (a missing tool or module, an
+  unreachable service) on a `**Gate could not run:**` line. Auto-advance saw
+  that line and refused to send anything to the devs. The run then waited with
+  the message "a check could not run", and the dashboard said the code was not
+  implicated, even though QA had just reported a regression. Now, if QA reports
+  any blocking findings, they go to the fix loop. The fix planner is told the
+  unrunnable check is an environment problem, not a task. If the environment is
+  still broken when QA re-runs, and that is the only thing left, the run stops
+  and asks you to fix it, as before.
+
+### Upgrade steps
+
+**In Build Studio**: sync the project-server into the app, restart the app,
+and restart running project-servers:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+**In each managed project**: nothing to do. A run stopped on this now
+continues on its next auto-advance tick once its project-server restarts. You
+can also send it to the devs from the Workflow tab.
+
+---
+
 ## 2026-09-30 — Accepting a support proposal twice no longer files it twice
 
 ### Fixed

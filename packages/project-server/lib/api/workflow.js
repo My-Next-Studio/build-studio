@@ -9548,7 +9548,14 @@ Before adding new entries, scan existing files in docs/learnings/:
       // again when it was pointed at a dev-server port nobody was serving. The
       // fix planner then correctly diagnosed the mismatch and aimed a task at
       // the project. Stop here instead and name what needs fixing.
+      // Unless QA also reported blocking defects from checks that DID run: those
+      // go to the devs, and the planner is told the blocked check is not a task.
       const qaBlocked = gateBlocked.parseGateBlocked(qaFeedback);
+      const defectsToo = qaBlocked && gateBlocked.blockingCount(qaFeedback) > 0;
+      if (defectsToo) {
+        launchFixPlan(wf, 'qa_validation', qaFeedback + gateBlocked.plannerNoteForBlockedGate(qaBlocked.reason), notes, prdId);
+        return res.json({ workflow: wf });
+      }
       if (qaBlocked && body.override !== true) {
         return res.status(400).json({
           error: `Cannot send to devs: qa_validation reported that a check could not run — "${qaBlocked.reason}". `

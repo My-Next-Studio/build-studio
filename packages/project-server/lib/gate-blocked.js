@@ -78,6 +78,38 @@ function parseGateBlocked(feedback) {
 }
 
 /**
+ * Blocking findings reported alongside the marker, summed across agents.
+ *
+ * A partial run is still a run: the instructions tell the agent to report every
+ * check that DID run as normal. So a report can carry both a check that could
+ * not execute AND a real defect from one that did. The marker must not hide the
+ * defect. Seen live 2026-09-30: QA reported a CLS regression against main as
+ * `**Blocking:** 1`, plus a font check that could not run for a missing Python
+ * module, and the run stalled with the regression never sent to a developer.
+ *
+ * @param {string} feedback
+ * @returns {number}
+ */
+function blockingCount(feedback) {
+  let total = 0;
+  for (const m of String(feedback || '').matchAll(/\*\*Blocking:\*\*\s*(\d+)/gi)) total += parseInt(m[1], 10);
+  return total;
+}
+
+/**
+ * The environment-blocked check is not development work. Appended to the fix
+ * planner's input when a report carries both, so the planner plans the defects
+ * and leaves the environment to the owner.
+ */
+function plannerNoteForBlockedGate(reason) {
+  return `\n\n## A check could not run — this is not a task\n\n`
+    + `QA also reported: ${reason}\n\n`
+    + 'That is an environment problem, not a defect. Do not plan a task for it. '
+    + 'Plan only the blocking findings above. If the environment is still broken when '
+    + 'qa_validation re-runs, the run stops and asks the owner to fix it.';
+}
+
+/**
  * The instruction block telling a gate agent when to use the marker.
  *
  * Two things it has to get right, both learned from real failures:
@@ -112,4 +144,4 @@ advance.
 something is broken, that is an ordinary blocking finding and belongs in the fix
 loop. Use this marker only when the check never got to produce a result.`;
 
-module.exports = { parseGateBlocked, GATE_BLOCKED_INSTRUCTIONS, MARKER };
+module.exports = { parseGateBlocked, blockingCount, plannerNoteForBlockedGate, GATE_BLOCKED_INSTRUCTIONS, MARKER };

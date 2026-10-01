@@ -90,3 +90,18 @@ test('a real blocker that merely STARTS with a negative word still blocks', () =
     assert.equal(got.reason, reason);
   }
 });
+
+// fazon, 2026-09-30: a partial run with a real regression beside a check that
+// could not run. The defect count must survive the marker.
+test('blocking findings are counted alongside the marker, across agents', () => {
+  const { blockingCount } = require('./gate-blocked');
+  const mixed = `**Gate could not run:** No module named 'fontTools'
+**Approved:** no
+**Blocking:** 1`;
+  assert.equal(blockingCount(mixed), 1);
+  assert.equal(blockingCount(`${mixed}\n\n**Blocking:** 2`), 3);
+  assert.equal(blockingCount(NO_BROWSER), 0);
+  assert.equal(blockingCount(NO_SERVER), 0);
+  assert.equal(blockingCount('**Blocking:** 0'), 0);
+  assert.equal(blockingCount(null), 0);
+});

@@ -264,3 +264,16 @@ test('every review and fix-loop cap counts from the budget base, not from round 
   assert.equal((SRC.match(/if \(capExceeded\(wf\)\) \{/g) || []).length, 4);
   assert.match(SRC, /return \(wf\.round - \(wf\.capBaseRound \|\| 0\)\) > MAX_REVIEW_ROUNDS;/);
 });
+
+// fazon FAZ-383, 2026-09-30: QA found a CLS regression (Blocking: 1) and, in a
+// separate check, a missing Python module. The environment guard refused the
+// whole report, so the regression never reached a developer.
+test('send_to_devs routes real defects even when a check could not run', () => {
+  const i = SRC.indexOf("if (wf.currentStep === 'qa_validation' && action === 'send_to_devs') {");
+  const body = SRC.slice(i, SRC.indexOf('// --- Fix plan: relaunch', i));
+  const mixed = body.indexOf('if (defectsToo) {');
+  const refusal = body.indexOf('if (qaBlocked && body.override !== true) {');
+  assert.ok(mixed > 0 && refusal > mixed, 'the mixed case must be decided before the environment refusal');
+  assert.match(body, /gateBlocked\.blockingCount\(qaFeedback\) > 0/);
+  assert.match(body.slice(mixed, refusal), /plannerNoteForBlockedGate/);
+});

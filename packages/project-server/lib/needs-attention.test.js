@@ -306,6 +306,16 @@ test('a gate that could not run reaches the owner, not the fix loop', () => {
   assert.match(n.detail, /nothing for a developer to fix/);
 });
 
+test('a gate that could not run beside a real defect is not an environment-only stop', () => {
+  // fazon, 2026-09-30: a CLS regression (Blocking: 1) plus a font check that
+  // could not run. Saying "nothing for a developer to fix" there is false.
+  const wf = { currentStep: 'qa_validation', steps: { qa_validation: { status: 'running', agents: [
+    { role: 'QA', status: 'done', feedback: '**Tests passed:** 1435/1466\n**Gate could not run:** No module named fontTools\n**Approved:** no\n**Blocking:** 1' },
+  ] } } };
+  const n = deriveNeedsAttention(wf);
+  assert.ok(!n || n.reason !== 'gate_blocked');
+});
+
 test('a completed step is not re-reported as gate-blocked', () => {
   const wf = { currentStep: 'code_review', steps: { qa_validation: { status: 'completed', agents: [
     { role: 'QA', status: 'done', feedback: '**Gate could not run:** old news' },
