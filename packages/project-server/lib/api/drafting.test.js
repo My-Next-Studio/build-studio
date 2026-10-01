@@ -38,8 +38,10 @@ async function postTo(root, tmux, route, body) {
 }
 
 async function post(root, tmux, body, route = '/draft/start') {
+  // The shape config.js produces: docsPath ABSOLUTE, docs_path relative. A
+  // relative docsPath here hid a router that could not find any backlog item.
   const config = {
-    projectRoot: root, docsPath: 'docs', name: 'proj',
+    projectRoot: root, docsPath: path.join(root, 'docs'), docs_path: 'docs', name: 'proj',
     statePath: path.join(root, '.build-studio'),
     logsPath: path.join(root, 'tmp', '.logs'),
     cli: { default: 'claude', groups: {} }, step_groups: null,
@@ -234,4 +236,72 @@ test('closing a session with a live agent still asks the CLI to exit itself', as
   const sent = live.calls.find(c => c[0] === 'sendKeys');
   assert.equal(sent[2], '/exit', 'a running CLI is allowed to close itself');
   assert.ok(!live.calls.some(c => c[0] === 'killWindowAndChildren'), 'and is not cut off');
+});
+
+// ── committing the draft (owner request 2026-10-01) ─────────────────────────
+
+const { execFileSync } = require('child_process');
+const git = (root, ...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+
+/** A project repo where a finished draft has written its three files. */
+function draftedRepo() {
+  const root = makeProject({ 'EX-010': { type: 'Feature', status: 'Backlog', title: 'Plan' } });
+  fs.writeFileSync(path.join(root, 'docs', 'project-state.md'), '# State\n');
+  fs.writeFileSync(path.join(root, 'notes.txt'), 'owner notes\n');
+  git(root, 'init', '-q');
+  git(root, 'config', 'user.email', 't@example.com');
+  git(root, 'config', 'user.name', 'T');
+  git(root, 'add', '.');
+  git(root, 'commit', '-qm', 'init');
+  // What the draft_prd handoff writes:
+  fs.mkdirSync(path.join(root, 'docs', 'prds'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'docs', 'prds', 'PRD-010-plan.md'), '# PRD-010\n');
+  fs.writeFileSync(path.join(root, 'docs', 'backlog', 'EX-010.md'),
+    '---\nid: EX-010\ntitle: Plan\ntype: Feature\nstatus: Drafted\nprd: docs/prds/PRD-010-plan.md\n---\n\nBody.\n');
+  fs.writeFileSync(path.join(root, 'docs', 'project-state.md'), '# State\n| EX-010 | Drafted |\n');
+  // Something unrelated the owner is editing, which must NOT be swept in:
+  fs.writeFileSync(path.join(root, 'notes.txt'), 'owner notes, edited\n');
+  fs.mkdirSync(path.join(root, '.build-studio'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.build-studio', 'draft-state.json'), JSON.stringify({
+    sessionName: 'draft-proj', session: { window: 'draft', items: ['EX-010'], lastItemId: 'EX-010' },
+  }));
+  return root;
+}
+
+test('End draft commits the PRD, the item and project-state, and nothing else', async () => {
+  const root = draftedRepo();
+  const r = await postTo(root, fakeTmux({ livePid: null }), '/draft/end', {});
+  assert.equal(r.status, 200);
+  assert.equal(r.body.commit.committed, true);
+  assert.equal(git(root, 'log', '-1', '--format=%s'), 'docs(EX-010): draft PRD');
+  const files = git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort();
+  assert.deepEqual(files, ['docs/backlog/EX-010.md', 'docs/prds/PRD-010-plan.md', 'docs/project-state.md']);
+  assert.match(git(root, 'status', '--porcelain'), /notes\.txt/, 'unrelated edits stay uncommitted');
+});
+
+test('ending a draft with a live agent also commits', async () => {
+  const root = draftedRepo();
+  const tmux = fakeTmux({ livePid: 123, agentRunning: true });
+  const r = await postTo(root, tmux, '/draft/end', {});
+  assert.equal(r.body.ending, true);
+  assert.equal(r.body.commit.committed, true);
+  assert.ok(tmux.calls.some((c) => c[0] === 'sendKeys' && c[2] === '/exit'));
+});
+
+test('a Draft click commits what an exited agent left behind before launching', async () => {
+  const root = draftedRepo();
+  fs.writeFileSync(path.join(root, 'docs', 'backlog', 'EX-011.md'),
+    '---\nid: EX-011\ntitle: Next\ntype: Feature\nstatus: Backlog\n---\n\nBody.\n');
+  git(root, 'add', 'docs/backlog/EX-011.md');
+  git(root, 'commit', '-qm', 'add EX-011', '--', 'docs/backlog/EX-011.md');
+  const r = await post(root, fakeTmux({ livePid: 123, agentRunning: false }), { itemId: 'EX-011' });
+  assert.equal(r.status, 200);
+  assert.equal(git(root, 'log', '-1', '--format=%s'), 'docs(EX-010): draft PRD');
+});
+
+test('an item that already has a PRD is refused (readItem finds it with an absolute docsPath)', async () => {
+  const root = makeProject({ 'EX-012': { type: 'Feature', status: 'Drafted', title: 'Done', prd: 'docs/prds/PRD-012.md' } });
+  const r = await post(root, fakeTmux(), { itemId: 'EX-012' });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.hasPrd, true);
 });

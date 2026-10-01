@@ -307,4 +307,15 @@ retrofitting later.
 7. **One draft at a time per project.** Sending a second item into a live
    conversation typed into whatever the agent was showing — a menu included —
    so a running session refuses another Draft until it is ended.
+8. **End draft commits the draft (2026-10-01).** Owner request: commit the PRD.
+   The handoff writes the PRD, the backlog item and the project-state row, and
+   none of it was committed, so it sat on the default branch until the next
+   execution start refused the dirty tree. `End draft` now makes one
+   pathspec-scoped commit of exactly those files; an agent that exited without
+   it is caught by the next Draft click. Chosen over a commit step in the skill
+   (depends on the agent, and the skill is copied into every project) and over
+   committing when the item turns `Drafted` (fires mid-conversation, before the
+   owner's last edits). The commit lands on whatever branch is checked out,
+   including a run's branch during execution, where it merges with the run.
+   Accepted by the owner.
 

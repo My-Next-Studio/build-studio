@@ -251,6 +251,12 @@ export function BacklogTab({
     try {
       const res = await api.post('/draft/end', {})
       if (res && res.error) { setStartError({ id: '', message: res.error }); return }
+      // Ending commits the draft's PRD, item and project-state. A failure is not
+      // fatal (the files are on disk), but left unsaid it surfaces later as a
+      // dirty tree that refuses the next run.
+      if (res && res.commit && !res.commit.committed) {
+        setStartError({ id: '', message: `Draft ended, but its files were not committed: ${res.commit.reason}. Commit them by hand.` })
+      }
       // The process takes a moment to go; the poll clears the lock when it has.
       setDraftRunning(null)
     } catch (e) {

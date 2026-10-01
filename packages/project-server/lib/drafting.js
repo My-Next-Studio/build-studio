@@ -207,8 +207,45 @@ function continuePrompt({ itemId, title, sameItem = false }) {
     + ` Read the item first, then ask what you need to know.`;
 }
 
+/**
+ * The files a finished draft leaves behind, repo-relative, for committing.
+ *
+ * The draft_prd skill's handoff writes three things: the PRD, the backlog item
+ * (status `Drafted`, `prd:` set) and the backlog row in project-state.md. None
+ * of them were committed, so they sat on the default branch until the next
+ * execution start refused the dirty tree (owner request 2026-10-01: commit the
+ * PRD when the draft ends).
+ *
+ * Only files that exist are returned: `git add` fails on a missing path, and an
+ * item whose PRD was never written still has its other edits worth keeping.
+ * Clean files are harmless — scopedCommit commits nothing for them.
+ */
+function draftCommitPaths({ projectRoot, docsRel, itemIds, readItem, exists = fs.existsSync }) {
+  const rel = (abs) => path.relative(projectRoot, abs);
+  const out = new Set();
+  for (const id of itemIds || []) {
+    let item = null;
+    try { item = readItem(projectRoot, docsRel, id); } catch (_) { continue; }
+    if (!item) continue;
+    out.add(path.join(docsRel, 'backlog', `${id}.md`));
+    if (item.prd && exists(path.join(projectRoot, item.prd))) out.add(item.prd);
+  }
+  if (out.size && exists(path.join(projectRoot, docsRel, 'project-state.md'))) {
+    out.add(path.join(docsRel, 'project-state.md'));
+  }
+  return [...out].map((p) => (path.isAbsolute(p) ? rel(p) : p));
+}
+
+/** Conventional-commit message for a draft, naming the items it covers. */
+function draftCommitMessage(itemIds) {
+  const ids = [...new Set(itemIds || [])];
+  return `docs(${ids.join(',')}): draft PRD${ids.length > 1 ? 's' : ''}`;
+}
+
 module.exports = {
   DRAFT_STEP,
+  draftCommitPaths,
+  draftCommitMessage,
   STATE_FILE,
   draftSessionName,
   draftWindowName,

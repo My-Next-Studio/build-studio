@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const {
   DRAFT_STEP, draftSessionName, draftWindowName,
   loadDraftState, saveDraftState, buildDraftCommand, draftPrompt, continuePrompt,
-  ensureIgnored,
+  ensureIgnored, draftCommitPaths, draftCommitMessage,
 } = require('../drafting');
 const { scopedCommit } = require('../scoped-commit');
 const {
@@ -25,6 +25,27 @@ function createDraftingRouter(config, state, tmuxOps) {
   const router = express.Router();
   const projectRoot = config.projectRoot;
   const projectName = config.name || path.basename(projectRoot);
+  // The backlog helpers join projectRoot + a RELATIVE docs path. config.docsPath
+  // is absolute, which path.join nests into a path that does not exist: every
+  // readItem here returned null, so the Bug and has-a-PRD refusals never fired
+  // and the prompt never carried the item's title.
+  const docsRel = config.docs_path || path.relative(projectRoot, config.docsPath) || 'docs';
+
+  /**
+   * Commit what the session's drafts wrote. Non-fatal: the files are in the
+   * working tree either way, and a failed commit is reported, not thrown. Lands
+   * on whatever branch is checked out — a run's branch while execution is under
+   * way, which merges with the run (owner decision 2026-10-01).
+   */
+  async function commitDrafts(session) {
+    const itemIds = (session && session.items) || [];
+    if (!itemIds.length || !fs.existsSync(path.join(projectRoot, '.git'))) return null;
+    const paths = draftCommitPaths({ projectRoot, docsRel, itemIds, readItem });
+    if (!paths.length) return null;
+    const result = await scopedCommit(projectRoot, paths, draftCommitMessage(itemIds));
+    if (!result.committed) console.warn(`[draft] PRD not committed: ${result.reason}`);
+    return result;
+  }
 
   // Which drafting sessions are still alive?
   //
@@ -81,7 +102,7 @@ function createDraftingRouter(config, state, tmuxOps) {
    * The session id is KEPT. Ending stops the process; it does not abandon the
    * conversation, which can still be resumed. Start fresh is what discards.
    */
-  router.post('/draft/end', (req, res) => {
+  router.post('/draft/end', async (req, res) => {
     const state = loadDraftState(config.statePath);
     const session = state.session || null;
     if (!session) return res.json({ ok: true, alreadyEnded: true });
@@ -90,7 +111,8 @@ function createDraftingRouter(config, state, tmuxOps) {
     const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
     if (!pid) {
       saveDraftState(config.statePath, { ...state, session: { ...session, endedAt: new Date().toISOString() } });
-      return res.json({ ok: true, alreadyEnded: true });
+      const commit = await commitDrafts(session);
+      return res.json({ ok: true, alreadyEnded: true, commit });
     }
 
     // Two cases, and sending /exit to both was the bug: a pane whose agent has
@@ -115,9 +137,12 @@ function createDraftingRouter(config, state, tmuxOps) {
       ...state,
       session: { ...session, endedAt: new Date().toISOString() },
     });
+    // Ending is the owner saying the draft is done, so its files are committed
+    // now. The agent's own writes finished before it returned to its prompt.
+    const commit = await commitDrafts(session);
     // The process takes a moment to go; the poll notices and re-enables the
     // buttons. Reported rather than waited for, so the request does not hang.
-    res.json({ ok: true, ending: true, resumable: !!session.cliSessionId && canPinSession(session.cli) });
+    res.json({ ok: true, ending: true, resumable: !!session.cliSessionId && canPinSession(session.cli), commit });
   });
 
   /**
@@ -136,13 +161,13 @@ function createDraftingRouter(config, state, tmuxOps) {
    *             stopped rather than starting over.
    *   fresh     no session, or the caller asked for one.
    */
-  router.post('/draft/start', (req, res) => {
+  router.post('/draft/start', async (req, res) => {
     const itemId = String((req.body && req.body.itemId) || '').trim();
     const wantFresh = (req.body && req.body.fresh) === true;
     if (!itemId) return res.status(400).json({ error: 'itemId is required' });
 
     let item = null;
-    try { item = readItem(projectRoot, config.docsPath, itemId); } catch (_) { /* advisory */ }
+    try { item = readItem(projectRoot, docsRel, itemId); } catch (_) { /* advisory */ }
 
     if (item && item.type === 'Bug') {
       return res.status(409).json({
@@ -204,6 +229,11 @@ function createDraftingRouter(config, state, tmuxOps) {
         window: windowName,
       });
     }
+
+    // An agent that exited on its own skipped End draft, and with it the commit.
+    // Commit what the previous session wrote before starting the next one, so
+    // it does not ride along uncommitted into this draft or the next run.
+    if (state.session && !agentRunning) await commitDrafts(state.session);
 
     // ── otherwise launch: resuming the old conversation, or starting one ──────
     const resuming = !!(prior && prior.cliSessionId && canPinSession(cli) && !wantFresh);

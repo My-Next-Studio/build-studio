@@ -21,6 +21,41 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-01 — End draft commits the PRD
+
+### Changed
+
+- **Clicking End draft now commits the draft.** The commit contains exactly
+  three things: the PRD, the backlog item (now `Drafted`, with its `prd:`
+  set), and `project-state.md`. Before this, nothing committed them. They
+  stayed uncommitted on the default branch until the next execution run
+  refused to start on a dirty tree. Nothing else you have changed goes into
+  the commit. The commit goes to whatever branch is checked out. While an
+  execution run is under way that is the run's branch, and the PRD merges
+  with the run. If a drafting agent exits without End draft, the next Draft
+  click commits what it left first. If a commit fails, the backlog tab says
+  so.
+
+### Fixed
+
+- **Draft never recognised Bugs or items that already have a PRD.** The
+  drafting routes looked for backlog items in the wrong place, so every lookup
+  came back empty. As a result, Draft would open a session for a Bug, or over
+  an existing PRD, instead of refusing. The opening prompt also never included
+  the item's title.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project**: nothing to do. Uncommitted files from the
+current drafting session's items are committed the next time you click End
+draft or Draft. Drafts from earlier sessions are not picked up, so commit any
+of those by hand. `git status docs/` shows them.
+
+---
+
 ## 2026-10-01 — A QA run with only an unrun check waits for you instead of bouncing
 
 ### Fixed
