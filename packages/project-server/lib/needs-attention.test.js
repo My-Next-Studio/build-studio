@@ -329,6 +329,16 @@ test('an unrun check with no defect is named as gate-blocked, with remedies that
   assert.doesNotMatch(n.action, /route it to the devs/);
 });
 
+test('a certified clean verdict beside an unrun check is not a stop', () => {
+  // launch-studio LS-168, 2026-10-01: Approved yes, 8157/8157, one screenshot
+  // command could not run and QA captured the same dialog another way.
+  const wf = { currentStep: 'qa_validation', steps: { qa_validation: { status: 'running', agents: [
+    { role: 'QA', status: 'done', feedback: '**Approved:** yes\n**Blocking:** 0\n**Tests passed:** 8157/8157\n**Gate could not run:** screenshot readiness timed out' },
+  ] } } };
+  const n = deriveNeedsAttention(wf);
+  assert.ok(!n || n.reason !== 'gate_blocked');
+});
+
 test('a completed step is not re-reported as gate-blocked', () => {
   const wf = { currentStep: 'code_review', steps: { qa_validation: { status: 'completed', agents: [
     { role: 'QA', status: 'done', feedback: '**Gate could not run:** old news' },

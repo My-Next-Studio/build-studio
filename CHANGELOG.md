@@ -38,6 +38,11 @@ that move underneath you without your having edited anything.
   forward: fix the environment and relaunch, or use **Force approve
   (override)** if the check is not needed for this change.
 
+  A report that QA certified clean (`**Approved:** yes` + `**Blocking:** 0`)
+  still approves on its own, even when it also names a check that could not
+  run. In that case QA has judged the unrun check non-blocking. The first
+  version of this fix held those too, and stalled a clean run.
+
 ### Upgrade steps
 
 **In Build Studio**: rebuild the hub, run the full inject, and restart the

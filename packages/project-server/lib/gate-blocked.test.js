@@ -105,3 +105,18 @@ test('blocking findings are counted alongside the marker, across agents', () => 
   assert.equal(blockingCount('**Blocking:** 0'), 0);
   assert.equal(blockingCount(null), 0);
 });
+
+// Only an unrun check with nothing else deciding the step waits for the owner.
+test('waitsForOwner: a defect or a certified clean verdict decides the step instead', () => {
+  const { waitsForOwner } = require('./gate-blocked');
+  const unrun = '**Gate could not run:** screenshot readiness timed out';
+  // fazon FAZ-365: no verdict, no defect → the owner decides.
+  assert.match(waitsForOwner(`**Blocking:** 0\n${unrun}`).reason, /timed out/);
+  // A defect → fix loop, not the owner.
+  assert.equal(waitsForOwner(`**Approved:** no\n**Blocking:** 1\n${unrun}`), null);
+  // launch-studio LS-168: certified clean, unrun check covered another way → approve.
+  assert.equal(waitsForOwner(`**Approved:** yes\n**Blocking:** 0\n${unrun}`), null);
+  // Approved: no with zero blocking is not a certified verdict → still waits.
+  assert.ok(waitsForOwner(`**Approved:** no\n**Blocking:** 0\n${unrun}`));
+  assert.equal(waitsForOwner('**Approved:** yes\n**Blocking:** 0'), null);
+});

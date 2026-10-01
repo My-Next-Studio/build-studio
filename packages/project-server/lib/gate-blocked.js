@@ -97,6 +97,27 @@ function blockingCount(feedback) {
 }
 
 /**
+ * Does this report leave the run waiting for the owner?
+ *
+ * Only when a check could not run AND nothing else decides the step: no
+ * blocking defect (those go to the fix loop) and no certified clean verdict.
+ * `**Approved:** yes` + `**Blocking:** 0` means the agent triaged the unrun
+ * check as non-blocking, and the engine honours that verdict elsewhere
+ * (honor_clean_approval). Holding it anyway stalled a clean launch-studio run
+ * whose QA had covered the unrun screenshot by another route (2026-10-01).
+ *
+ * @param {string} feedback
+ * @returns {{blocked: true, reason: string} | null}
+ */
+function waitsForOwner(feedback) {
+  const blocked = parseGateBlocked(feedback);
+  if (!blocked || blockingCount(feedback) > 0) return null;
+  const fb = String(feedback || '');
+  const cleanApproval = /\*\*Approved:\*\*\s*yes\b/i.test(fb) && /\*\*Blocking:\*\*\s*0\b/i.test(fb);
+  return cleanApproval ? null : blocked;
+}
+
+/**
  * The environment-blocked check is not development work. Appended to the fix
  * planner's input when a report carries both, so the planner plans the defects
  * and leaves the environment to the owner.
@@ -144,4 +165,4 @@ advance.
 something is broken, that is an ordinary blocking finding and belongs in the fix
 loop. Use this marker only when the check never got to produce a result.`;
 
-module.exports = { parseGateBlocked, blockingCount, plannerNoteForBlockedGate, GATE_BLOCKED_INSTRUCTIONS, MARKER };
+module.exports = { parseGateBlocked, blockingCount, waitsForOwner, plannerNoteForBlockedGate, GATE_BLOCKED_INSTRUCTIONS, MARKER };

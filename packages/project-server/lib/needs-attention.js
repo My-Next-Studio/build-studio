@@ -196,10 +196,10 @@ function deriveNeedsAttention(wf) {
     for (const [key, st] of Object.entries(wf.steps || {})) {
       if (st && st.status === 'completed') continue;
       for (const a of st.agents || []) {
-        const hit = a && a.feedback && gb.parseGateBlocked(a.feedback);
-        // A report that also carries blocking defects implicates the code: those
-        // go to the fix loop, so this is not an environment-only stop.
-        if (hit && gb.blockingCount(a.feedback) === 0) {
+        // Not when the report also carries blocking defects (those go to the fix
+        // loop) or a certified clean verdict (that approves): neither is a stop.
+        const hit = a && a.feedback && gb.waitsForOwner(a.feedback);
+        if (hit) {
           return {
             reason: 'gate_blocked',
             step: key,

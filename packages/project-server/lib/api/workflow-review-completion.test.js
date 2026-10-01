@@ -286,7 +286,7 @@ test('the auto-advance tick holds on a QA report whose only problem is an unrun 
   const i = SRC.indexOf('function serverSideAutoAdvanceTick()');
   assert.ok(i > 0, 'tick not found');
   const body = SRC.slice(i, SRC.indexOf("console.log(`[auto-advance] step=${wf.currentStep} action=${action}`);", i));
-  const hold = body.indexOf('gateBlocked.parseGateBlocked(qaFb) && gateBlocked.blockingCount(qaFb) === 0) return;');
+  const hold = body.indexOf('if (gateBlocked.waitsForOwner(qaFb)) return;');
   const verdict = body.indexOf('const hasBlocking =');
   assert.ok(hold > 0, 'hold missing');
   assert.ok(verdict > hold, 'the hold must come before the verdict is computed');
