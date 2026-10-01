@@ -205,7 +205,7 @@ function deriveNeedsAttention(wf) {
             step: key,
             title: `${key} could not run a check`,
             detail: `${a.role} reported: ${hit.reason}. The code is not implicated — a check could not execute, so there is nothing for a developer to fix.`,
-            action: 'Fix the environment and re-run the step, or override to route it to the devs anyway.',
+            action: 'Fix the environment and relaunch the step. If the check is not needed for this change, approve with an override (Force approve on the QA step).',
           };
         }
       }

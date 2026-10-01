@@ -21,6 +21,32 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-01 — A QA run with only an unrun check waits for you instead of bouncing
+
+### Fixed
+
+- **When the only problem in a QA report was a check that could not run,
+  auto-advance tried the wrong action and then gave the wrong advice.** For
+  example, QA reported no blocking findings, but one test file's setup timed
+  out. Strict mode counted that file as a failing test and tried **send to
+  devs**. The environment guard refused, because there was no defect to
+  send. After three tries auto-advance paused, and its message suggested
+  sending the run to the devs anyway, which would start a fix round with
+  nothing to fix. The client-side auto-advance would have tried **approve**
+  instead and been refused by the strict gate. Now both hold straight away,
+  and the Workflow tab says which check could not run. It offers two ways
+  forward: fix the environment and relaunch, or use **Force approve
+  (override)** if the check is not needed for this change.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project**: nothing to do.
+
+---
+
 ## 2026-10-01 — The fix-loop cap lists the findings you would be accepting
 
 ### Added

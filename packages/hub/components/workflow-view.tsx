@@ -487,6 +487,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     if (alwaysManual.includes(wf.currentStep)) return
     if (wf.type === 'onboarding' && wf.currentStep === 'team_review') return
     if (round <= 1 && reviewSteps.includes(wf.currentStep)) return
+    // A check that could not run, with nothing else to act on, waits for the
+    // owner. The server decides that (needs-attention) and its tick holds too,
+    // so the two auto-advance copies cannot disagree about it.
+    if (needsAttention?.reason === 'gate_blocked' && needsAttention.step === wf.currentStep) return
 
     // Don't auto-advance blocked steps (e.g. validation failure in planning)
     if (step.status === 'blocked') return
@@ -596,7 +600,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
         autoAdvancingRef.current = false
       })
     }
-  }, [wf, autoAdvance, autoAdvanceStrict, skipDemoReviewLocal, maxReviewRounds, autoAdvanceRound, api, load])
+  }, [wf, needsAttention, autoAdvance, autoAdvanceStrict, skipDemoReviewLocal, maxReviewRounds, autoAdvanceRound, api, load])
 
   // Poll workflow log if viewing one
   useEffect(() => {

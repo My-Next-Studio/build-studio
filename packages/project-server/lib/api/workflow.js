@@ -4635,6 +4635,16 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       const manualSteps = ['merge_to_main', 'capture_learnings'];
       action = manualSteps.includes(wf.currentStep) ? 'approve' : 'launch';
     } else if (allDone) {
+      // A QA report whose only problem is a check that could not run has no
+      // action to take: no defect for the devs, and approving past an unrun
+      // check is the owner's call. Hold, and let needs-attention name it. Picking
+      // an action here only bounced off a gate: strict mode read the unrun file
+      // as `1 failed` and chose send_to_devs, whose refusal then suggested
+      // sending nothing to the devs (fazon FAZ-365, 2026-10-01).
+      if (wf.currentStep === 'qa_validation') {
+        const qaFb = agents.map(a => a.feedback || '').join('\n\n');
+        if (gateBlocked.parseGateBlocked(qaFb) && gateBlocked.blockingCount(qaFb) === 0) return;
+      }
       // Detect verdict from agent feedback (server-side detectVerdict)
       const qaStrict = (config.qa_validation && config.qa_validation.strict) !== false;
       const hasBlocking = wf.currentStep === 'qa_tests' ? false : agents.some(a => {
@@ -9560,7 +9570,8 @@ Before adding new entries, scan existing files in docs/learnings/:
         return res.status(400).json({
           error: `Cannot send to devs: qa_validation reported that a check could not run — "${qaBlocked.reason}". `
             + 'That is an environment problem, not a defect, and a fix task for it cannot be completed by a developer. '
-            + 'Fix the environment and re-run qa_validation. To route it to the devs anyway, POST {"action":"send_to_devs","override":true}.',
+            + 'Fix the environment and re-run qa_validation. If the check is not needed for this change, approve with {"action":"approve","override":true}. '
+            + 'To route it to the devs anyway (e.g. a test whose own setup is too slow), POST {"action":"send_to_devs","override":true}.',
           gateBlocked: qaBlocked,
         });
       }

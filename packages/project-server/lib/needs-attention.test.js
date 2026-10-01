@@ -316,6 +316,19 @@ test('a gate that could not run beside a real defect is not an environment-only 
   assert.ok(!n || n.reason !== 'gate_blocked');
 });
 
+test('an unrun check with no defect is named as gate-blocked, with remedies that fit', () => {
+  // fazon FAZ-365, 2026-10-01: one file's setup timed out, Blocking 0, no
+  // Approved line. The tick now holds, so this banner is what the owner sees.
+  const wf = { currentStep: 'qa_validation', steps: { qa_validation: { status: 'running', agents: [
+    { role: 'QA', status: 'done', feedback: '**Blocking:** 0\n Test Files  1 failed | 53 passed\n**Gate could not run:** `cd web && npm test`: setup timed out' },
+  ] } } };
+  const n = deriveNeedsAttention(wf);
+  assert.equal(n.reason, 'gate_blocked');
+  assert.equal(n.step, 'qa_validation');
+  assert.match(n.action, /override/);
+  assert.doesNotMatch(n.action, /route it to the devs/);
+});
+
 test('a completed step is not re-reported as gate-blocked', () => {
   const wf = { currentStep: 'code_review', steps: { qa_validation: { status: 'completed', agents: [
     { role: 'QA', status: 'done', feedback: '**Gate could not run:** old news' },

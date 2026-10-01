@@ -277,3 +277,17 @@ test('send_to_devs routes real defects even when a check could not run', () => {
   assert.match(body, /gateBlocked\.blockingCount\(qaFeedback\) > 0/);
   assert.match(body.slice(mixed, refusal), /plannerNoteForBlockedGate/);
 });
+
+// fazon FAZ-365, 2026-10-01: Blocking 0 and one test file whose setup timed out.
+// Strict mode read `1 failed` and the tick chose send_to_devs, which the
+// environment guard refused, three times, before pausing with advice to send
+// nothing to the devs. The tick must hold before it picks a verdict.
+test('the auto-advance tick holds on a QA report whose only problem is an unrun check', () => {
+  const i = SRC.indexOf('function serverSideAutoAdvanceTick()');
+  assert.ok(i > 0, 'tick not found');
+  const body = SRC.slice(i, SRC.indexOf("console.log(`[auto-advance] step=${wf.currentStep} action=${action}`);", i));
+  const hold = body.indexOf('gateBlocked.parseGateBlocked(qaFb) && gateBlocked.blockingCount(qaFb) === 0) return;');
+  const verdict = body.indexOf('const hasBlocking =');
+  assert.ok(hold > 0, 'hold missing');
+  assert.ok(verdict > hold, 'the hold must come before the verdict is computed');
+});
