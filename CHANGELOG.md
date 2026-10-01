@@ -21,6 +21,50 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-01 — Optional shadow decisions with Jev
+
+### Added
+
+- **An optional decision layer that runs in shadow mode** (see
+  `docs/plans/calibrated-decisions-over-agent-text.md`). When enabled, each
+  report from a verification step is also sent to a calibrated decision model,
+  TypeSafe's Jev through OpenRouter. The model answers whether a check could
+  not run. Its answer is logged next to the engine's own regex-based answer in
+  `~/.build-studio/decisions/shadow.jsonl`, together with the model version,
+  latency, cost and detected language. **It never changes what a run does.**
+  It is a dataset for measuring whether the model's probabilities can be
+  trusted.
+
+  It is **off unless you turn it on**. Build Studio needs neither Jev nor an
+  OpenRouter key to run. To enable it, add this to
+  `~/.build-studio/config.json`:
+
+  ```json
+  "decisions": { "enabled": true, "provider": "openrouter", "model": "typesafe/jev-1.13" }
+  ```
+
+  A project can opt out in its `.build-studio/config.yaml` with
+  `decisions: { enabled: false }`. The key comes from `OPENROUTER_API_KEY`,
+  or from opencode's `auth.json` if you have used OpenRouter there.
+
+### Notes for forks
+
+- Text from your managed projects (verification reports) is sent to
+  OpenRouter and TypeSafe when this is enabled. Keep it off for projects whose
+  agent output must not leave the machine.
+- A decision point must stay shadow-only, and must be called once per
+  delivered report, never from code that runs on every poll. If the provider
+  is down, the engine must behave exactly as it does without it.
+
+### Upgrade steps
+
+**In Build Studio**: sync the project-server into the app and restart it.
+Nothing changes until you enable it.
+
+**In each managed project**: nothing to do.
+
+---
+
 ## 2026-10-01 — End draft commits the PRD
 
 ### Changed

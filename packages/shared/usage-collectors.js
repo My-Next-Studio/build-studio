@@ -246,6 +246,7 @@ module.exports = {
   collectClaude,
   collectCodex,
   collectOpenRouter,
+  readOpenRouterKey,
   resetCacheForTests,
   CACHE_PATH,
   CACHE_TTL_MS,

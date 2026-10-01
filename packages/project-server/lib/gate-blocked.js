@@ -165,4 +165,22 @@ advance.
 something is broken, that is an ordinary blocking finding and belongs in the fix
 loop. Use this marker only when the check never got to produce a result.`;
 
-module.exports = { parseGateBlocked, blockingCount, waitsForOwner, plannerNoteForBlockedGate, GATE_BLOCKED_INSTRUCTIONS, MARKER };
+/**
+ * The same judgement as parseGateBlocked, asked in words, for the decision
+ * layer's shadow mode (decide.js). Phrased affirmatively and as one condition,
+ * per the model's documented literal reading. The two incidents above are the
+ * cases it must get right in BOTH directions: "N/A — suite executed fully" is
+ * false, "No browser is available" is true.
+ */
+const SHADOW_QUESTIONS = {
+  could_not_run: {
+    type: 'noul',
+    instructions: 'At least one check described in this report could not be executed at all, so it produced no result.',
+    criteria: {
+      true: 'A tool, browser, simulator, service, port or credential was unavailable for a check, or a check timed out or crashed before producing any result.',
+      false: 'Every check the report describes ran and produced a result, whether it passed or failed.',
+    },
+  },
+};
+
+module.exports = { parseGateBlocked, blockingCount, waitsForOwner, SHADOW_QUESTIONS, plannerNoteForBlockedGate, GATE_BLOCKED_INSTRUCTIONS, MARKER };

@@ -19,6 +19,7 @@ const transcriptRecovery = require('../transcript-recovery');
 const exitRecovery = require('../exit-recovery');
 const agentSkills = require('../agent-skills');
 const gateBlocked = require('../gate-blocked');
+const decisionPoints = require('../decision-points');
 const qaSuite = require('../qa-suite-run');
 const { reconcilePrdPath } = require('../prd-path');
 const { resolveScreenshotCommand, qaScreenshotInstructions, builderScreenshotInstructions } = require('../screenshot-tool');
@@ -3993,6 +3994,10 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     agent.feedback = feedback;
     agent.status = 'done';
     agent.completedAt = new Date().toISOString();
+    // Shadow only: asks the decision layer the gate-blocked question and logs
+    // it beside the regex's answer. Not awaited, never acted on, and a no-op
+    // unless decisions are configured (decide.js).
+    decisionPoints.shadowGateBlocked({ projectConfig: config, wf, role, feedback });
     // Clear any stale watchdog error (e.g. a false dead-process halt fired while
     // the agent was still finishing) — delivered feedback proves the agent lived.
     agent.error = undefined;

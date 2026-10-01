@@ -1,6 +1,7 @@
 # Plan: calibrated decisions over agent text, measured before they are trusted
 
-> **Status: proposed 2026-09-19.**
+> **Status: increments 1 and 2 implemented 2026-10-01, at one decision point**
+> (proposed 2026-09-19). See *Where this stands* at the end.
 >
 > Owner request: evaluate the newly released "System One" class of decision
 > models for use inside the engine, as a research project first — what is
@@ -190,3 +191,52 @@ Each is useful alone, and each earns the next.
 - https://evals.typesafe.ai/
 - https://github.com/typesafe-ai/system-one-adapter-python
 - https://www.theregister.com/ai-and-ml/2026/09/16/typesafe-ai-debuts-model-for-machines-that-plays-doom/5296711
+
+## Where this stands (2026-10-01)
+
+### Decisions taken
+
+1. **The System One model is the first provider, not the last.** Access stopped
+   needing the waitlist: OpenRouter serves Jev on a decisions endpoint
+   (`/api/alpha/decisions`) that takes the native request shape and returns the
+   typed answers, distributions and confidence unchanged. Increment 5's order is
+   reversed: a general-model provider becomes the comparison, added later.
+2. **Pinned version.** `typesafe/jev-1.13`, not the `jev-latest` alias. The shadow
+   log is a calibration dataset; an alias would change the model under it.
+3. **Through OpenRouter rather than direct.** It is already a recipient of agent
+   traffic here (opencode), and its key is already read. Costs accepted: the
+   endpoint is alpha, there is one more hop, and two parties see the state
+   instead of one.
+4. **On for every managed project once enabled, with per-project opt-out.** The
+   calibration measurement needs breadth; a reliability claim over a dozen cases
+   is not a claim.
+5. **Non-English state is sent, and the language is recorded.** Shadow mode never
+   acts, so a weaker answer costs nothing, and the size of the gap becomes a
+   measured result rather than an assumption.
+6. **The shadow log lives under `~/.build-studio/decisions/`, not in managed
+   projects.** A log in a project repo would need a `.gitignore` change in every
+   project, and a modified `.gitignore` blocks the next execution run.
+
+### Built
+
+- **Increment 1.** `lib/decide.js`: `decide({ state, questions })` with Noul /
+  Choice / Score, one provider (OpenRouter), off unless `decisions.enabled` is set
+  in the installation config, a 8 s timeout, and failures that return null and are
+  logged once per kind.
+- **Increment 2, one decision point.** `gate_blocked`: every report delivered by
+  a verification step is asked the question in `gate-blocked.js`
+  (`SHADOW_QUESTIONS`) beside `parseGateBlocked`, and both answers are appended to
+  the shadow log with the state, the model version, latency, cost and detected
+  language. Called once per delivered report, never from code that runs per poll.
+
+### First measurement (synthetic, three cases)
+
+Both verification directions hold on the live model: the "N/A — suite executed
+fully" report scored P(could not run) = 0.04, a genuine "No browser is available"
+0.93, and a Swedish report of a clean run 0.04. 270–660 ms per call, about
+$0.00002 each. Three cases are a smoke test, not a calibration result.
+
+### Open
+
+- The other six decision points.
+- Increment 3 (calibration against known outcomes) once the log has enough cases.
