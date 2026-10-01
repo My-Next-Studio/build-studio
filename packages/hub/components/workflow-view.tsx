@@ -11,6 +11,7 @@ import { AgentTerminal } from './agent-terminal'
 import { PathologyPanel, type PathologySignals } from './pathology-panel'
 import { FindingsChecklist, type Finding } from './findings-checklist'
 import { FindingsFiler } from './findings-filer'
+import { OpenFindings, type FixPlanTask } from './open-findings'
 import { CompactUsageMeter } from './usage-panel'
 import { providersFromCliConfig, type UsageProvider } from '@/lib/cli-providers'
 
@@ -1843,6 +1844,18 @@ function StepDetail({
                 ? `The review loop has run ${rounds} rounds, the cap you set, so it paused to ask. Continue runs the next review round exactly as it would have without the cap. Stopping moves on to companion specs with the PRD as it is now.`
                 : `The fix loop has run ${rounds} rounds, the cap you set, so it paused to ask. Continue sends the latest fixes back to ${source}: if it's clean the run moves on, if not the fix loop carries on and pauses again after the same number of rounds. Accepting skips that review and takes ${source}'s last findings as they are.`}
             </div>
+            {!isPrdReview && (() => {
+              const sourceStep = wf.fixSource || String((step as any).cap || 'code_review')
+              const reportOf = (key: string) => (wf.steps[key]?.agents || []).map(a => a.feedback).filter(Boolean).join('\n\n---\n\n')
+              return (
+                <OpenFindings
+                  tasks={((wf.fixPlan?.tasks || []) as unknown) as FixPlanTask[]}
+                  sourceStep={sourceStep}
+                  sourceReport={reportOf(sourceStep)}
+                  fixReport={reportOf('fix_execution')}
+                />
+              )
+            })()}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button onClick={() => onAdvance('approve')} className="wf-btn primary">
                 {isPrdReview ? 'Continue reviewing →' : 'Continue →'}

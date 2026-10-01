@@ -21,6 +21,28 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-01 — The fix-loop cap lists the findings you would be accepting
+
+### Added
+
+- **The cap pause now shows the open findings before you accept them.** When
+  a fix loop reaches its round cap, the Workflow tab lists each finding from
+  the last fix plan with its priority and role. Click a row to see the full
+  description and acceptance criteria. Below the list are two collapsible
+  sections: the fix agent's report and the full report from the review step
+  that raised the findings. These findings have been worked on but not
+  re-checked, so the panel shows what **Accept open findings & move on**
+  would take on. PRD review caps are unchanged.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project**: nothing to do.
+
+---
+
 ## 2026-09-30 — QA defects reach the devs even when another check could not run
 
 ### Fixed
