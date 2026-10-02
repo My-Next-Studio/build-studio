@@ -296,7 +296,13 @@ test('a Draft click commits what an exited agent left behind before launching', 
   git(root, 'commit', '-qm', 'add EX-011', '--', 'docs/backlog/EX-011.md');
   const r = await post(root, fakeTmux({ livePid: 123, agentRunning: false }), { itemId: 'EX-011' });
   assert.equal(r.status, 200);
-  assert.equal(git(root, 'log', '-1', '--format=%s'), 'docs(EX-010): draft PRD');
+  // Found by message, not as HEAD: Draft also commits a .gitignore rule without
+  // awaiting it, so which of the two lands last depends on timing. Asserting on
+  // HEAD failed under load.
+  const line = git(root, 'log', '--format=%H %s').split('\n').find((l) => l.endsWith(' docs(EX-010): draft PRD'));
+  assert.ok(line, 'the leftover draft was committed');
+  const files = git(root, 'show', '--name-only', '--format=', line.split(' ')[0]).split('\n').sort();
+  assert.deepEqual(files, ['docs/backlog/EX-010.md', 'docs/prds/PRD-010-plan.md', 'docs/project-state.md']);
 });
 
 test('an item that already has a PRD is refused (readItem finds it with an absolute docsPath)', async () => {
