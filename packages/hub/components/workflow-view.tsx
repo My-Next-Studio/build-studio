@@ -237,6 +237,7 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
     { key: 'architect_backfill', name: 'Architect Backfill' },
     { key: 'pm_synthesis',       name: 'PM Synthesis' },
     { key: 'devops_detect',      name: 'DevOps Detect' },
+    { key: 'owner_interview',    name: 'Owner Interview' },
     { key: 'team_review',        name: 'Team Review' },
     { key: 'pm_revision',        name: 'PM Revision' },
     { key: 'owner_signoff',      name: 'Owner Sign-off' },

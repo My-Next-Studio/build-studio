@@ -114,3 +114,19 @@ test('Finish commits only the files the interview writes, and only those that ex
     'docs/inputs/kickoff-interview.md', 'docs/project-state.md', 'docs/backlog',
   ]);
 });
+
+test('the onboarding prompt points at what was reconstructed, not at owner inputs', () => {
+  const p = ki.interviewPrompt('Example App', 'onboarding');
+  assert.match(p, /reconstructed/);
+  assert.match(p, /docs\/onboarding\/survey\.md/);
+  assert.doesNotMatch(p, /docs\/inputs\//);
+  assert.ok(p.includes(ki.interviewMarker('Example App')), 'same marker, so read-back works in both');
+  assert.match(ki.interviewPrompt('Example App'), /docs\/inputs\//, 'kickoff is the default');
+});
+
+test('an onboarding launch writes the onboarding prompt', () => {
+  const config = project('claude');
+  const tmux = fakeTmux();
+  ki.launchInterview({ config, tmuxOps: tmux, mode: 'onboarding' });
+  assert.match(fs.readFileSync(path.join(config.projectRoot, 'prompt-interview.txt'), 'utf8'), /survey\.md/);
+});

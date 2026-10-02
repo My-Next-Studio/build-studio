@@ -21,6 +21,50 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-02 — Onboarding interviews you too, and brings its skills along
+
+### Changed
+
+- **Onboarding now includes the owner interview.** When you onboard an
+  existing project, the CEO, Architect and PM reconstruct a vision, ADRs and a
+  backlog from your files. Where the files are silent they infer the answer,
+  and before this you saw the result only at sign-off. Now an **Owner
+  Interview** step comes before the team review. The PM asks you about what
+  was inferred that shapes the whole product, in the same kind of card as the
+  kickoff interview. Onboarding still makes a single commit at sign-off, and
+  that commit includes the interview's files. Finish doesn't commit.
+- **Onboarding follows its preset's sequence**, as the kickoff now does. The
+  shipped presets' order is unchanged, apart from the interview. A custom
+  onboarding sequence is now respected. A clean team review still skips the
+  PM revision.
+
+### Fixed
+
+- **Onboarding a project that already had Claude Code skills gave it none of
+  Build Studio's.** Template skills were copied only when the project had no
+  `.claude/skills/` folder at all. A project with even one skill of its own
+  got no `draft_prd`, so the Draft button had no method to follow. Onboarding
+  now adds each template skill the project is missing, and never overwrites
+  one it already has.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project**: nothing to do for new onboardings. If you
+onboarded a project that already had its own `.claude/skills/`, it may be
+missing Build Studio's skills. Copy the missing ones in (this never
+overwrites one you have):
+
+```bash
+for s in <build-studio>/templates/default/.claude/skills/*/; do
+  [ -e ".claude/skills/$(basename "$s")" ] || cp -R "$s" .claude/skills/
+done
+```
+
+---
+
 ## 2026-10-02 — The kickoff follows its preset
 
 ### Fixed

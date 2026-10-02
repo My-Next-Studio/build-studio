@@ -1,6 +1,6 @@
 ---
 name: kickoff_interview
-description: Interview the project owner at kickoff, as the PM, about the decisions that shape the whole product. Use when the user says "/kickoff_interview", "interview me about the project", or during a kickoff's owner_interview step. Resolves what the inputs and fresh kickoff documents already answer, asks the owner one question at a time about project-level forks, writes story-level questions into their backlog items for drafting, and records every answer where later agents look.
+description: Interview the project owner at kickoff or onboarding, as the PM, about the decisions that shape the whole product. Use when the user says "/kickoff_interview", "interview me about the project", or during a kickoff's or onboarding's owner_interview step. Resolves what the inputs and fresh kickoff documents already answer, asks the owner one question at a time about project-level forks, writes story-level questions into their backlog items for drafting, and records every answer where later agents look.
 ---
 
 # Kickoff interview
@@ -24,8 +24,13 @@ as an open question, never filled in.
 
 Read, in this order:
 
-1. `docs/inputs/` — everything the owner provided.
-2. `docs/vision.md` — fresh from the kickoff.
+1. **At kickoff:** `docs/inputs/`, everything the owner provided.
+   **At onboarding:** `docs/onboarding/survey.md` and the existing documents
+   it summarises. Here the vision and backlog were *reconstructed* from those
+   files. What the files left silent or ambiguous was inferred, and those
+   inferences are your question list.
+2. `docs/vision.md` — fresh from the kickoff or onboarding. At onboarding,
+   also the ADRs in `docs/adrs/`.
 3. `docs/project-state.md` — phase, roles, and the **Key Decisions Log**.
 4. `docs/backlog/` — the items the PM just scoped.
 

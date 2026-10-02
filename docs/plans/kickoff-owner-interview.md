@@ -208,3 +208,26 @@ All four increments are built.
   CEO synthesis and scoping, so their agents make the same assumptions the
   interview exists to catch. `fast-track` stays without an owner step, as its
   preset says.
+
+### Onboarding aligned (2026-10-02)
+
+Owner request: align the onboarding workflow with the kickoff. Little used
+here, but likely the first workflow many people who download the repo run.
+
+- **Onboarding follows its preset's sequence**, like the kickoff, through the
+  same `advanceBySequence` / `sequenceNextStep`. The fixed chain matched every
+  shipped sequence, so nothing changes for a default config; a custom sequence
+  is now respected. A clean team review still skips `pm_revision`, decided by
+  the sequence.
+- **Owner decision: onboarding gets the interview**, after `devops_detect` and
+  before `team_review`, at the same point as the kickoff: once the CEO,
+  Architect and PM have reconstructed the vision, ADRs and backlog from the
+  existing files. The prompt points the PM at those inferences, not at owner
+  inputs that onboarding does not have.
+- **Finish does not commit in onboarding.** Onboarding makes one commit, at
+  `owner_signoff` (`git add -A`), which includes the interview's files.
+- **Template skills reach onboarded projects.** Onboarding copied the skills
+  tree only when the project had no `.claude/skills/` at all, so a project
+  already using Claude Code skills got none of Build Studio's (no `draft_prd`,
+  no `kickoff_interview`). It now adds each missing skill and never overwrites
+  one the project has.

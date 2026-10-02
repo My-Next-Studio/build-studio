@@ -335,3 +335,36 @@ test('onboardProject: gitignores visual evidence but keeps the prose beside it',
     assert.ok(!/^docs\/pr-evidence\/?$/m.test(gi), 'the directory itself must not be ignored wholesale');
   } finally { clean(root); }
 });
+
+// A project already using Claude Code skills used to get NONE of Build
+// Studio's: the tree was copied only when no skills folder existed, so the
+// onboarding interview and drafting named skills that were not there.
+test('onboarding adds each missing template skill and keeps the project\'s own', async () => {
+  const root = makeRepo({
+    ...EXAMPLE_APP_SHAPE,
+    '.claude/skills/my_skill/SKILL.md': '# mine\n',
+    '.claude/skills/draft_prd/SKILL.md': '# the project\'s own draft_prd\n',
+  });
+  try {
+    await onboardProject(root, { name: 'fixture', port: 3999 });
+    const skills = path.join(root, '.claude', 'skills');
+    assert.equal(fs.readFileSync(path.join(skills, 'my_skill', 'SKILL.md'), 'utf8'), '# mine\n');
+    assert.equal(fs.readFileSync(path.join(skills, 'draft_prd', 'SKILL.md'), 'utf8'), '# the project\'s own draft_prd\n',
+      'an existing skill is never overwritten');
+    assert.ok(fs.existsSync(path.join(skills, 'kickoff_interview', 'SKILL.md')), 'the interview skill is added');
+  } finally {
+    clean(root);
+  }
+});
+
+test('onboarding a project with no skills folder still gets every template skill', async () => {
+  const root = makeRepo(EXAMPLE_APP_SHAPE);
+  try {
+    await onboardProject(root, { name: 'fixture', port: 3999 });
+    for (const s of ['draft_prd', 'kickoff_interview']) {
+      assert.ok(fs.existsSync(path.join(root, '.claude', 'skills', s, 'SKILL.md')), s);
+    }
+  } finally {
+    clean(root);
+  }
+});

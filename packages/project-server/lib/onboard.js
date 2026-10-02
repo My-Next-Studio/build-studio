@@ -146,14 +146,22 @@ async function onboardProject(targetPath, options = {}) {
     copyIfAbsent(settingsSrc, path.join(targetPath, '.claude', 'settings.json'), '.claude/settings.json', written, skipped);
   }
 
-  // ─── 4. .claude/skills/ (only if absent — copy whole tree only when none exist) ─
+  // ─── 4. .claude/skills/ — each template skill the project lacks ───────────
+  // Per skill, never overwriting one the project already has. This used to copy
+  // the whole tree only when NO skills folder existed, so a project already
+  // using Claude Code skills got none of Build Studio's: drafting and the
+  // onboarding interview then named skills that were not there.
   const skillsSrc = path.join(templateDir, '.claude', 'skills');
   const skillsDst = path.join(targetPath, '.claude', 'skills');
-  if (fs.existsSync(skillsSrc) && !fs.existsSync(skillsDst)) {
-    copyDir(skillsSrc, skillsDst);
-    written.push('.claude/skills/');
-  } else if (fs.existsSync(skillsDst)) {
-    skipped.push('.claude/skills/');
+  if (fs.existsSync(skillsSrc)) {
+    for (const entry of fs.readdirSync(skillsSrc, { withFileTypes: true })) {
+      const rel = `.claude/skills/${entry.name}${entry.isDirectory() ? '/' : ''}`;
+      const dst = path.join(skillsDst, entry.name);
+      if (fs.existsSync(dst)) { skipped.push(rel); continue; }
+      if (entry.isDirectory()) copyDir(path.join(skillsSrc, entry.name), dst);
+      else { fs.mkdirSync(skillsDst, { recursive: true }); fs.copyFileSync(path.join(skillsSrc, entry.name), dst); }
+      written.push(rel);
+    }
   }
 
   // ─── 5a. .gitignore — append runtime patterns (idempotent) ────────────────

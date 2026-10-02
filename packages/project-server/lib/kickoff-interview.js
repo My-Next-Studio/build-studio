@@ -37,25 +37,40 @@ function interviewSessionName(projectName) {
 
 /** The phrase the opening prompt carries; identifies the session on read-back. */
 function interviewMarker(projectName) {
-  return `kickoff interview for the project "${projectName}"`;
+  return `owner interview for the project "${projectName}"`;
 }
 
 /**
  * The opening message. Says plainly that a human is on the other end, for the
  * same reason drafting does: an agent that assumes it is unattended writes the
  * answers instead of asking for them.
+ *
+ * Kickoff and onboarding differ in where the drafts came from: written from the
+ * owner's inputs, or reconstructed from an existing project's files. That is
+ * what the agent has to look for assumptions in.
  */
-function interviewPrompt(projectName) {
-  return `Use the \`kickoff_interview\` skill to run the ${interviewMarker(projectName)}.
+function interviewPrompt(projectName, mode = 'kickoff') {
+  const context = mode === 'onboarding'
+    ? `The CEO, Architect and PM have just reconstructed docs/vision.md, the ADRs,
+docs/project-state.md and the backlog from this project's existing files
+(summarised in docs/onboarding/survey.md). Where the files were silent or
+ambiguous they inferred the answer. Find those inferences, and ask the owner
+about the ones that shape the whole product.
 
-This is an INTERACTIVE session. The owner is at the keyboard and will answer.
-The CEO and PM have just written docs/vision.md, docs/project-state.md and the
+Start by reading docs/onboarding/survey.md, the vision, the ADRs, the project
+state and the backlog,`
+    : `The CEO and PM have just written docs/vision.md, docs/project-state.md and the
 backlog; they made decisions on the owner's behalf to do it. Find those, and
 ask the owner about the ones that shape the whole product.
 
-Start by reading docs/inputs/, the vision, the project state and the backlog,
+Start by reading docs/inputs/, the vision, the project state and the backlog,`;
+  return `Use the \`kickoff_interview\` skill to run the ${interviewMarker(projectName)}.
+
+This is an INTERACTIVE session. The owner is at the keyboard and will answer.
+${context}
 then open with what is already answered and where. Write each answer down as it
-is made. When you are done, tell the owner to click Finish interview.`;
+is made. Do not commit. When you are done, tell the owner to click
+Finish interview.`;
 }
 
 /**
@@ -63,7 +78,7 @@ is made. When you are done, tell the owner to click Finish interview.`;
  *
  * @returns {object} the session record to store on the step
  */
-function launchInterview({ config, tmuxOps, prior = null, findSessionId = findDraftSessionId }) {
+function launchInterview({ config, tmuxOps, prior = null, mode = 'kickoff', findSessionId = findDraftSessionId }) {
   const projectRoot = config.projectRoot;
   const projectName = config.name || path.basename(projectRoot);
   const launch = resolveStepLaunchSettings(STEP, null, config.cli, config.step_groups);
@@ -85,7 +100,7 @@ function launchInterview({ config, tmuxOps, prior = null, findSessionId = findDr
 
   const prompt = resuming
     ? 'Continue the kickoff interview where we left off. Re-read docs/inputs/kickoff-interview.md and the Key Decisions Log first, then pick up from the next open topic.'
-    : interviewPrompt(projectName);
+    : interviewPrompt(projectName, mode);
   const promptFile = path.join(projectRoot, `prompt-${WINDOW}.txt`);
   fs.writeFileSync(promptFile, prompt, 'utf8');
 

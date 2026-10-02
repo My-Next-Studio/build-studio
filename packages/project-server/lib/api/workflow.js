@@ -231,15 +231,16 @@ function stepSequence(wf, config) {
   // of its steps exist: every lookup returned null, so the kickoff's routing by
   // sequence silently fell back to its defaults.
   if (wf && wf.type === 'kickoff') return (config && config.workflow && config.workflow.kickoff) || [];
+  if (wf && wf.type === 'onboarding') return (config && config.workflow && config.workflow.onboarding) || [];
   return (config && config.workflow && config.workflow.execution) || [];
 }
 
 /**
- * The kickoff step after `current`: the next one in `seq`, 'completed' after
+ * The kickoff or onboarding step after `current`: the next one in `seq`, 'completed' after
  * the last, or `fallback` when `seq` does not list `current` (a custom config,
  * which keeps the old fixed chain).
  */
-function kickoffNextStep(seq, current, fallback) {
+function sequenceNextStep(seq, current, fallback) {
   const i = (seq || []).indexOf(current);
   if (i === -1) return fallback;
   return i < seq.length - 1 ? seq[i + 1] : 'completed';
@@ -3553,11 +3554,14 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         architect_backfill:  { status: 'pending', agents: [] },
         pm_synthesis:        { status: 'pending', agents: [] },
         devops_detect:       { status: 'pending', agents: [] },
+        owner_interview:     { status: 'pending', agents: [] },
         team_review:         { status: 'pending', agents: [] },
         pm_revision:         { status: 'pending', agents: [] },
         owner_signoff:       { status: 'pending', agents: [] },
       };
-      currentStep = 'discovery';
+      // First step of this project's onboarding sequence, as the kickoff does.
+      const onboardingSeq = (config.workflow && config.workflow.onboarding) || [];
+      currentStep = onboardingSeq.length && steps[onboardingSeq[0]] ? onboardingSeq[0] : 'discovery';
     } else if (type === 'bugfix') {
       // Bugfix: a lean execution flow driven by a single Bug backlog item. No
       // PRD, no planning, no review panel — the bug file is the spec. `input` is
@@ -5696,32 +5700,89 @@ Fix only the issues raised. Commit your changes.`,
     req.end();
   }
 
+  /**
+   * Move a kickoff or onboarding run to the step after `current` in its own
+   * sequence. Both used to walk one fixed chain whatever the preset said.
+   * `fallback` is that old chain's next step, used only when the sequence does
+   * not list `current` (a custom config), so such configs behave as before.
+   */
+  function advanceBySequence(wf, res, current, fallback) {
+    const next = sequenceNextStep(stepSequence(wf, config), current, fallback);
+    if (next === 'completed') {
+      wf.currentStep = 'completed';
+      writeWorklog(wf);
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf, completed: true });
+    }
+    wf.currentStep = next;
+    wf.steps[next] = { ...(wf.steps[next] || {}), status: 'pending', agents: [] };
+    state.saveWorkflow(wf);
+    return res.json({ workflow: wf, needsAdvance: true });
+  }
+
+  /**
+   * owner_interview — the PM interviews the owner in an interactive session
+   * (lib/kickoff-interview.js), in a kickoff or an onboarding run. Waits for the
+   * owner: auto-advance never acts here and nothing times out, so an interview
+   * can span days.
+   *   launch       start the session, or resume it after End session
+   *   end_session  stop the agent, keep the conversation
+   *   approve      Finish interview: commit what it wrote (kickoff), continue
+   *   skip         continue without an interview
+   *
+   * Onboarding does NOT commit on Finish: its owner_signoff makes the single
+   * onboarding commit, which picks the interview's files up with the rest.
+   */
+  function handleOwnerInterview(wf, action, res, { commitOnFinish }) {
+    const step = wf.steps[kickoffInterview.STEP] || (wf.steps[kickoffInterview.STEP] = { status: 'pending', agents: [] });
+    if (action === 'launch') {
+      const { agentRunning } = kickoffInterview.interviewLive(step.session, tmuxOps);
+      if (agentRunning) return res.json({ workflow: wf, alreadyRunning: true });
+      try {
+        step.session = kickoffInterview.launchInterview({ config, tmuxOps, prior: step.session || null, mode: wf.type });
+      } catch (e) {
+        return res.status(500).json({ error: `could not start the interview: ${e.message}` });
+      }
+      step.status = 'running';
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf });
+    }
+    if (action === 'end_session') {
+      step.session = kickoffInterview.endInterview({ session: step.session, config, tmuxOps });
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf });
+    }
+    if (action === 'approve' || action === 'skip') {
+      if (step.session && !step.session.endedAt) {
+        step.session = kickoffInterview.endInterview({ session: step.session, config, tmuxOps });
+      }
+      const advance = () => {
+        step.status = action === 'skip' ? 'skipped' : 'completed';
+        return advanceBySequence(wf, res, kickoffInterview.STEP, 'team_review');
+      };
+      if (action === 'skip') return advance();
+      if (fs.existsSync(path.join(projectRoot, kickoffInterview.SUMMARY_PATH))) step.notesPath = kickoffInterview.SUMMARY_PATH;
+      if (!commitOnFinish) return advance();
+      const docsRel = config.docs_path || path.relative(projectRoot, docsPath) || 'docs';
+      const paths = kickoffInterview.interviewCommitPaths(projectRoot, docsRel);
+      if (!paths.length || !fs.existsSync(path.join(projectRoot, '.git'))) return advance();
+      // Committed BEFORE moving on: team_review agents must see the answers.
+      // A failed commit is recorded, not fatal: the files are on disk.
+      return scopedCommit(projectRoot, paths, 'docs(kickoff): record the owner interview')
+        .then((r) => {
+          step.commit = { committed: r.committed, sha: r.sha, reason: r.reason };
+          if (!r.committed) console.warn(`[workflow] kickoff interview not committed: ${r.reason}`);
+        })
+        .catch((e) => { step.commit = { committed: false, sha: null, reason: e.message }; })
+        .then(advance);
+    }
+    return res.status(400).json({ error: `owner_interview: unknown action "${action}". Use launch, end_session, approve or skip.` });
+  }
+
   // --- Kickoff workflow ---
   function handleKickoffAdvance(wf, action, notes, res) {
     const { findRole } = require('../config');
-
-    // The kickoff follows the project's kickoff sequence. It used to walk one
-    // fixed chain (ceo → scoping → owner → review → revision → specs → devops)
-    // whatever the preset said, so fast-track ran CEO synthesis and companion
-    // specs its preset explicitly leaves out, and api-only / static-site went
-    // through an owner gate their timeline did not show.
-    //
-    // `fallback` is the old chain's next step, used only when the sequence does
-    // not list `current` (a custom config), so such configs behave as before.
-    const kickoffNext = (current, fallback) => kickoffNextStep(stepSequence(wf, config), current, fallback);
-    const advanceKickoff = (current, fallback) => {
-      const next = kickoffNext(current, fallback);
-      if (next === 'completed') {
-        wf.currentStep = 'completed';
-        writeWorklog(wf);
-        state.saveWorkflow(wf);
-        return res.json({ workflow: wf, completed: true });
-      }
-      wf.currentStep = next;
-      wf.steps[next] = { ...(wf.steps[next] || {}), status: 'pending', agents: [] };
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
-    };
+    const advanceKickoff = (current, fallback) => advanceBySequence(wf, res, current, fallback);
 
     if (wf.currentStep === 'ceo_synthesis' && wf.steps.ceo_synthesis.status === 'pending') {
       const ceoRole = findRole(config, 'CEO');
@@ -5760,56 +5821,8 @@ Fix only the issues raised. Commit your changes.`,
       return advanceKickoff('pm_scoping', 'owner_consultations');
     }
 
-    // owner_interview — the PM interviews the owner in an interactive session
-    // (lib/kickoff-interview.js). Waits for the owner: auto-advance never acts
-    // here and nothing times out, so an interview can span days.
-    //   launch       start the session, or resume it after End session
-    //   end_session  stop the agent, keep the conversation
-    //   approve      Finish interview: commit what it wrote, continue
-    //   skip         continue without an interview
     if (wf.currentStep === kickoffInterview.STEP) {
-      const step = wf.steps[kickoffInterview.STEP] || (wf.steps[kickoffInterview.STEP] = { status: 'pending', agents: [] });
-      if (action === 'launch') {
-        const { agentRunning } = kickoffInterview.interviewLive(step.session, tmuxOps);
-        if (agentRunning) return res.json({ workflow: wf, alreadyRunning: true });
-        try {
-          step.session = kickoffInterview.launchInterview({ config, tmuxOps, prior: step.session || null });
-        } catch (e) {
-          return res.status(500).json({ error: `could not start the interview: ${e.message}` });
-        }
-        step.status = 'running';
-        state.saveWorkflow(wf);
-        return res.json({ workflow: wf });
-      }
-      if (action === 'end_session') {
-        step.session = kickoffInterview.endInterview({ session: step.session, config, tmuxOps });
-        state.saveWorkflow(wf);
-        return res.json({ workflow: wf });
-      }
-      if (action === 'approve' || action === 'skip') {
-        if (step.session && !step.session.endedAt) {
-          step.session = kickoffInterview.endInterview({ session: step.session, config, tmuxOps });
-        }
-        const advance = () => {
-          step.status = action === 'skip' ? 'skipped' : 'completed';
-          return advanceKickoff(kickoffInterview.STEP, 'team_review');
-        };
-        if (action === 'skip') return advance();
-        if (fs.existsSync(path.join(projectRoot, kickoffInterview.SUMMARY_PATH))) step.notesPath = kickoffInterview.SUMMARY_PATH;
-        const docsRel = config.docs_path || path.relative(projectRoot, docsPath) || 'docs';
-        const paths = kickoffInterview.interviewCommitPaths(projectRoot, docsRel);
-        if (!paths.length || !fs.existsSync(path.join(projectRoot, '.git'))) return advance();
-        // Committed BEFORE moving on: team_review agents must see the answers.
-        // A failed commit is recorded, not fatal: the files are on disk.
-        return scopedCommit(projectRoot, paths, 'docs(kickoff): record the owner interview')
-          .then((r) => {
-            step.commit = { committed: r.committed, sha: r.sha, reason: r.reason };
-            if (!r.committed) console.warn(`[workflow] kickoff interview not committed: ${r.reason}`);
-          })
-          .catch((e) => { step.commit = { committed: false, sha: null, reason: e.message }; })
-          .then(advance);
-      }
-      return res.status(400).json({ error: `owner_interview: unknown action "${action}". Use launch, end_session, approve or skip.` });
+      return handleOwnerInterview(wf, action, res, { commitOnFinish: true });
     }
 
     // owner_consultations — manual gate between pm_scoping and team_review.
@@ -6014,6 +6027,13 @@ Fix only the issues raised. Commit your changes.`,
       return r ? r.skill : fallbackSkill;
     };
 
+    // The owner interview, as in the kickoff, but Finish does not commit:
+    // owner_signoff makes the single onboarding commit (`git add -A`), which
+    // includes everything the interview wrote.
+    if (wf.currentStep === kickoffInterview.STEP) {
+      return handleOwnerInterview(wf, action, res, { commitOnFinish: false });
+    }
+
     // ─── 1. discovery ────────────────────────────────────────────────────────
     if (wf.currentStep === 'discovery' && wf.steps.discovery.status === 'pending') {
       const skill = role('Architect', 'architect');
@@ -6044,9 +6064,7 @@ Fix only the issues raised. Commit your changes.`,
     }
     if (wf.currentStep === 'discovery' && action === 'approve') {
       wf.steps.discovery.status = 'completed';
-      wf.currentStep = 'ceo_synthesis';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceBySequence(wf, res, 'discovery', 'ceo_synthesis');
     }
 
     // ─── 2. ceo_synthesis (different prompt vs kickoff) ─────────────────────
@@ -6073,9 +6091,7 @@ Fix only the issues raised. Commit your changes.`,
     }
     if (wf.currentStep === 'ceo_synthesis' && action === 'approve') {
       wf.steps.ceo_synthesis.status = 'completed';
-      wf.currentStep = 'architect_backfill';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceBySequence(wf, res, 'ceo_synthesis', 'architect_backfill');
     }
 
     // ─── 3. architect_backfill ──────────────────────────────────────────────
@@ -6111,9 +6127,7 @@ Fix only the issues raised. Commit your changes.`,
     }
     if (wf.currentStep === 'architect_backfill' && action === 'approve') {
       wf.steps.architect_backfill.status = 'completed';
-      wf.currentStep = 'pm_synthesis';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceBySequence(wf, res, 'architect_backfill', 'pm_synthesis');
     }
 
     // ─── 4. pm_synthesis (different from kickoff's pm_scoping) ─────────────
@@ -6150,9 +6164,7 @@ Fix only the issues raised. Commit your changes.`,
     }
     if (wf.currentStep === 'pm_synthesis' && action === 'approve') {
       wf.steps.pm_synthesis.status = 'completed';
-      wf.currentStep = 'devops_detect';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceBySequence(wf, res, 'pm_synthesis', 'devops_detect');
     }
 
     // ─── 5. devops_detect ──────────────────────────────────────────────────
@@ -6176,9 +6188,7 @@ Fix only the issues raised. Commit your changes.`,
     }
     if (wf.currentStep === 'devops_detect' && action === 'approve') {
       wf.steps.devops_detect.status = 'completed';
-      wf.currentStep = 'team_review';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceBySequence(wf, res, 'devops_detect', 'team_review');
     }
 
     // ─── 6. team_review (reuses kickoff machinery, override prompt framing) ─
@@ -6206,6 +6216,10 @@ Fix only the issues raised. Commit your changes.`,
               `project away from its actual direction.\n` +
               `3. **Classify findings** as BLOCKING (artifact is wrong) or NON-BLOCKING (artifact could be richer).\n` +
               `4. **If you have no issues, say "APPROVE — no issues found."**\n\n` +
+              (wf.steps.owner_interview && wf.steps.owner_interview.notesPath
+                ? `The owner answered questions in the onboarding interview — read \`${wf.steps.owner_interview.notesPath}\` first. ` +
+                  `An artifact that contradicts a recorded owner decision is a BLOCKING finding.\n\n`
+                : '') +
               `Use your /${r.skill} skill. This is round ${wf.round}.`,
           }));
           launchedAgents = launchWorkflowAgents(wf, agents, { useWorktrees: false });
@@ -6237,15 +6251,14 @@ Fix only the issues raised. Commit your changes.`,
         return /\[BLOCKING\]/i.test(fb);
       });
       wf.steps.team_review.status = 'completed';
-      if (hasBlocking) {
-        wf.currentStep = 'pm_revision';
-      } else {
-        // Skip pm_revision — nothing to revise.
+      // A clean review skips pm_revision: nothing to revise. Decided by the
+      // sequence like every other move, so a custom order is still respected.
+      const seq = stepSequence(wf, config);
+      if (!hasBlocking && sequenceNextStep(seq, 'team_review', 'pm_revision') === 'pm_revision') {
         wf.steps.pm_revision.status = 'completed';
-        wf.currentStep = 'owner_signoff';
+        return advanceBySequence(wf, res, 'pm_revision', 'owner_signoff');
       }
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceBySequence(wf, res, 'team_review', 'pm_revision');
     }
     // Force-skip variant for the rare case where the operator wants to bypass
     // pm_revision even with a blocking finding (e.g. they fixed it inline).
@@ -6271,6 +6284,9 @@ Fix only the issues raised. Commit your changes.`,
           `project-state, PRD-001/002) based on reviewer feedback.\n\n` +
           `Use the /${skill} skill.\n\n## Reviewer Feedback (Round ${wf.round})\n\n${roundFeedback}` +
           (notes ? `\n\n## Additional Notes from User\n\n${notes}` : '') +
+          (wf.steps.owner_interview && wf.steps.owner_interview.notesPath
+            ? `\n\n## Owner Decisions from the Interview\n\nRead \`${wf.steps.owner_interview.notesPath}\`. Its decisions win over a reviewer's suggestion.`
+            : '') +
           `\n\nUpdate the relevant files. STAGE them but DO NOT COMMIT — owner_signoff makes ` +
           `the single onboarding commit.`,
       }];
@@ -6284,9 +6300,7 @@ Fix only the issues raised. Commit your changes.`,
     // re-enters pm_revision with the owner's note as additional feedback.
     if (wf.currentStep === 'pm_revision' && action === 'approve') {
       wf.steps.pm_revision.status = 'completed';
-      wf.currentStep = 'owner_signoff';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceBySequence(wf, res, 'pm_revision', 'owner_signoff');
     }
     // Explicit re-validation path: if the operator wants to re-run team_review
     // after PM revision (rather than going to signoff), they can opt in.
@@ -10290,7 +10304,7 @@ module.exports = {
   bugfixSequence,
   stepSequence,
   nextStepInSequence,
-  kickoffNextStep,
+  sequenceNextStep,
   validateBugfixStart,
   resolveBuilderRole,
   validateBuilderRole,

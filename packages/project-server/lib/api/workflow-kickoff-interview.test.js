@@ -38,12 +38,12 @@ const OLD_CHAIN = {
 
 /** Walk a kickoff from its first step to the end, the way the handler routes it. */
 function walk(seq) {
-  const { kickoffNextStep } = require('./workflow');
+  const { sequenceNextStep } = require('./workflow');
   const visited = [];
   let step = seq.length ? seq[0] : 'ceo_synthesis';
   for (let guard = 0; step !== 'completed' && guard < 20; guard++) {
     visited.push(step);
-    step = kickoffNextStep(seq, step, OLD_CHAIN[step]);
+    step = sequenceNextStep(seq, step, OLD_CHAIN[step]);
   }
   return visited;
 }
@@ -73,10 +73,10 @@ test('a custom sequence that still names owner_consultations keeps the old gate'
 });
 
 test('a step outside the sequence falls back to the old chain', () => {
-  const { kickoffNextStep } = require('./workflow');
+  const { sequenceNextStep } = require('./workflow');
   // A run parked on owner_consultations in a project whose sequence now lists
   // owner_interview still moves on to the review.
-  assert.equal(kickoffNextStep(PRESETS['web-app'].workflow.kickoff, 'owner_consultations', 'team_review'), 'team_review');
+  assert.equal(sequenceNextStep(PRESETS['web-app'].workflow.kickoff, 'owner_consultations', 'team_review'), 'team_review');
 });
 
 test('the kickoff starts at the first step of its sequence', () => {
@@ -88,15 +88,52 @@ test('the old consultation gate still works for runs that reach it', () => {
 });
 
 test('Finish commits the interview BEFORE moving on; Skip does not commit', () => {
-  const r = region('if (wf.currentStep === kickoffInterview.STEP) {', "if (wf.currentStep === 'owner_consultations' && action === 'approve') {");
+  const r = region('function handleOwnerInterview(wf, action, res, { commitOnFinish }) {', '  // --- Kickoff workflow ---');
   const fin = r.slice(r.indexOf("if (action === 'approve' || action === 'skip') {"));
   assert.match(fin, /if \(action === 'skip'\) return advance\(\);/);
+  const noCommit = fin.indexOf('if (!commitOnFinish) return advance();');
   const commit = fin.indexOf('scopedCommit(projectRoot, paths,');
-  assert.ok(commit > 0, 'Finish commits');
+  assert.ok(noCommit > 0 && commit > noCommit, 'commits only when asked to, after recording notesPath');
   assert.ok(fin.indexOf('.then(advance)') > commit, 'and advances only after the commit settles');
-  assert.match(fin, /return advanceKickoff\(kickoffInterview\.STEP, 'team_review'\);/, 'moves on by the kickoff sequence');
+  assert.match(fin, /return advanceBySequence\(wf, res, kickoffInterview\.STEP, 'team_review'\);/, 'moves on by the sequence');
   // An unknown action is refused, not silently treated as one of these.
   assert.match(r, /owner_interview: unknown action/);
+});
+
+test('the kickoff commits on Finish; onboarding does not (owner_signoff makes its one commit)', () => {
+  assert.ok(SRC.includes('return handleOwnerInterview(wf, action, res, { commitOnFinish: true });'));
+  const onb = region('function handleOnboardingAdvance(wf, action, notes, res) {');
+  assert.match(onb, /return handleOwnerInterview\(wf, action, res, \{ commitOnFinish: false \}\);/);
+});
+
+// The onboarding handler's old fixed chain, as its fallbacks pass it.
+const ONBOARDING_OLD_CHAIN = {
+  discovery: 'ceo_synthesis', ceo_synthesis: 'architect_backfill', architect_backfill: 'pm_synthesis',
+  pm_synthesis: 'devops_detect', devops_detect: 'team_review', owner_interview: 'team_review',
+  team_review: 'pm_revision', pm_revision: 'owner_signoff', owner_signoff: 'completed',
+};
+
+test('every preset\'s onboarding runs its sequence, with the interview before the review', () => {
+  const { sequenceNextStep } = require('./workflow');
+  for (const [name, p] of Object.entries(PRESETS)) {
+    const seq = p.workflow.onboarding;
+    if (!seq) continue; // fast-track defines no onboarding
+    const visited = [];
+    let step = seq[0];
+    for (let guard = 0; step !== 'completed' && guard < 20; guard++) {
+      visited.push(step);
+      step = sequenceNextStep(seq, step, ONBOARDING_OLD_CHAIN[step]);
+    }
+    assert.deepEqual(visited, seq, name);
+    assert.equal(seq[seq.indexOf('owner_interview') - 1], 'devops_detect', name);
+    assert.equal(seq[seq.indexOf('owner_interview') + 1], 'team_review', name);
+  }
+});
+
+test('a clean onboarding review still skips pm_revision, by the sequence', () => {
+  const onb = region('function handleOnboardingAdvance(wf, action, notes, res) {', "action === 'skip_to_signoff'");
+  assert.match(onb, /if \(!hasBlocking && sequenceNextStep\(seq, 'team_review', 'pm_revision'\) === 'pm_revision'\) \{/);
+  assert.match(onb, /return advanceBySequence\(wf, res, 'pm_revision', 'owner_signoff'\);/);
 });
 
 test('auto-advance never acts on the interview, server or client', () => {

@@ -53,7 +53,7 @@ const PRESETS = {
       // PRD-001 v1: onboarding workflow for existing projects. Mirrors kickoff
       // but reads existing files instead of docs/inputs/. Owner sign-off
       // gates the first commit. See build-studio/docs/prds/PRD-001-onboard-existing-projects.md.
-      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'team_review', 'pm_revision', 'owner_signoff'],
+      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'owner_interview', 'team_review', 'pm_revision', 'owner_signoff'],
       execution: ['qa_tests', 'planning', 'task_execution', 'merge_for_review', 'coverage_matrix', 'qa_validation', 'ac_verification', 'security_audit', 'final_review', 'demo_review', 'merge_to_main', 'capture_learnings'],
     },
     step_models: {
@@ -109,7 +109,7 @@ const PRESETS = {
       // PRD-001 v1: onboarding workflow for existing projects. Mirrors kickoff
       // but reads existing files instead of docs/inputs/. Owner sign-off
       // gates the first commit. See build-studio/docs/prds/PRD-001-onboard-existing-projects.md.
-      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'team_review', 'pm_revision', 'owner_signoff'],
+      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'owner_interview', 'team_review', 'pm_revision', 'owner_signoff'],
       execution: ['qa_tests', 'planning', 'task_execution', 'merge_for_review', 'coverage_matrix', 'qa_validation', 'ac_verification', 'security_audit', 'final_review', 'merge_to_main', 'capture_learnings'],
     },
     step_models: {
@@ -162,7 +162,7 @@ const PRESETS = {
       // PRD-001 v1: onboarding workflow for existing projects. Mirrors kickoff
       // but reads existing files instead of docs/inputs/. Owner sign-off
       // gates the first commit. See build-studio/docs/prds/PRD-001-onboard-existing-projects.md.
-      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'team_review', 'pm_revision', 'owner_signoff'],
+      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'owner_interview', 'team_review', 'pm_revision', 'owner_signoff'],
       // security_audit moved AFTER device_testing so it runs once at the end as
       // a final pre-demo gate, not on every fix loop. ac_verification stays
       // earlier (catches missed ACs each fix round, where early signal matters).
@@ -217,7 +217,7 @@ const PRESETS = {
       // PRD-001 v1: onboarding workflow for existing projects. Mirrors kickoff
       // but reads existing files instead of docs/inputs/. Owner sign-off
       // gates the first commit. See build-studio/docs/prds/PRD-001-onboard-existing-projects.md.
-      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'team_review', 'pm_revision', 'owner_signoff'],
+      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'owner_interview', 'team_review', 'pm_revision', 'owner_signoff'],
       execution: ['planning', 'task_execution', 'merge_for_review', 'qa_validation', 'ac_verification', 'final_review', 'demo_review', 'merge_to_main', 'capture_learnings'],
     },
     step_models: {
@@ -308,7 +308,7 @@ const PRESETS = {
     workflow: {
       kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_interview', 'team_review', 'pm_revision', 'companion_specs', 'devops_init'],
       review: ['pm_draft', 'reviewing', 'pm_fix', 'companion_specs'],
-      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'team_review', 'pm_revision', 'owner_signoff'],
+      onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'owner_interview', 'team_review', 'pm_revision', 'owner_signoff'],
       // Lean execution: independent TDD matrix (qa_tests) → monolithic build →
       // mechanical merge+scans → code_review (runtime-inserted after
       // merge_for_review; run it on Codex for cross-model eyes) → QA suite gate
