@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ProjectDashboard } from './project-dashboard'
 
@@ -18,6 +18,17 @@ export function ProjectView({ name, port, running: initialRunning, functionsConf
   const router = useRouter()
   const [running, setRunning] = useState(initialRunning)
   const [starting, setStarting] = useState(false)
+
+  // Projects are no longer all started at launch (shared/autostart.js), so
+  // opening a stopped one starts it: clicking its tab is the request. Once per
+  // mount; the Start button stays for when this attempt fails.
+  const autoStarted = useRef(false)
+  useEffect(() => {
+    if (initialRunning || autoStarted.current) return
+    autoStarted.current = true
+    startServer()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRunning])
 
   async function startServer() {
     setStarting(true)

@@ -685,14 +685,20 @@ app.whenReady().then(async () => {
     if (!process.env.BUILD_STUDIO_PROJECT_SERVER) {
       process.env.BUILD_STUDIO_PROJECT_SERVER = getResourcePath('standalone', 'node_modules', '@build-studio', 'project-server');
     }
-    if (projects.length > 0) {
-      console.log(`Auto-starting ${projects.length} project server(s)...`);
-      for (const p of projects) {
+    // Not every project: those with an active workflow, and those running when
+    // the app last quit (shared/autostart.js). The rest start when their tab is
+    // opened.
+    const toStart = shared.autostart.projectsToAutoStart(projects, {
+      lastSession: shared.autostart.readLastSession(),
+    });
+    if (toStart.length > 0) {
+      console.log(`Auto-starting ${toStart.length} of ${projects.length} project server(s): ${toStart.join(', ')}`);
+      for (const name of toStart) {
         try {
-          const result = await shared.processManager.startProject(p.name);
-          console.log(`  ${p.name}: pid=${result.pid} port=${result.port}${result.alreadyRunning ? ' (already running)' : ''}`);
+          const result = await shared.processManager.startProject(name);
+          console.log(`  ${name}: pid=${result.pid} port=${result.port}${result.alreadyRunning ? ' (already running)' : ''}`);
         } catch (e) {
-          console.error(`  ${p.name}: failed to start — ${e.message}`);
+          console.error(`  ${name}: failed to start — ${e.message}`);
         }
       }
     }
@@ -716,30 +722,55 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', async () => {
-  // Finalize any in-progress demo recording so the manifest + last segment close.
-  try {
-    if (demoRecorder && demoRecorder.isRecording()) await demoRecorder.stop();
-  } catch (e) {
-    console.error('Error stopping demo recording:', e.message);
-  }
+// Electron does not wait for an async 'before-quit' handler, so the stops it
+// started used to be cut off and servers survived the quit. The cleanup now
+// holds the quit (preventDefault), runs, and exits — once, and bounded so a
+// stuck stop cannot hang quitting.
+let _quitCleanupDone = false;
+const QUIT_CLEANUP_TIMEOUT_MS = 8000;
 
-  // Stop all running project servers
-  try {
-    const shared = require(/* turbopackIgnore: true */ '@build-studio/shared');
-    const projects = shared.registry.list();
-    for (const p of projects) {
-      try {
-        await shared.processManager.stopProject(p.name);
-        console.log(`Stopped project server: ${p.name}`);
-      } catch {}
+app.on('before-quit', (event) => {
+  if (_quitCleanupDone) return;
+  event.preventDefault();
+  _quitCleanupDone = true;
+
+  const cleanup = async () => {
+    // Finalize any in-progress demo recording so the manifest + last segment close.
+    try {
+      if (demoRecorder && demoRecorder.isRecording()) await demoRecorder.stop();
+    } catch (e) {
+      console.error('Error stopping demo recording:', e.message);
     }
-  } catch (e) {
-    console.error('Error stopping project servers:', e);
-  }
 
-  // Kill the hub server
-  if (hubProcess && !hubProcess.killed) {
-    hubProcess.kill('SIGTERM');
-  }
+    try {
+      const shared = require(/* turbopackIgnore: true */ '@build-studio/shared');
+      const { autostart, processManager } = shared;
+      const projects = shared.registry.list();
+      const isRunning = (p) => {
+        const info = processManager.readPidFile(p.name);
+        return !!(info && info.pid && processManager.isProcessAlive(info.pid));
+      };
+      // Record the session first (synchronous), so the next launch restores it
+      // even if a stop below is slow.
+      autostart.writeLastSession(projects.filter(isRunning).map((p) => p.name));
+      // Stop the idle ones. A project with an active workflow keeps its server:
+      // its agents run on in tmux and report to it while the app is closed.
+      for (const name of autostart.projectsToStopAtQuit(projects, { isRunning })) {
+        try {
+          await processManager.stopProject(name);
+          console.log(`Stopped project server: ${name}`);
+        } catch {}
+      }
+    } catch (e) {
+      console.error('Error stopping project servers:', e);
+    }
+
+    // Kill the hub server
+    if (hubProcess && !hubProcess.killed) {
+      hubProcess.kill('SIGTERM');
+    }
+  };
+
+  Promise.race([cleanup(), new Promise((r) => setTimeout(r, QUIT_CLEANUP_TIMEOUT_MS))])
+    .finally(() => app.quit());
 });

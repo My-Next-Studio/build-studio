@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { WORKFLOW_TYPE_TO_FUNCTION, FUNCTION_SHORT_LABELS } from '@/lib/functions'
 import { DemoRecordingControl } from '@/components/demo-recording-control'
+import { TabScroller } from '@/components/tab-scroller'
 
 interface WorkflowInfo {
   id: string
@@ -79,7 +80,9 @@ export function GlobalStatusBar() {
         display: 'flex',
         alignItems: 'center',
         gap: 6,
-        padding: '0 16px 0 80px',
+        // 12px, not 80: the traffic lights sit in the header row above, which
+        // keeps its own 80px. Here it only pushed home away from the edge.
+        padding: '0 16px 0 12px',
         height: 34,
         borderBottom: '1px solid var(--border-subtle)',
         background: 'var(--bg)',
@@ -107,16 +110,20 @@ export function GlobalStatusBar() {
               fontSize: 10,
               cursor: 'pointer',
               transition: 'all 0.15s',
+              // A full row squeezed it until "← home" wrapped onto two lines.
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
             }}
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface3)'; e.currentTarget.style.color = 'var(--text)' }}
             onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface2)'; e.currentTarget.style.color = 'var(--text-dim)' }}
           >
             ← home
           </button>
-          <span style={{ width: 1, height: 14, background: 'var(--border-subtle)', margin: '0 4px' }} />
+          <span style={{ width: 1, height: 14, background: 'var(--border-subtle)', margin: '0 4px', flexShrink: 0 }} />
         </>
       )}
 
+      <TabScroller activeKey={currentProject}>
       {statuses.map(s => {
         const isCurrent = s.name === currentProject
         const wf = s.workflow
@@ -129,9 +136,11 @@ export function GlobalStatusBar() {
         return (
           <button
             key={s.name}
+            data-tab={s.name}
             onClick={() => router.push(`/projects/${s.name}`)}
             className="app-no-drag"
             style={{
+              flexShrink: 0,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
@@ -204,9 +213,11 @@ export function GlobalStatusBar() {
           </button>
         )
       })}
+      </TabScroller>
 
-      {/* Right-aligned: Demo Recording control (Electron only; self-hides otherwise) */}
-      <div style={{ flex: 1 }} />
+      {/* Right-aligned: Demo Recording control (Electron only; self-hides
+          otherwise). The scroller takes the remaining width, so this stays put
+          however many tabs there are. */}
       <DemoRecordingControl
         projectName={currentProject}
         port={statuses.find(s => s.name === currentProject)?.port ?? null}

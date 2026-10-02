@@ -107,6 +107,10 @@ body {
 
 .app-drag { -webkit-app-region: drag; }
 .app-no-drag { -webkit-app-region: no-drag; }
+/* The project tab row scrolls with arrows, wheel and trackpad; a scrollbar in
+   a 34px bar would only crowd it. */
+.tab-scroller { scrollbar-width: none; }
+.tab-scroller::-webkit-scrollbar { display: none; }
 
 /* ── Status Pills ──────────────────────────── */
 

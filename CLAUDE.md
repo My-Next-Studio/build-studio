@@ -60,6 +60,22 @@ Then restart the Electron app. The full inject (without `--sync-only`):
 
 Same as hub changes — the full inject also syncs project-server.
 
+### Desktop main-process changes (`packages/desktop/main.js`)
+
+**Inject does not reach these.** `main.js` and the copy of
+`@build-studio/shared` it loads are packed into `app.asar`, which inject never
+touches. Changes there need a full repackage and reinstall, with the app quit:
+
+```bash
+cd packages/desktop && npm run build        # next build + electron-builder + inject
+# quit the app first, then:
+rm -rf "/Applications/Build Studio.app"
+cp -R "dist/mac-arm64/Build Studio.app" /Applications/
+```
+
+A `main.js` change shipped with inject alone silently does nothing: one CI
+notification feature sat unshipped for two months that way.
+
 ### Dev mode (no Electron)
 
 ```bash

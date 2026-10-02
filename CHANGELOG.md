@@ -21,6 +21,58 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-02 — Project tabs scroll; idle projects stay off
+
+### Added
+
+- **The project tab row scrolls when it doesn't fit.** With many projects, the
+  last tabs used to run off the window, out of reach. A ‹ or › arrow now
+  appears on whichever side has hidden tabs, and only then. It updates as the
+  window resizes or a tab changes width (for example when a run's status
+  appears on it). The mouse wheel and trackpad scroll the row too, the cut-off
+  edge fades out, and switching project scrolls its tab into view.
+
+### Changed
+
+- **Only some projects start with the app.** Every registered project used to
+  start at launch, including ones untouched for weeks. Each runs as its own
+  process, about 50–65 MB of memory with its own background timers. Now a
+  project starts at launch only if it has a workflow under way or was running
+  when you last quit. Opening any other project's tab starts it. On the first
+  launch after updating, only projects with a workflow under way start.
+- **Quitting the app stops idle projects but keeps runs going.** A project with
+  a workflow under way keeps its server running after you quit, so the run
+  carries on and its agents can still report back. Before this, quitting
+  *tried* to stop every project server, but the app exited before the stops
+  finished, so most of them kept running anyway.
+- **The home button moved to the left edge** and no longer wraps onto two
+  lines when the row is full.
+
+### Upgrade steps
+
+**In Build Studio**: this changes the desktop app itself (`main.js`), which
+the usual inject does not update. Rebuild and repackage the app, then replace
+the installed one while it is quit:
+
+```bash
+cd packages/desktop && npm run build
+# quit Build Studio, then:
+rm -rf "/Applications/Build Studio.app"
+cp -R "dist/mac-arm64/Build Studio.app" /Applications/
+```
+
+**In each managed project**: nothing to do.
+
+### Notes for forks
+
+- `inject-resources.js` never updates `app.asar`. Changes to
+  `packages/desktop/main.js`, or to anything it loads from
+  `@build-studio/shared` (it uses the copy packed into `app.asar`), only reach
+  an installed app through `npm run build` and a reinstall. Inject alone leaves
+  the old main process running and doesn't tell you.
+
+---
+
 ## 2026-10-02 — Onboarding interviews you too, and brings its skills along
 
 ### Changed

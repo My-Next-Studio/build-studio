@@ -5,5 +5,6 @@ const paths = require('./paths');
 const usageCollectors = require('./usage-collectors');
 const opencodeCatalog = require('./opencode-catalog');
 const demoRecordings = require('./demo-recordings');
+const autostart = require('./autostart');
 
-module.exports = { registry, processManager, constants, paths, usageCollectors, opencodeCatalog, demoRecordings };
+module.exports = { registry, processManager, constants, paths, usageCollectors, opencodeCatalog, demoRecordings, autostart };
