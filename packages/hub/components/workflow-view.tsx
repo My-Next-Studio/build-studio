@@ -1676,14 +1676,26 @@ function StepDetail({
           <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--mono)', marginBottom: 8 }}>
             Do it, or defer it on the record (and track it in the backlog). Then continue, with a note saying which: it is logged with the run.
           </div>
-          <button
-            onClick={() => {
-              const reason = notes.trim()
-              if (!reason) { alert('Add a note first: what you did, or where it is deferred to.'); return }
-              onAdvance('approve', { override: true, overrideReason: reason })
+          {/* The note box lives HERE, not only in the step's general notes box
+              further down, which is labelled optional and sits below the agent
+              cards: the owner could not find where the required note went. Same
+              state, so the two stay in sync. */}
+          <textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Required: what you did, or where it is deferred to (e.g. a backlog item id)"
+            style={{
+              width: '100%', minHeight: 50, resize: 'vertical', marginBottom: 8,
+              background: 'var(--surface2)', border: '1px solid var(--border)',
+              borderRadius: 4, color: 'var(--text)', fontFamily: 'var(--mono)',
+              fontSize: 12, padding: '8px 10px', outline: 'none',
             }}
+          />
+          <button
+            onClick={() => onAdvance('approve', { override: true, overrideReason: notes.trim() })}
+            disabled={!notes.trim()}
             className="wf-btn primary"
-            title="Records your note as the reason and continues past the fix plan"
+            title={notes.trim() ? 'Records your note as the reason and continues past the fix plan' : 'Write a note above first'}
           >
             Done or deferred — continue →
           </button>

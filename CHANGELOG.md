@@ -21,6 +21,28 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-02 — The "waiting on you" panel has its own note box
+
+### Fixed
+
+- **"Done or deferred — continue" asked for a note but gave you nowhere to
+  write it.** When a fix plan stops on something only you can do, its panel
+  needs a note saying what you did or where the item is deferred to. The
+  button read that note from the step's general notes box. That box sits
+  further down the page and is labelled "optional", so clicking the button
+  only showed a popup: "Add a note first". The panel now has its own note box
+  (it shares its text with the general box), and the button stays disabled
+  until there is a note.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project**: nothing to do.
+
+---
+
 ## 2026-10-02 — Drafting continues its conversation on Codex and OpenCode too
 
 ### Changed
