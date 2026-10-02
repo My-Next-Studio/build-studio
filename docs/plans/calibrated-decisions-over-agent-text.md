@@ -239,4 +239,27 @@ $0.00002 each. Three cases are a smoke test, not a calibration result.
 ### Open
 
 - The other six decision points.
+- **Candidate decision point: support triage verdict** (owner request
+  2026-10-01, to take up only if the gate trial looks promising). Triage is an
+  agent that investigates a report read-only and writes a proposal: a verdict
+  (`invalid`, `duplicate`, `bug`, `bug_prd_scale`, `feature`, `task`), a
+  severity, and the item's text. The model cannot replace that. It does not
+  generate text or read the repo. But the verdict at the end is a Choice and
+  the severity a two-level Choice, asked of the report plus the agent's
+  findings as state.
+
+  Two reasons it is worth doing:
+  - **It has ground truth.** Every proposal ends in an owner decision (filed,
+    rejected, dismissed as duplicate), so calibration is measured against real
+    judgments, with no hand labelling. No other decision point has that.
+  - **It has the one triage outcome that acts unattended.** A `bug` verdict
+    files itself without approval. If calibration holds, a confident agreement
+    could keep that, and anything less could wait for the owner. That is
+    increment 4's confidence-gated routing on a decision that matters.
+
+  Kept out: duplicate detection by sending the backlog as state. A long
+  backlog is mostly irrelevant state for any one report, which is a documented
+  accuracy cost, and it runs into the 32k state limit. The agent's search on
+  symptom stays. Start in shadow mode: log the model's verdict beside the
+  agent's and the owner's eventual decision.
 - Increment 3 (calibration against known outcomes) once the log has enough cases.
