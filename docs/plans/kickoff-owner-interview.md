@@ -192,10 +192,19 @@ All four increments are built.
 - **`draft_prd`** asks the questions deferred from the kickoff, which are written
   into the backlog item as `Open question from kickoff … → owner`.
 
-### Found while building, left alone
+### Found while building, then fixed (2026-10-02)
 
-The `api-only`, `static-site` and `fast-track` presets list no owner step, but
-the kickoff handler sent them to `owner_consultations` regardless, a gate the
-timeline then does not show, because it follows the preset's sequence. The
-interview change keeps that routing exactly as it was rather than change those
-presets' behaviour as a side effect.
+- **The kickoff ignored its preset's sequence.** It always started at
+  `ceo_synthesis` and walked one fixed chain, so `fast-track` ran CEO synthesis,
+  an owner gate and companion specs that its preset explicitly leaves out, and
+  `api-only` / `static-site` went through an owner gate their timeline did not
+  show. The kickoff now starts at its sequence's first step and moves to the
+  next listed step on every approve. A step the sequence does not list (a
+  custom config) falls back to the old chain, so such configs are unchanged.
+- **`stepSequence()` returned the execution sequence for a kickoff**, so the
+  first version of this step's routing could never reach the interview. Found
+  before it shipped; covered now by tests that walk each preset's kickoff.
+- **Owner decision:** `api-only` and `static-site` get the interview. Both run
+  CEO synthesis and scoping, so their agents make the same assumptions the
+  interview exists to catch. `fast-track` stays without an owner step, as its
+  preset says.

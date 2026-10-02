@@ -104,7 +104,7 @@ const PRESETS = {
       ],
     },
     workflow: {
-      kickoff: ['ceo_synthesis', 'pm_scoping', 'team_review', 'pm_revision', 'devops_init'],
+      kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_interview', 'team_review', 'pm_revision', 'devops_init'],
       review: ['pm_draft', 'reviewing', 'pm_fix', 'companion_specs'],
       // PRD-001 v1: onboarding workflow for existing projects. Mirrors kickoff
       // but reads existing files instead of docs/inputs/. Owner sign-off
@@ -212,7 +212,7 @@ const PRESETS = {
       ],
     },
     workflow: {
-      kickoff: ['ceo_synthesis', 'pm_scoping', 'team_review', 'pm_revision', 'devops_init'],
+      kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_interview', 'team_review', 'pm_revision', 'devops_init'],
       review: ['pm_draft', 'reviewing', 'pm_fix', 'companion_specs'],
       // PRD-001 v1: onboarding workflow for existing projects. Mirrors kickoff
       // but reads existing files instead of docs/inputs/. Owner sign-off

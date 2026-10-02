@@ -21,6 +21,32 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-02 — The kickoff follows its preset
+
+### Fixed
+
+- **The kickoff ran the same steps whatever your preset said.** It always
+  started with CEO synthesis and went through a fixed chain. So `fast-track`
+  ran CEO synthesis, an owner gate and companion specs, all of which its
+  preset leaves out. `api-only` and `static-site` stopped at an owner gate
+  their timeline didn't show, so the kickoff looked stuck with nothing to
+  click. The kickoff now starts at the first step its preset lists and runs
+  exactly those steps, in order. If your project's config defines its own
+  kickoff sequence, a step missing from it still goes where it always did.
+
+### Changed
+
+- **`api-only` and `static-site` kickoffs now include the owner interview**,
+  between scoping and the team review. `fast-track` still has no owner step.
+
+### Upgrade steps
+
+**In Build Studio**: sync the project-server into the app and restart it.
+
+**In each managed project**: nothing to do.
+
+---
+
 ## 2026-10-02 — The kickoff interviews you
 
 ### Changed

@@ -227,7 +227,22 @@ function bugfixSequence(config) {
 // bugfix run advances by ITS dict order, not the (longer) execution order.
 function stepSequence(wf, config) {
   if (wf && wf.type === 'bugfix') return bugfixSequence(config);
+  // Without this a kickoff was looked up in the EXECUTION sequence, where none
+  // of its steps exist: every lookup returned null, so the kickoff's routing by
+  // sequence silently fell back to its defaults.
+  if (wf && wf.type === 'kickoff') return (config && config.workflow && config.workflow.kickoff) || [];
   return (config && config.workflow && config.workflow.execution) || [];
+}
+
+/**
+ * The kickoff step after `current`: the next one in `seq`, 'completed' after
+ * the last, or `fallback` when `seq` does not list `current` (a custom config,
+ * which keeps the old fixed chain).
+ */
+function kickoffNextStep(seq, current, fallback) {
+  const i = (seq || []).indexOf(current);
+  if (i === -1) return fallback;
+  return i < seq.length - 1 ? seq[i + 1] : 'completed';
 }
 
 // The step that follows `current` in a workflow's active sequence, or null at the end.
@@ -3516,7 +3531,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         companion_specs: { status: 'pending', agents: [] },
         devops_init: { status: 'pending', agents: [] },
       };
-      currentStep = 'ceo_synthesis';
+      // The first step of this project's kickoff sequence: fast-track has no
+      // CEO synthesis and starts at scoping. Only a step the kickoff handler
+      // knows is accepted, so a malformed sequence still starts somewhere real.
+      const kickoffSeq = (config.workflow && config.workflow.kickoff) || [];
+      currentStep = kickoffSeq.length && steps[kickoffSeq[0]] ? kickoffSeq[0] : 'ceo_synthesis';
     } else if (type === 'onboarding') {
       // PRD-001 v1: only available when docs/onboarding/inventory.json exists
       // (the button has run) AND docs/vision.md does not (workflow hasn't completed yet).
@@ -5681,6 +5700,29 @@ Fix only the issues raised. Commit your changes.`,
   function handleKickoffAdvance(wf, action, notes, res) {
     const { findRole } = require('../config');
 
+    // The kickoff follows the project's kickoff sequence. It used to walk one
+    // fixed chain (ceo → scoping → owner → review → revision → specs → devops)
+    // whatever the preset said, so fast-track ran CEO synthesis and companion
+    // specs its preset explicitly leaves out, and api-only / static-site went
+    // through an owner gate their timeline did not show.
+    //
+    // `fallback` is the old chain's next step, used only when the sequence does
+    // not list `current` (a custom config), so such configs behave as before.
+    const kickoffNext = (current, fallback) => kickoffNextStep(stepSequence(wf, config), current, fallback);
+    const advanceKickoff = (current, fallback) => {
+      const next = kickoffNext(current, fallback);
+      if (next === 'completed') {
+        wf.currentStep = 'completed';
+        writeWorklog(wf);
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf, completed: true });
+      }
+      wf.currentStep = next;
+      wf.steps[next] = { ...(wf.steps[next] || {}), status: 'pending', agents: [] };
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf, needsAdvance: true });
+    };
+
     if (wf.currentStep === 'ceo_synthesis' && wf.steps.ceo_synthesis.status === 'pending') {
       const ceoRole = findRole(config, 'CEO');
       const skill = ceoRole ? ceoRole.skill : 'ceo';
@@ -5695,9 +5737,7 @@ Fix only the issues raised. Commit your changes.`,
 
     if (wf.currentStep === 'ceo_synthesis' && action === 'approve') {
       wf.steps.ceo_synthesis.status = 'completed';
-      wf.currentStep = 'pm_scoping';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceKickoff('ceo_synthesis', 'pm_scoping');
     }
 
     if (wf.currentStep === 'pm_scoping' && wf.steps.pm_scoping.status === 'pending') {
@@ -5714,16 +5754,10 @@ Fix only the issues raised. Commit your changes.`,
 
     if (wf.currentStep === 'pm_scoping' && action === 'approve') {
       wf.steps.pm_scoping.status = 'completed';
-      // The interview replaced the free-text consultation gate in the presets
-      // that had one. Anything else keeps exactly the old routing: a custom
-      // sequence still naming owner_consultations, and presets that name no
-      // owner step (which always went to owner_consultations regardless).
-      const ownerStep = nextStepInSequence(wf, config, 'pm_scoping') === kickoffInterview.STEP
-        ? kickoffInterview.STEP : 'owner_consultations';
-      wf.currentStep = ownerStep;
-      if (!wf.steps[ownerStep]) wf.steps[ownerStep] = { status: 'pending', agents: [] };
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      // Whatever the sequence names next: the interview in the presets, the old
+      // consultation gate in a custom sequence that still lists it, or no owner
+      // step at all (fast-track goes straight to devops_init).
+      return advanceKickoff('pm_scoping', 'owner_consultations');
     }
 
     // owner_interview — the PM interviews the owner in an interactive session
@@ -5758,9 +5792,7 @@ Fix only the issues raised. Commit your changes.`,
         }
         const advance = () => {
           step.status = action === 'skip' ? 'skipped' : 'completed';
-          wf.currentStep = 'team_review';
-          state.saveWorkflow(wf);
-          return res.json({ workflow: wf, needsAdvance: true });
+          return advanceKickoff(kickoffInterview.STEP, 'team_review');
         };
         if (action === 'skip') return advance();
         if (fs.existsSync(path.join(projectRoot, kickoffInterview.SUMMARY_PATH))) step.notesPath = kickoffInterview.SUMMARY_PATH;
@@ -5801,9 +5833,7 @@ Fix only the issues raised. Commit your changes.`,
         }
       }
       wf.steps.owner_consultations.status = 'completed';
-      wf.currentStep = 'team_review';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceKickoff('owner_consultations', 'team_review');
     }
 
     if (wf.currentStep === 'team_review' && (wf.steps.team_review.status === 'pending' || action === 'rerun_team_review')) {
@@ -5839,9 +5869,7 @@ Fix only the issues raised. Commit your changes.`,
 
     if (wf.currentStep === 'team_review' && action === 'approve') {
       wf.steps.team_review.status = 'completed';
-      wf.currentStep = 'pm_revision';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceKickoff('team_review', 'pm_revision');
     }
 
     if (wf.currentStep === 'pm_revision' && wf.steps.pm_revision.status === 'pending') {
@@ -5867,10 +5895,7 @@ Fix only the issues raised. Commit your changes.`,
     // User gate — advance to companion specs
     if (wf.currentStep === 'pm_revision' && action === 'approve') {
       wf.steps.pm_revision.status = 'completed';
-      wf.currentStep = 'companion_specs';
-      wf.steps.companion_specs = { status: 'pending', agents: [] };
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceKickoff('pm_revision', 'companion_specs');
     }
 
     // --- Companion specs step ---
@@ -5903,9 +5928,7 @@ Fix only the issues raised. Commit your changes.`,
       }
       if (agents.length === 0) {
         wf.steps.companion_specs.status = 'skipped';
-        wf.currentStep = 'devops_init';
-        state.saveWorkflow(wf);
-        return res.json({ workflow: wf, needsAdvance: true });
+        return advanceKickoff('companion_specs', 'devops_init');
       }
       wf.steps.companion_specs = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
       state.saveWorkflow(wf);
@@ -5914,9 +5937,7 @@ Fix only the issues raised. Commit your changes.`,
 
     if (wf.currentStep === 'companion_specs' && action === 'approve') {
       wf.steps.companion_specs.status = 'completed';
-      wf.currentStep = 'devops_init';
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      return advanceKickoff('companion_specs', 'devops_init');
     }
 
     // --- DevOps Init step ---
@@ -10269,6 +10290,7 @@ module.exports = {
   bugfixSequence,
   stepSequence,
   nextStepInSequence,
+  kickoffNextStep,
   validateBugfixStart,
   resolveBuilderRole,
   validateBuilderRole,

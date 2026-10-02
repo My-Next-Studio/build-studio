@@ -28,12 +28,59 @@ test('the presets that had an owner gate now interview; none keeps the old gate'
   }
 });
 
-test('scoping hands over to the interview only when the sequence names it', () => {
-  const r = region("if (wf.currentStep === 'pm_scoping' && action === 'approve') {", '// owner_interview —');
-  assert.match(r, /nextStepInSequence\(wf, config, 'pm_scoping'\) === kickoffInterview\.STEP/);
-  // Everything else keeps the old routing, so a run parked on the old gate and
-  // a custom sequence still work.
-  assert.match(r, /: 'owner_consultations';/);
+// The fallbacks handleKickoffAdvance passes: the old fixed chain, used only for
+// a step the sequence does not list.
+const OLD_CHAIN = {
+  ceo_synthesis: 'pm_scoping', pm_scoping: 'owner_consultations', owner_interview: 'team_review',
+  owner_consultations: 'team_review', team_review: 'pm_revision', pm_revision: 'companion_specs',
+  companion_specs: 'devops_init', devops_init: 'completed',
+};
+
+/** Walk a kickoff from its first step to the end, the way the handler routes it. */
+function walk(seq) {
+  const { kickoffNextStep } = require('./workflow');
+  const visited = [];
+  let step = seq.length ? seq[0] : 'ceo_synthesis';
+  for (let guard = 0; step !== 'completed' && guard < 20; guard++) {
+    visited.push(step);
+    step = kickoffNextStep(seq, step, OLD_CHAIN[step]);
+  }
+  return visited;
+}
+
+test('every preset\'s kickoff runs exactly the steps its sequence lists, in order', () => {
+  for (const [name, p] of Object.entries(PRESETS)) {
+    assert.deepEqual(walk(p.workflow.kickoff), p.workflow.kickoff, name);
+  }
+});
+
+test('fast-track runs no CEO synthesis, owner step or companion specs', () => {
+  assert.deepEqual(walk(PRESETS['fast-track'].workflow.kickoff), ['pm_scoping', 'devops_init']);
+});
+
+test('api-only and static-site interview the owner and skip companion specs', () => {
+  for (const name of ['api-only', 'static-site']) {
+    const steps = walk(PRESETS[name].workflow.kickoff);
+    assert.ok(steps.includes('owner_interview'), name);
+    assert.ok(!steps.includes('companion_specs'), name);
+    assert.ok(!steps.includes('owner_consultations'), name);
+  }
+});
+
+test('a custom sequence that still names owner_consultations keeps the old gate', () => {
+  const custom = ['ceo_synthesis', 'pm_scoping', 'owner_consultations', 'team_review', 'pm_revision', 'companion_specs', 'devops_init'];
+  assert.deepEqual(walk(custom), custom);
+});
+
+test('a step outside the sequence falls back to the old chain', () => {
+  const { kickoffNextStep } = require('./workflow');
+  // A run parked on owner_consultations in a project whose sequence now lists
+  // owner_interview still moves on to the review.
+  assert.equal(kickoffNextStep(PRESETS['web-app'].workflow.kickoff, 'owner_consultations', 'team_review'), 'team_review');
+});
+
+test('the kickoff starts at the first step of its sequence', () => {
+  assert.match(SRC, /currentStep = kickoffSeq\.length && steps\[kickoffSeq\[0\]\] \? kickoffSeq\[0\] : 'ceo_synthesis';/);
 });
 
 test('the old consultation gate still works for runs that reach it', () => {
@@ -47,7 +94,7 @@ test('Finish commits the interview BEFORE moving on; Skip does not commit', () =
   const commit = fin.indexOf('scopedCommit(projectRoot, paths,');
   assert.ok(commit > 0, 'Finish commits');
   assert.ok(fin.indexOf('.then(advance)') > commit, 'and advances only after the commit settles');
-  assert.match(fin, /wf\.currentStep = 'team_review'/);
+  assert.match(fin, /return advanceKickoff\(kickoffInterview\.STEP, 'team_review'\);/, 'moves on by the kickoff sequence');
   // An unknown action is refused, not silently treated as one of these.
   assert.match(r, /owner_interview: unknown action/);
 });
@@ -61,4 +108,21 @@ test('auto-advance never acts on the interview, server or client', () => {
 test('review and revision read the interview summary, and still the old notes', () => {
   const uses = SRC.split("(wf.steps.owner_interview && wf.steps.owner_interview.notesPath) || (wf.steps.owner_consultations && wf.steps.owner_consultations.notesPath)").length - 1;
   assert.equal(uses, 2, 'team_review and pm_revision');
+});
+
+// The source-text test above passed while the routing was broken: stepSequence
+// returned the EXECUTION sequence for a kickoff, so the lookup was always null
+// and every kickoff went to owner_consultations. This one runs the lookup.
+test('a kickoff\'s next step is looked up in the KICKOFF sequence', () => {
+  const { nextStepInSequence, stepSequence } = require('./workflow');
+  for (const [name, p] of Object.entries(PRESETS)) {
+    const config = { workflow: p.workflow };
+    const wf = { type: 'kickoff' };
+    assert.deepEqual(stepSequence(wf, config), p.workflow.kickoff, `${name}: kickoff sequence`);
+    const seq = p.workflow.kickoff;
+    const i = seq.indexOf('pm_scoping');
+    if (i >= 0 && i < seq.length - 1) assert.equal(nextStepInSequence(wf, config, 'pm_scoping'), seq[i + 1], name);
+  }
+  const webApp = { workflow: PRESETS['web-app'].workflow };
+  assert.equal(nextStepInSequence({ type: 'kickoff' }, webApp, 'pm_scoping'), 'owner_interview');
 });
