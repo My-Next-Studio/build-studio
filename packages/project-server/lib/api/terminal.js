@@ -29,6 +29,13 @@ function resolveAgentTarget(state, roleOrWindow, draftStatePath = null) {
       }
     }
     if (agent && agent.window) return { sessionName: wf.sessionName, window: agent.window };
+    // The kickoff interview is a session on its step, not a workflow agent, in
+    // its own tmux session (lib/kickoff-interview.js), so the agent search above
+    // cannot see it.
+    const interview = wf.steps?.owner_interview?.session;
+    if (interview && interview.window === roleOrWindow && interview.sessionName) {
+      return { sessionName: interview.sessionName, window: interview.window };
+    }
   }
   const run = typeof state.loadRun === 'function' ? state.loadRun() : null;
   if (run) {

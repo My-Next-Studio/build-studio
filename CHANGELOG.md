@@ -21,6 +21,58 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-02 — The kickoff interviews you
+
+### Changed
+
+- **The kickoff's owner step is now an interview.** On the `web-app`,
+  `mobile-app` and `solo` presets, the "Owner Consultations" gate used to be a
+  free-text box. You had to read everything the CEO and PM wrote and spot what
+  they had assumed. It is replaced by **Owner Interview**: a live PM session on
+  the Workflow tab that asks you about the decisions that shape the whole
+  product, one at a time, with options and a recommendation. These cover who
+  the product is for, pricing, platforms, what the first release must contain,
+  hard constraints and how success is measured. Questions about a single story
+  are written into that backlog item, and you're asked them when you draft it.
+  Answers go into the Key Decisions Log, `docs/vision.md` and
+  `docs/inputs/kickoff-interview.md`, which the review and revision steps read.
+
+  The card has **Start / Resume interview**, **End session** (stops the agent
+  and keeps the conversation), **Finish interview** (commits what the
+  interview wrote, then continues) and **Skip interview**. Auto-advance never
+  acts on it and nothing times out, so an interview can span days.
+
+  A kickoff already waiting at Owner Consultations keeps the old gate. So does
+  a project whose own config still lists `owner_consultations`.
+
+### Added
+
+- **The `kickoff_interview` skill**, in the project template. It can also be
+  run by hand.
+- **`draft_prd` now asks questions deferred from the kickoff.** It reads them
+  from the backlog item.
+
+### Notes for forks
+
+- The interview is deliberately not a workflow agent. Its session lives on the
+  step (`step.session`), not in `step.agents`, so the agent watchdogs don't
+  treat a person thinking as a stalled agent. Keep it out of `step.agents`.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project**: nothing to do. A kickoff runs once, in new
+projects, and those get the new skill from the template. To run
+`/kickoff_interview` by hand in an existing project, copy the skill first:
+
+```bash
+cp -R <build-studio>/templates/default/.claude/skills/kickoff_interview .claude/skills/
+```
+
+---
+
 ## 2026-10-02 — The "waiting on you" panel has its own note box
 
 ### Fixed

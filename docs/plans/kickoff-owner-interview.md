@@ -1,6 +1,7 @@
 # Plan: the kickoff interviews the owner
 
-> **Status: proposed 2026-09-30.**
+> **Status: implemented 2026-10-02** (proposed 2026-09-30). All four
+> increments. See *Where this stands* at the end.
 >
 > Owner request: a new project has many open questions, and the PM should
 > interview the owner about them during kickoff, the way the Draft button
@@ -143,14 +144,14 @@ the step works before the card is polished.
   yet" is recorded as an open question, not filled in.
 - A cross-project interview. Each project's kickoff is its own.
 
-## Open decisions
+## Decisions taken (2026-10-02)
 
-1. **Who asks.** The PM runs the interview. CEO-level questions (business
-   model, positioning) are asked by the same session with the vision open,
-   rather than handing the owner between two agents. This could change if a
-   split proves clearer.
-2. **Re-running.** Whether a later "re-kickoff" (a new phase, a pivot) reuses
-   this step. It probably should, but that is a separate workflow question.
+1. **Who asks: the PM, in one session.** CEO-level questions (business model,
+   positioning) are asked by the same session with the vision open, rather
+   than handing the owner between two agents.
+2. **Re-running: kickoff only, for now.** A re-kickoff (a new phase, a pivot)
+   is a separate workflow question and gets its own plan when needed. The
+   skill can be run by hand in any session meanwhile.
 
 ## Verification
 
@@ -164,3 +165,37 @@ the step works before the card is polished.
   `docs/inputs/kickoff-interview.md`.
 - Ending the session and reopening the step resumes the same conversation.
 - Skip and Finish both advance the kickoff. Auto-advance never does.
+
+## Where this stands (2026-10-02)
+
+All four increments are built.
+
+- **The skill:** `templates/default/.claude/skills/kickoff_interview/`.
+  Kickoff runs once, in new projects, which get the template's skills at
+  onboarding, so no copy is distributed to existing projects.
+- **The step:** `owner_interview` replaces `owner_consultations` in the presets
+  that had it (`web-app`, `mobile-app`, `solo`). Routing is by sequence: scoping
+  hands over to the interview only when the project's kickoff sequence names
+  it. Everything else keeps the old routing, including a run already parked on
+  the old gate and a custom sequence that still names it.
+- **Not a workflow agent.** The session is stored on the step
+  (`step.session`), in its own tmux session, outside `step.agents`. Otherwise the
+  watchdogs (dead process, stuck, finished but not reported) would treat a person
+  thinking for an hour as a stalled agent. The launcher is drafting's, so
+  resume works on all three CLIs; Codex and OpenCode ids are read back by the
+  interview prompt's marker phrase.
+- **Finish commits** the interview summary, `project-state.md`, `vision.md` and
+  the backlog, before `team_review` starts, so the reviewers see the answers.
+  Skip commits nothing. Auto-advance never acts on the step, server or client.
+- **The card:** Start / Resume, End session, Finish, Skip, and the embedded
+  terminal with minimise.
+- **`draft_prd`** asks the questions deferred from the kickoff, which are written
+  into the backlog item as `Open question from kickoff … → owner`.
+
+### Found while building, left alone
+
+The `api-only`, `static-site` and `fast-track` presets list no owner step, but
+the kickoff handler sent them to `owner_consultations` regardless, a gate the
+timeline then does not show, because it follows the preset's sequence. The
+interview change keeps that routing exactly as it was rather than change those
+presets' behaviour as a side effect.

@@ -20,6 +20,8 @@ const exitRecovery = require('../exit-recovery');
 const agentSkills = require('../agent-skills');
 const gateBlocked = require('../gate-blocked');
 const decisionPoints = require('../decision-points');
+const kickoffInterview = require('../kickoff-interview');
+const { scopedCommit } = require('../scoped-commit');
 const qaSuite = require('../qa-suite-run');
 const { reconcilePrdPath } = require('../prd-path');
 const { resolveScreenshotCommand, qaScreenshotInstructions, builderScreenshotInstructions } = require('../screenshot-tool');
@@ -3265,6 +3267,11 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       runRoles: require('../run-roles').runRoleSummary(wf),
       limitBlocked: limitBlocked.length ? limitBlocked : null,
       maxReviewRounds: config.max_review_rounds || DEFAULT_MAX_REVIEW_ROUNDS,
+      // The kickoff interview's session is not a workflow agent, so its
+      // liveness is reported here for the step card (lib/kickoff-interview.js).
+      interview: wf && wf.currentStep === kickoffInterview.STEP
+        ? kickoffInterview.interviewLive(wf.steps[kickoffInterview.STEP] && wf.steps[kickoffInterview.STEP].session, tmuxOps)
+        : null,
     });
   });
 
@@ -3500,6 +3507,9 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
       steps = {
         ceo_synthesis: { status: 'pending', agents: [] },
         pm_scoping: { status: 'pending', agents: [] },
+        // Both are created; the project's kickoff sequence decides which one
+        // pm_scoping hands over to (owner_interview in the shipped presets).
+        owner_interview: { status: 'pending', agents: [] },
         owner_consultations: { status: 'pending', agents: [] },
         team_review: { status: 'pending', agents: [] },
         pm_revision: { status: 'pending', agents: [] },
@@ -4600,7 +4610,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     // demo_review and device_testing need a human in front of the device
     // UNLESS the owner opted into Skip Demo Review (auto-advance then skips
     // demo_review with action=skip).
-    const alwaysManual = ['device_testing', 'owner_consultations'];
+    const alwaysManual = ['device_testing', 'owner_consultations', 'owner_interview'];
     if (!wf.autoAdvanceSkipDemoReview) alwaysManual.push('demo_review');
     if (alwaysManual.includes(wf.currentStep)) return;
 
@@ -5704,10 +5714,70 @@ Fix only the issues raised. Commit your changes.`,
 
     if (wf.currentStep === 'pm_scoping' && action === 'approve') {
       wf.steps.pm_scoping.status = 'completed';
-      wf.currentStep = 'owner_consultations';
-      if (!wf.steps.owner_consultations) wf.steps.owner_consultations = { status: 'pending', agents: [] };
+      // The interview replaced the free-text consultation gate in the presets
+      // that had one. Anything else keeps exactly the old routing: a custom
+      // sequence still naming owner_consultations, and presets that name no
+      // owner step (which always went to owner_consultations regardless).
+      const ownerStep = nextStepInSequence(wf, config, 'pm_scoping') === kickoffInterview.STEP
+        ? kickoffInterview.STEP : 'owner_consultations';
+      wf.currentStep = ownerStep;
+      if (!wf.steps[ownerStep]) wf.steps[ownerStep] = { status: 'pending', agents: [] };
       state.saveWorkflow(wf);
       return res.json({ workflow: wf, needsAdvance: true });
+    }
+
+    // owner_interview — the PM interviews the owner in an interactive session
+    // (lib/kickoff-interview.js). Waits for the owner: auto-advance never acts
+    // here and nothing times out, so an interview can span days.
+    //   launch       start the session, or resume it after End session
+    //   end_session  stop the agent, keep the conversation
+    //   approve      Finish interview: commit what it wrote, continue
+    //   skip         continue without an interview
+    if (wf.currentStep === kickoffInterview.STEP) {
+      const step = wf.steps[kickoffInterview.STEP] || (wf.steps[kickoffInterview.STEP] = { status: 'pending', agents: [] });
+      if (action === 'launch') {
+        const { agentRunning } = kickoffInterview.interviewLive(step.session, tmuxOps);
+        if (agentRunning) return res.json({ workflow: wf, alreadyRunning: true });
+        try {
+          step.session = kickoffInterview.launchInterview({ config, tmuxOps, prior: step.session || null });
+        } catch (e) {
+          return res.status(500).json({ error: `could not start the interview: ${e.message}` });
+        }
+        step.status = 'running';
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf });
+      }
+      if (action === 'end_session') {
+        step.session = kickoffInterview.endInterview({ session: step.session, config, tmuxOps });
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf });
+      }
+      if (action === 'approve' || action === 'skip') {
+        if (step.session && !step.session.endedAt) {
+          step.session = kickoffInterview.endInterview({ session: step.session, config, tmuxOps });
+        }
+        const advance = () => {
+          step.status = action === 'skip' ? 'skipped' : 'completed';
+          wf.currentStep = 'team_review';
+          state.saveWorkflow(wf);
+          return res.json({ workflow: wf, needsAdvance: true });
+        };
+        if (action === 'skip') return advance();
+        if (fs.existsSync(path.join(projectRoot, kickoffInterview.SUMMARY_PATH))) step.notesPath = kickoffInterview.SUMMARY_PATH;
+        const docsRel = config.docs_path || path.relative(projectRoot, docsPath) || 'docs';
+        const paths = kickoffInterview.interviewCommitPaths(projectRoot, docsRel);
+        if (!paths.length || !fs.existsSync(path.join(projectRoot, '.git'))) return advance();
+        // Committed BEFORE moving on: team_review agents must see the answers.
+        // A failed commit is recorded, not fatal: the files are on disk.
+        return scopedCommit(projectRoot, paths, 'docs(kickoff): record the owner interview')
+          .then((r) => {
+            step.commit = { committed: r.committed, sha: r.sha, reason: r.reason };
+            if (!r.committed) console.warn(`[workflow] kickoff interview not committed: ${r.reason}`);
+          })
+          .catch((e) => { step.commit = { committed: false, sha: null, reason: e.message }; })
+          .then(advance);
+      }
+      return res.status(400).json({ error: `owner_interview: unknown action "${action}". Use launch, end_session, approve or skip.` });
     }
 
     // owner_consultations — manual gate between pm_scoping and team_review.
@@ -5739,9 +5809,9 @@ Fix only the issues raised. Commit your changes.`,
     if (wf.currentStep === 'team_review' && (wf.steps.team_review.status === 'pending' || action === 'rerun_team_review')) {
       const reviewRoles = (config.roles.review || []);
       const mode = wf.reviewMode || config.review_mode || 'parallel';
-      const ownerNotesPath = wf.steps.owner_consultations && wf.steps.owner_consultations.notesPath;
+      const ownerNotesPath = (wf.steps.owner_interview && wf.steps.owner_interview.notesPath) || (wf.steps.owner_consultations && wf.steps.owner_consultations.notesPath);
       const ownerNotesHint = ownerNotesPath
-        ? `\n\nThe owner provided additional input during the owner_consultations step — read \`${ownerNotesPath}\` before reviewing and let it inform your feedback.`
+        ? `\n\nThe owner answered questions at kickoff (owner interview or consultation) — read \`${ownerNotesPath}\` before reviewing and let it inform your feedback.`
         : '';
       let launchedAgents;
       try {
@@ -5781,9 +5851,9 @@ Fix only the issues raised. Commit your changes.`,
         .join('\n\n');
       const pmRole = findRole(config, 'PM');
       const skill = pmRole ? pmRole.skill : 'pm';
-      const ownerNotesPath = wf.steps.owner_consultations && wf.steps.owner_consultations.notesPath;
+      const ownerNotesPath = (wf.steps.owner_interview && wf.steps.owner_interview.notesPath) || (wf.steps.owner_consultations && wf.steps.owner_consultations.notesPath);
       const ownerNotesHint = ownerNotesPath
-        ? `\n\n## Owner Consultation Notes\nThe owner provided additional input during the owner_consultations step. Read \`${ownerNotesPath}\` and incorporate it into the revision.`
+        ? `\n\n## Owner Decisions from Kickoff\nThe owner answered questions at kickoff (owner interview or consultation). Read \`${ownerNotesPath}\` and incorporate it into the revision.`
         : '';
       const agents = [{
         role: 'PM', window: 'pm-rev', status: 'pending', reportFeedback: true,

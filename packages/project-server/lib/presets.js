@@ -48,7 +48,7 @@ const PRESETS = {
       ],
     },
     workflow: {
-      kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_consultations', 'team_review', 'pm_revision', 'companion_specs', 'devops_init'],
+      kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_interview', 'team_review', 'pm_revision', 'companion_specs', 'devops_init'],
       review: ['pm_draft', 'reviewing', 'pm_fix', 'companion_specs'],
       // PRD-001 v1: onboarding workflow for existing projects. Mirrors kickoff
       // but reads existing files instead of docs/inputs/. Owner sign-off
@@ -157,7 +157,7 @@ const PRESETS = {
       ],
     },
     workflow: {
-      kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_consultations', 'team_review', 'pm_revision', 'companion_specs', 'devops_init'],
+      kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_interview', 'team_review', 'pm_revision', 'companion_specs', 'devops_init'],
       review: ['pm_draft', 'reviewing', 'pm_fix', 'companion_specs'],
       // PRD-001 v1: onboarding workflow for existing projects. Mirrors kickoff
       // but reads existing files instead of docs/inputs/. Owner sign-off
@@ -306,7 +306,7 @@ const PRESETS = {
       ],
     },
     workflow: {
-      kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_consultations', 'team_review', 'pm_revision', 'companion_specs', 'devops_init'],
+      kickoff: ['ceo_synthesis', 'pm_scoping', 'owner_interview', 'team_review', 'pm_revision', 'companion_specs', 'devops_init'],
       review: ['pm_draft', 'reviewing', 'pm_fix', 'companion_specs'],
       onboarding: ['discovery', 'ceo_synthesis', 'architect_backfill', 'pm_synthesis', 'devops_detect', 'team_review', 'pm_revision', 'owner_signoff'],
       // Lean execution: independent TDD matrix (qa_tests) → monolithic build →

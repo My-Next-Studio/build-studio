@@ -65,10 +65,10 @@ function dayDirs(root, since, now) {
  * Codex: rollout files under ~/.codex/sessions/YYYY/MM/DD/. Their first line is
  * `session_meta` with the id, cwd and timestamp.
  */
-function findCodexSessionId({ projectRoot, since, itemId, home = os.homedir(), now = Date.now() }) {
+function findCodexSessionId({ projectRoot, since, itemId, marker: givenMarker, home = os.homedir(), now = Date.now() }) {
   const sinceMs = Date.parse(since);
-  if (!Number.isFinite(sinceMs) || !itemId) return null;
-  const marker = draftMarker(itemId);
+  const marker = givenMarker || (itemId ? draftMarker(itemId) : null);
+  if (!Number.isFinite(sinceMs) || !marker) return null;
   const candidates = [];
   for (const dir of dayDirs(path.join(home, '.codex', 'sessions'), sinceMs - SKEW_MS, now)) {
     let names;
@@ -95,16 +95,16 @@ function findCodexSessionId({ projectRoot, since, itemId, home = os.homedir(), n
  * OpenCode: `opencode session list --format json` gives id, directory and
  * created; `opencode export <id>` gives the messages to check the prompt in.
  */
-function findOpencodeSessionId({ projectRoot, since, itemId, exec = execFileSync }) {
+function findOpencodeSessionId({ projectRoot, since, itemId, marker: givenMarker, exec = execFileSync }) {
   const sinceMs = Date.parse(since);
-  if (!Number.isFinite(sinceMs) || !itemId) return null;
+  const marker = givenMarker || (itemId ? draftMarker(itemId) : null);
+  if (!Number.isFinite(sinceMs) || !marker) return null;
   const run = (args) => exec('opencode', args, { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
   let list;
   try { list = JSON.parse(run(['session', 'list', '--format', 'json', '-n', '30'])); } catch (_) { return null; }
   const candidates = (Array.isArray(list) ? list : [])
     .filter((s) => s && s.directory === projectRoot && Number(s.created) >= sinceMs - SKEW_MS)
     .sort((a, b) => Number(a.created) - Number(b.created));
-  const marker = draftMarker(itemId);
   for (const s of candidates) {
     let exported = '';
     try { exported = run(['export', s.id]); } catch (_) { continue; }

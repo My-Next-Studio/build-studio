@@ -11,6 +11,7 @@ import { AgentTerminal } from './agent-terminal'
 import { PathologyPanel, type PathologySignals } from './pathology-panel'
 import { FindingsChecklist, type Finding } from './findings-checklist'
 import { FindingsFiler } from './findings-filer'
+import { OwnerInterviewCard, type InterviewSession } from './owner-interview-card'
 import { OpenFindings, type FixPlanTask } from './open-findings'
 import { CompactUsageMeter } from './usage-panel'
 import { providersFromCliConfig, type UsageProvider } from '@/lib/cli-providers'
@@ -212,6 +213,7 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
   kickoff: [
     { key: 'ceo_synthesis', name: 'CEO Synthesis' },
     { key: 'pm_scoping', name: 'PM Scoping' },
+    { key: 'owner_interview', name: 'Owner Interview' },
     { key: 'owner_consultations', name: 'Owner Consultations' },
     { key: 'team_review', name: 'Team Review' },
     { key: 'pm_revision', name: 'PM Revision' },
@@ -266,6 +268,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // project-server/lib/needs-attention.js. One signal covering every halt
   // (dead step, blocked guardrail, human gate, round cap, finished-but-open).
   const [needsAttention, setNeedsAttention] = useState<NeedsAttention | null>(null)
+  const [interview, setInterview] = useState<{ live: boolean; agentRunning: boolean } | null>(null)
   const [recoverable, setRecoverable] = useState<RecoverableAgent[]>([])
   const [limitBlocked, setLimitBlocked] = useState<LimitBlockedAgent[]>([])
   const [recovering, setRecovering] = useState<string | null>(null)
@@ -384,6 +387,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     setWf(data.workflow || null)
     setPathologySignals(data.pathologySignals || null)
     setNeedsAttention(data.needsAttention || null)
+    setInterview(data.interview || null)
     setLimitBlocked(Array.isArray(data.limitBlocked) ? data.limitBlocked : [])
     // An agent can finish its work and end its turn without ever POSTing its
     // report — the workflow then waits on output that already exists in the
@@ -482,7 +486,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // owner_consultations: kickoff manual gate between pm_scoping and team_review.
     // demo_review is manual UNLESS Skip Demo Review is checked with Auto-advance.
     const skipDemo = !!(wf.autoAdvanceSkipDemoReview ?? skipDemoReviewLocal)
-    const alwaysManual = ['device_testing', 'owner_signoff', 'owner_consultations']
+    const alwaysManual = ['device_testing', 'owner_signoff', 'owner_consultations', 'owner_interview']
     if (!skipDemo) alwaysManual.push('demo_review')
     if (alwaysManual.includes(wf.currentStep)) return
     if (wf.type === 'onboarding' && wf.currentStep === 'team_review') return
@@ -1466,6 +1470,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
         ) : (
           <StepDetail
             wf={wf}
+            interview={interview}
             pathologySignals={pathologySignals}
             findings={findings.map(f => findingOverrides[f.id] ? { ...f, status: findingOverrides[f.id] } : f)}
             onFindingToggle={(id, next) => setFindingOverrides(prev => ({ ...prev, [id]: next }))}
@@ -1538,9 +1543,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
 }
 
 function StepDetail({
-  wf, pathologySignals, findings, onFindingToggle, activeKey, notes, setNotes, advancing, onAdvance, onFinish, onViewLog, onMarkDone,
+  wf, pathologySignals, findings, onFindingToggle, activeKey, notes, setNotes, advancing, onAdvance, onFinish, onViewLog, onMarkDone, interview,
 }: {
   wf: Workflow | null
+  interview: { live: boolean; agentRunning: boolean } | null
   pathologySignals: PathologySignals | null
   findings: Finding[]
   onFindingToggle: (id: string, next: Finding['status']) => void
@@ -1902,8 +1908,20 @@ function StepDetail({
         </ActionArea>
       )}
 
+      {/* Kickoff interview: its own card with an embedded terminal. Not a
+          workflow agent, so neither the pending-step buttons nor StepActions
+          below apply to it. */}
+      {isCurrentStep && activeKey === 'owner_interview' && (
+        <OwnerInterviewCard
+          session={(step as { session?: InterviewSession }).session || null}
+          live={interview}
+          disabled={!!advancing}
+          onAdvance={(action) => onAdvance(action)}
+        />
+      )}
+
       {/* Actions */}
-      {isCurrentStep && step.status === 'pending' && agents.length === 0 && (() => {
+      {isCurrentStep && step.status === 'pending' && agents.length === 0 && activeKey !== 'owner_interview' && (() => {
         // Manual steps that don't launch agents — show approve/skip instead
         const manualSteps = ['demo_review', 'device_testing', 'merge_to_main', 'merge_for_review', 'owner_signoff', 'owner_consultations']
         if (manualSteps.includes(activeKey)) {
@@ -2048,7 +2066,7 @@ function StepDetail({
         )
       })()}
 
-      {isCurrentStep && (step.status !== 'pending' || agents.length > 0) && !(step.status === 'error' && agents.length === 0) && (
+      {isCurrentStep && activeKey !== 'owner_interview' && (step.status !== 'pending' || agents.length > 0) && !(step.status === 'error' && agents.length === 0) && (
         <StepActions
           activeKey={activeKey}
           wfType={wf.type}

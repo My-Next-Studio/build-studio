@@ -25,6 +25,7 @@
 const HUMAN_GATES = {
   device_testing: 'Someone has to exercise the build on a device.',
   owner_consultations: 'The owner reviews the PM output and provides notes.',
+  owner_interview: 'The PM interviews the owner about the decisions that shape the product. Start or resume the interview, then Finish (or Skip) to continue.',
   demo_review: 'The owner watches the demo and approves it.',
 };
 

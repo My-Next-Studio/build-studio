@@ -56,6 +56,8 @@ const DEFAULT_STEP_GROUPS = [
       // to a different model moves drafting with it, which is what anyone
       // regrouping `plan` would expect.
       'draft_prd',
+      // The kickoff interview is the same kind of conversation one level up.
+      'owner_interview',
     ],
   },
   {
