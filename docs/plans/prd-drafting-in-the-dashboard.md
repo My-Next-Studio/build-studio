@@ -1,8 +1,8 @@
 # Plan: PRD drafting as a first-class, interactive step
 
-> **Status: partially implemented 2026-09-26** (proposed 2026-09-06).
-> Increments 1, 2 (Claude) and 4 are built; see *Where this stands* at the end.
-> Increment 2 for Codex and OpenCode is open; increment 3 is dropped.
+> **Status: implemented 2026-10-02** (proposed 2026-09-06). Increments 1, 2
+> (all three CLIs) and 4 are built; increment 3 is dropped. See *Where this
+> stands* at the end.
 >
 > Owner request: a **Draft** button on backlog items in status `Backlog`,
 > alongside Review and Execute, opening a session the owner can talk to — and
@@ -167,15 +167,13 @@ one.
   never on drafting *starting*. Drafting is resumable and interruptible by
   design, so an interrupted draft should look like an un-drafted story.
 - **Idle sessions.** One long-lived session per project, across many projects, is
-  a lot of resident context. Needs at least a listing of which sessions are
-  alive, and probably an idle-reap policy.
+  a lot of resident context. *Dropped (2026-10-02): taken up only if it causes a
+  problem.*
 - **The working tree.** Drafting writes documents while an execution run may hold
-  a branch. Different files, so likely benign — but it should be a stated
-  decision rather than something discovered.
+  a branch. *Settled (decision 8): End draft commits to whatever branch is
+  checked out, a run's branch included, where the PRD merges with the run.*
 - **Telemetry.** A drafting session is a long-lived agent with real cost, and it
-  is not a workflow agent. Whether it appears in the scorecard, and under what
-  role, is an open question — it is the owner's own reasoning as much as the
-  agent's.
+  is not a workflow agent. *Not doing it (2026-10-02).*
 
 ## Increments
 
@@ -276,18 +274,35 @@ retrofitting later.
   add a second copy to keep in sync, for no behaviour the inlining lacks.
   Revisit only if an inlined definition proves insufficient in practice.
 
+### Built since (2026-10-02)
+
+- **Continuity on Codex and OpenCode.** Neither lets the id be chosen at
+  launch, so it is read back from the CLI's own session records
+  (`lib/draft-session-id.js`): a session in the project directory, created at
+  or after the launch, whose opening message carries the draft prompt. The
+  prompt check rules out a workflow agent started in the same directory at the
+  same moment. Not from the pane log as first planned: the drafting log is
+  appended to across launches, so its first id is the oldest session. The id is
+  read on End draft or the next Draft, never on the poll, and is then stored.
+  Resumed with `codex resume <id>` / `opencode --session <id>`.
+- **OpenCode drafts are interactive.** They were launched with `opencode run`,
+  which answers one message and exits, so an OpenCode draft could never ask
+  the owner anything. They now open the TUI with `--prompt`. The TUI has no
+  `--variant`, so the effort setting is not passed.
+
 ### Open
 
-- **Continuity on Codex and OpenCode.** Neither lets the id be chosen at launch,
-  so both need it read back (for Codex, from the pane log, as the telemetry work
-  already does) before `codex resume <id>` / `opencode --session <id>` can be
-  used. Until then every Draft on those CLIs starts a fresh conversation, and the
-  delta never applies there.
-- **Scorecard and idle reaping** remain as described under *Other
-  considerations*. Neither has caused a problem yet.
 - **The kickoff interview** is planned in `kickoff-owner-interview.md`. It
   reuses this plan's launcher and interview method one level up (a
   `kickoff_interview` skill), and hands story-level questions back to drafting.
+
+### Not planned (owner decision 2026-10-02)
+
+- **Scorecard / telemetry for drafting sessions.** Not doing it.
+- **Committing drafts left over from earlier sessions.** End draft commits the
+  current session's items only. Older uncommitted drafts are committed by hand.
+- **Idle-session listing and reaping.** Dropped. Taken up only if it causes a
+  problem.
 
 ### Decisions taken
 
@@ -299,11 +314,13 @@ retrofitting later.
    ensured ignored before the first write.
 3. **Redrafting over an existing PRD: not offered.** The button is hidden on
    items with a PRD, and the route refuses them.
-4. **Scorecard:** still open.
+4. **Scorecard:** not done (owner decision 2026-10-02).
 5. **CLI or model change mid-session:** a model change resumes the same
-   conversation under the new model, unmarked on the PRD. A switch to a CLI that
-   cannot resume starts a fresh one. Neither is offered as a choice yet.
-6. **OpenCode's unpinnable id:** matters, and is the open item above.
+   conversation under the new model, unmarked on the PRD. A switch to a
+   different CLI starts a fresh one, since one CLI cannot resume another's
+   conversation. Neither is offered as a choice yet.
+6. **Codex's and OpenCode's unpinnable ids:** read back after launch. See
+   *Built since*.
 7. **One draft at a time per project.** Sending a second item into a live
    conversation typed into whatever the agent was showing — a menu included —
    so a running session refuses another Draft until it is ended.

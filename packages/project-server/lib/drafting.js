@@ -154,12 +154,17 @@ function quoteFlagValues(flags) {
 function buildDraftCommand({ cli, modelFlag = '', effortFlag = '', dangerFlag = '', sessionFlag = '', promptFile }) {
   if (!cli) throw new Error('buildDraftCommand: cli is required');
   if (!promptFile) throw new Error('buildDraftCommand: promptFile is required');
-  const flags = `${quoteFlagValues(sessionFlag)}${quoteFlagValues(dangerFlag)}${quoteFlagValues(modelFlag)}${quoteFlagValues(effortFlag)}`;
   if (cli === 'opencode') {
-    // OpenCode reads the prompt from stdin — verified for multi-KB prompts with
-    // no shell-escaping exposure.
-    return `opencode run${flags} < '${promptFile}'`;
+    // The interactive TUI, not `opencode run`: `run` sends one message and
+    // exits, which is a workflow agent's shape, not a conversation. Drafting on
+    // OpenCode launched that way never let the owner answer a question.
+    // The TUI has no `--variant`, so the effort setting is not passed.
+    const ocFlags = `${quoteFlagValues(sessionFlag)}${quoteFlagValues(dangerFlag)}${quoteFlagValues(modelFlag)}`;
+    return `opencode${ocFlags} --prompt "$(cat '${promptFile}')"`;
   }
+  // Session flag FIRST: for codex it is the `resume <id>` subcommand, which
+  // must follow the binary directly.
+  const flags = `${quoteFlagValues(sessionFlag)}${quoteFlagValues(dangerFlag)}${quoteFlagValues(modelFlag)}${quoteFlagValues(effortFlag)}`;
   // claude and codex both take it as one argument via command substitution.
   return `${cli}${flags} "$(cat '${promptFile}')"`;
 }

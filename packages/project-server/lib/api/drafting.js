@@ -11,8 +11,9 @@ const {
 } = require('../drafting');
 const { scopedCommit } = require('../scoped-commit');
 const {
-  resolveStepLaunchSettings, canPinSession, sessionPinFlag, sessionResumeFlag,
+  resolveStepLaunchSettings, canPinSession, canResumeSession, sessionPinFlag, sessionResumeFlag,
 } = require('@build-studio/shared/cli');
+const { findDraftSessionId } = require('../draft-session-id');
 const { readItem } = require('../backlog');
 const agentSkills = require('../agent-skills');
 const { computeDraftDelta, formatDraftDelta } = require('../draft-delta');
@@ -21,10 +22,32 @@ const { computeDraftDelta, formatDraftDelta } = require('../draft-delta');
  * Drafting runs OUTSIDE the workflow slot — see lib/drafting.js for why that is
  * a requirement rather than a convenience.
  */
-function createDraftingRouter(config, state, tmuxOps) {
+function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraftSessionId } = {}) {
   const router = express.Router();
   const projectRoot = config.projectRoot;
   const projectName = config.name || path.basename(projectRoot);
+
+  /**
+   * The conversation id of a drafting session, or null.
+   *
+   * Claude's is chosen at launch and stored. Codex and OpenCode choose their
+   * own, so it is read back from the CLI's records the first time it is needed
+   * (draft-session-id.js), matched on the session's launch time and the item it
+   * opened on. Only called from Draft and End draft, never from the poll: the
+   * OpenCode lookup starts processes.
+   */
+  function sessionIdOf(session) {
+    if (!session) return null;
+    if (session.cliSessionId) return session.cliSessionId;
+    if (canPinSession(session.cli) || !canResumeSession(session.cli)) return null;
+    const itemId = session.openingItemId || (session.items || [])[0];
+    try {
+      return findSessionId({ cli: session.cli, projectRoot, since: session.startedAt, itemId }) || null;
+    } catch (e) {
+      console.warn(`[draft] could not look up the ${session.cli} session id: ${e.message}`);
+      return null;
+    }
+  }
   // The backlog helpers join projectRoot + a RELATIVE docs path. config.docsPath
   // is absolute, which path.join nests into a path that does not exist: every
   // readItem here returned null, so the Bug and has-a-PRD refusals never fired
@@ -82,7 +105,9 @@ function createDraftingRouter(config, state, tmuxOps) {
         // agent. Different from a conversation still in progress.
         agentRunning: live && tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false,
         // Resumable without the window, provided the CLI could be pinned.
-        resumable: !!session.cliSessionId && canPinSession(session.cli),
+        // Codex/OpenCode ids are looked up on the next Draft, not here (this is
+        // polled), so for them "resumable" means "will be looked up".
+        resumable: !!session.cliSessionId || (canResumeSession(session.cli) && !canPinSession(session.cli)),
         ageMs: session.startedAt ? Date.now() - Date.parse(session.startedAt) : null,
         idleMs: session.lastUsedAt ? Date.now() - Date.parse(session.lastUsedAt) : null,
       },
@@ -109,10 +134,13 @@ function createDraftingRouter(config, state, tmuxOps) {
 
     const target = `${state.sessionName}:${session.window}`;
     const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
+    // Codex/OpenCode: read the conversation id back now and keep it, so the next
+    // Draft resumes it without another lookup.
+    const cliSessionId = sessionIdOf(session);
     if (!pid) {
-      saveDraftState(config.statePath, { ...state, session: { ...session, endedAt: new Date().toISOString() } });
+      saveDraftState(config.statePath, { ...state, session: { ...session, cliSessionId, endedAt: new Date().toISOString() } });
       const commit = await commitDrafts(session);
-      return res.json({ ok: true, alreadyEnded: true, commit });
+      return res.json({ ok: true, alreadyEnded: true, resumable: !!cliSessionId, commit });
     }
 
     // Two cases, and sending /exit to both was the bug: a pane whose agent has
@@ -135,14 +163,14 @@ function createDraftingRouter(config, state, tmuxOps) {
     }
     saveDraftState(config.statePath, {
       ...state,
-      session: { ...session, endedAt: new Date().toISOString() },
+      session: { ...session, cliSessionId, endedAt: new Date().toISOString() },
     });
     // Ending is the owner saying the draft is done, so its files are committed
     // now. The agent's own writes finished before it returned to its prompt.
     const commit = await commitDrafts(session);
     // The process takes a moment to go; the poll notices and re-enables the
     // buttons. Reported rather than waited for, so the request does not hang.
-    res.json({ ok: true, ending: true, resumable: !!session.cliSessionId && canPinSession(session.cli), commit });
+    res.json({ ok: true, ending: true, resumable: !!cliSessionId, commit });
   });
 
   /**
@@ -236,9 +264,14 @@ function createDraftingRouter(config, state, tmuxOps) {
     if (state.session && !agentRunning) await commitDrafts(state.session);
 
     // ── otherwise launch: resuming the old conversation, or starting one ──────
-    const resuming = !!(prior && prior.cliSessionId && canPinSession(cli) && !wantFresh);
+    // Resume only on the CLI that holds the conversation: another CLI's id means
+    // nothing to it. A CLI switch starts fresh (plan decision 5).
+    const priorId = prior && prior.cli === cli ? sessionIdOf(prior) : null;
+    const resuming = !!(priorId && canResumeSession(cli) && !wantFresh);
+    // Claude's id is chosen here; Codex/OpenCode choose their own and it is read
+    // back later, so a fresh launch on those starts with none.
     const cliSessionId = resuming
-      ? prior.cliSessionId
+      ? priorId
       : (canPinSession(cli) ? crypto.randomUUID() : null);
 
     // A resumed session knows the project as it was when it last read it. Tell
@@ -304,8 +337,11 @@ function createDraftingRouter(config, state, tmuxOps) {
       startedAt: resuming ? (prior.startedAt || new Date().toISOString()) : new Date().toISOString(),
       lastUsedAt: new Date().toISOString(),
       lastItemId: itemId,
+      // The item the conversation OPENED on: its prompt is what identifies a
+      // Codex/OpenCode session when the id is read back (draft-session-id.js).
+      openingItemId: resuming ? (prior.openingItemId || (prior.items || [])[0] || itemId) : itemId,
       items: resuming ? [...new Set([...(prior.items || []), itemId])] : [itemId],
-      resumable: canPinSession(cli),
+      resumable: canResumeSession(cli),
     };
     saveDraftState(config.statePath, { ...state, sessionName, session });
     res.json({ ok: true, sessionName, mode: resuming ? 'resumed' : 'fresh', deltaLines: delta ? delta.split('\n').filter((l) => l.startsWith('- ')).length : 0, ...session });

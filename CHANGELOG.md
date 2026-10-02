@@ -21,6 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-02 — Drafting continues its conversation on Codex and OpenCode too
+
+### Changed
+
+- **Draft now continues the same conversation on Codex and OpenCode,** as it
+  already did on Claude. Before, every Draft on those CLIs started a new
+  conversation and had to be told the project's context again. Build Studio
+  now finds the conversation's id in the CLI's own session records, at End
+  draft or at the next Draft, and resumes it. If it can't find the id, the
+  draft starts fresh, as before. Switching the drafting CLI between drafts
+  always starts fresh, because one CLI can't continue another's conversation.
+
+### Fixed
+
+- **A draft on OpenCode could not ask you anything.** It was launched with
+  `opencode run`, which answers one message and exits, so the conversation
+  ended before you could reply. It now opens OpenCode's interactive screen.
+  The effort setting isn't passed to OpenCode drafts, because that screen has
+  no effort option.
+
+### Upgrade steps
+
+**In Build Studio**: sync the project-server into the app and restart it.
+
+**In each managed project**: nothing to do.
+
+---
+
 ## 2026-10-01 — Optional shadow decisions with Jev
 
 ### Added

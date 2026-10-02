@@ -305,3 +305,88 @@ test('an item that already has a PRD is refused (readItem finds it with an absol
   assert.equal(r.status, 409);
   assert.equal(r.body.hasPrd, true);
 });
+
+// ── continuity on Codex and OpenCode (owner request 2026-10-02) ─────────────
+
+/** Like post(), but on a chosen CLI and with the session lookup injected. */
+async function postOn(cli, root, tmux, body, route, findSessionId) {
+  const config = {
+    projectRoot: root, docsPath: path.join(root, 'docs'), docs_path: 'docs', name: 'proj',
+    statePath: path.join(root, '.build-studio'),
+    logsPath: path.join(root, 'tmp', '.logs'),
+    cli: { default: cli, groups: {} }, step_groups: null,
+  };
+  const app = express();
+  app.use(express.json());
+  app.use('/api', createDraftingRouter(config, {}, tmux, { findSessionId }));
+  const server = http.createServer(app);
+  await new Promise((r) => server.listen(0, r));
+  const { port } = server.address();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api${route}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() };
+  } finally {
+    server.close();
+  }
+}
+
+function priorSession(root, session) {
+  fs.mkdirSync(path.join(root, '.build-studio'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.build-studio', 'draft-state.json'),
+    JSON.stringify({ sessionName: 'draft-proj', session: { window: 'draft', ...session } }));
+}
+
+const launchLine = (tmux) => (tmux.calls.find((c) => c[0] === 'sendKeys') || [])[2] || '';
+
+test('codex: the next Draft resumes the conversation, its id read back from codex', async () => {
+  const root = makeProject({ 'EX-020': { type: 'Feature', status: 'Backlog', title: 'Next' } });
+  priorSession(root, { cli: 'codex', startedAt: '2026-10-02T08:00:00.000Z', items: ['EX-019'], openingItemId: 'EX-019', lastItemId: 'EX-019' });
+  const lookups = [];
+  const find = (q) => { lookups.push(q); return 'cx-session-1'; };
+  const tmux = fakeTmux();
+  const r = await postOn('codex', root, tmux, { itemId: 'EX-020' }, '/draft/start', find);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.mode, 'resumed');
+  assert.match(launchLine(tmux), /codex 'resume' 'cx-session-1' /);
+  assert.deepEqual(lookups[0], { cli: 'codex', projectRoot: root, since: '2026-10-02T08:00:00.000Z', itemId: 'EX-019' });
+  assert.equal(r.body.cliSessionId, 'cx-session-1', 'the id is kept so the next Draft needs no lookup');
+});
+
+test('opencode: resumes with --session, launched as the interactive TUI', async () => {
+  const root = makeProject({ 'EX-021': { type: 'Feature', status: 'Backlog', title: 'Next' } });
+  priorSession(root, { cli: 'opencode', startedAt: '2026-10-02T08:00:00.000Z', items: ['EX-018'], lastItemId: 'EX-018' });
+  const tmux = fakeTmux();
+  const r = await postOn('opencode', root, tmux, { itemId: 'EX-021' }, '/draft/start', () => 'ses_abc');
+  assert.equal(r.body.mode, 'resumed');
+  assert.match(launchLine(tmux), /opencode --session 'ses_abc' .*--prompt /);
+  assert.doesNotMatch(launchLine(tmux), /opencode run/);
+});
+
+test('a lookup that finds nothing starts a fresh conversation, as before', async () => {
+  const root = makeProject({ 'EX-022': { type: 'Feature', status: 'Backlog', title: 'Next' } });
+  priorSession(root, { cli: 'codex', startedAt: '2026-10-02T08:00:00.000Z', items: ['EX-017'] });
+  const tmux = fakeTmux();
+  const r = await postOn('codex', root, tmux, { itemId: 'EX-022' }, '/draft/start', () => null);
+  assert.equal(r.body.mode, 'fresh');
+  assert.doesNotMatch(launchLine(tmux), /resume/);
+});
+
+test('a CLI switch never hands one CLI another CLI\'s conversation id', async () => {
+  const root = makeProject({ 'EX-023': { type: 'Feature', status: 'Backlog', title: 'Next' } });
+  priorSession(root, { cli: 'claude', cliSessionId: 'claude-uuid', startedAt: '2026-10-02T08:00:00.000Z', items: ['EX-016'] });
+  const tmux = fakeTmux();
+  const r = await postOn('codex', root, tmux, { itemId: 'EX-023' }, '/draft/start', () => { throw new Error('must not look up'); });
+  assert.equal(r.body.mode, 'fresh');
+  assert.doesNotMatch(launchLine(tmux), /claude-uuid/);
+});
+
+test('End draft reads the codex id back and stores it', async () => {
+  const root = makeProject({ 'EX-024': { type: 'Feature', status: 'Drafted', title: 'Done' } });
+  priorSession(root, { cli: 'codex', startedAt: '2026-10-02T08:00:00.000Z', items: ['EX-024'], openingItemId: 'EX-024' });
+  const r = await postOn('codex', root, fakeTmux({ livePid: null }), {}, '/draft/end', () => 'cx-9');
+  assert.equal(r.body.resumable, true);
+  const saved = JSON.parse(fs.readFileSync(path.join(root, '.build-studio', 'draft-state.json'), 'utf8'));
+  assert.equal(saved.session.cliSessionId, 'cx-9');
+});

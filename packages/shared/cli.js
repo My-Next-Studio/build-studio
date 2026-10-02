@@ -469,9 +469,25 @@ function sessionPinFlag(cli, sessionId) {
   return ` --session-id ${sessionId}`;
 }
 
-/** Flag that resumes an EXISTING session. Empty when the CLI cannot. */
+/**
+ * Can this CLI continue a conversation by id? All three can; only Claude can
+ * also CHOOSE the id at launch (canPinSession). For the others the id is read
+ * back from the CLI's own records after launch (draft-session-id.js).
+ */
+function canResumeSession(cli) {
+  return cli === 'claude' || cli === 'codex' || cli === 'opencode';
+}
+
+/**
+ * Flag that resumes an EXISTING session. Empty when the CLI cannot.
+ *
+ * Codex resumes through a SUBCOMMAND, not a flag, so its fragment has to sit
+ * directly after `codex`: callers put this fragment first.
+ */
 function sessionResumeFlag(cli, sessionId) {
-  if (!sessionId || !canPinSession(cli)) return '';
+  if (!sessionId || !canResumeSession(cli)) return '';
+  if (cli === 'codex') return ` resume ${sessionId}`;
+  if (cli === 'opencode') return ` --session ${sessionId}`;
   return ` --resume ${sessionId}`;
 }
 
@@ -578,6 +594,7 @@ module.exports = {
   resolveEffectiveCliConfig,
   buildCliFlags,
   canPinSession,
+  canResumeSession,
   sessionPinFlag,
   sessionResumeFlag,
   resolveStepModelForCli,

@@ -65,9 +65,20 @@ test('the launch line is built per CLI, not hard-coded to claude', () => {
   const codex = buildDraftCommand({ cli: 'codex', modelFlag: ' --model gpt', promptFile: '/tmp/p.txt' });
   assert.ok(codex.startsWith('codex '), 'codex takes the prompt as an argument too');
 
-  // OpenCode reads from stdin — the only CLI that does.
-  const oc = buildDraftCommand({ cli: 'opencode', dangerFlag: ' --auto', promptFile: '/tmp/p.txt' });
-  assert.match(oc, /opencode run --auto < '\/tmp\/p\.txt'$/);
+  // OpenCode opens its interactive TUI. `opencode run` answers once and exits,
+  // so a draft launched that way could never ask the owner anything.
+  const oc = buildDraftCommand({ cli: 'opencode', dangerFlag: ' --auto', effortFlag: ' --variant high', promptFile: '/tmp/p.txt' });
+  assert.match(oc, /^opencode --auto --prompt "\$\(cat '\/tmp\/p\.txt'\)"$/);
+  assert.doesNotMatch(oc, / run\b/);
+  assert.doesNotMatch(oc, /--variant/, 'the TUI has no --variant');
+});
+
+test('each CLI resumes with its own spelling, codex as a subcommand right after the binary', () => {
+  const { sessionResumeFlag } = require('@build-studio/shared/cli');
+  const p = '/tmp/p.txt';
+  assert.match(buildDraftCommand({ cli: 'claude', sessionFlag: sessionResumeFlag('claude', 'u-1'), promptFile: p }), /^claude --resume 'u-1' /);
+  assert.match(buildDraftCommand({ cli: 'codex', sessionFlag: sessionResumeFlag('codex', '01a0-ff'), modelFlag: ' --model gpt', promptFile: p }), /^codex 'resume' '01a0-ff' --model 'gpt' "\$\(cat/);
+  assert.match(buildDraftCommand({ cli: 'opencode', sessionFlag: sessionResumeFlag('opencode', 'ses_9'), promptFile: p }), /^opencode --session 'ses_9' --prompt /);
 });
 
 test('a launch with no CLI or no prompt file is refused rather than half-built', () => {
