@@ -173,8 +173,12 @@ for (const appPath of appPaths) {
   const projectServerDest = path.join(nmDest, 'project-server');
   fs.mkdirSync(sharedDest, { recursive: true });
   fs.mkdirSync(projectServerDest, { recursive: true });
-  execFileSync('cp', ['-Rf', sharedSrc + '/.', sharedDest], { stdio: 'inherit' });
-  execFileSync('cp', ['-Rf', projectServerSrc + '/.', projectServerDest], { stdio: 'inherit' });
+  // Mirror, not copy-over: `cp -Rf` never removed a file deleted or renamed in
+  // the source, so a --sync-only inject left it running in the app. --delete
+  // removes what the source no longer has. (The bundle stamp is rewritten
+  // just below.)
+  execFileSync('rsync', ['-a', '--delete', sharedSrc + '/', sharedDest + '/'], { stdio: 'inherit' });
+  execFileSync('rsync', ['-a', '--delete', projectServerSrc + '/', projectServerDest + '/'], { stdio: 'inherit' });
 
   // Stamp the bundle version into project-server lib/.
   // server.js reads this at startup and reports it via /api/health; process-manager.js
@@ -208,11 +212,12 @@ for (const appPath of appPaths) {
   ]) {
     const dest = path.join(appPath, destName);
     fs.mkdirSync(dest, { recursive: true });
-    if (excludeNm) {
-      execFileSync('rsync', ['-a', '--exclude', 'node_modules', src + '/', dest + '/'], { stdio: 'inherit' });
-    } else {
-      execFileSync('cp', ['-Rf', src + '/.', dest], { stdio: 'inherit' });
-    }
+    // Mirrored with --delete: a skill renamed in templates/ used to stay in
+    // the app beside its new name, so every new project got both. Excluded
+    // node_modules are protected from deletion (rsync deletes only what it
+    // would otherwise transfer).
+    const args = ['-a', '--delete', ...(excludeNm ? ['--exclude', 'node_modules'] : []), src + '/', dest + '/'];
+    execFileSync('rsync', args, { stdio: 'inherit' });
   }
   console.log('  extraResources: project-server, shared, templates synced');
 

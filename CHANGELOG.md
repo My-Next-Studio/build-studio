@@ -21,6 +21,49 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-03 — Drafts commit the vision; removing a project closes its sessions
+
+### Fixed
+
+- **End draft left `docs/vision.md` uncommitted.** When you settle a
+  project-level open question while drafting, the agent updates the vision
+  (for example, moving "public repo?" from "not decided" to decided). End
+  draft committed the PRD, the backlog item and `project-state.md`, but not
+  the vision, so the next execution run refused to start on a dirty tree. The
+  vision is now included when it has changed; an unchanged vision is never
+  part of the commit.
+- **Removing a project left its drafting and interview sessions running.**
+  They run in tmux sessions of their own, so stopping the project's server
+  didn't close them, and their agents kept going. Removing a project now
+  closes them too. Each is matched by its exact name, so removing
+  `hello-world` never touches `hello-world-kickoff`'s sessions.
+- **A Draft click could skip committing the previous draft.** Draft committed
+  the `.gitignore` rule and the leftover draft at the same moment, in the same
+  repo. When git was busy, the draft commit could run out of retries. They now
+  run one after the other.
+- **Inject left deleted or renamed files in the installed app.** A skill
+  renamed in `templates/` stayed in the app next to its new name, so new
+  projects got both. Inject now mirrors `templates/`, `project-server` and
+  `shared` into the app, removing what the repo no longer has.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app. The first inject after this update removes any stale files earlier
+injects left behind.
+
+**In each managed project**: nothing to do. If an earlier draft left
+`docs/vision.md` modified in a project, commit it by hand:
+`git commit -m "docs: record a drafting decision" -- docs/vision.md`.
+
+### Notes for forks
+
+- Inject now uses `rsync --delete` for everything it syncs into the app. If a
+  fork writes its own files into those app folders at runtime, those files
+  will be removed on the next inject.
+
+---
+
 ## 2026-10-03 — The interview skill is `owner_interview`
 
 ### Changed

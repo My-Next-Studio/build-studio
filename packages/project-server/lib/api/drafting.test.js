@@ -247,6 +247,9 @@ const git = (root, ...args) => execFileSync('git', args, { cwd: root, encoding: 
 function draftedRepo() {
   const root = makeProject({ 'EX-010': { type: 'Feature', status: 'Backlog', title: 'Plan' } });
   fs.writeFileSync(path.join(root, 'docs', 'project-state.md'), '# State\n');
+  // Committed and left untouched below, so the "nothing else" test also proves
+  // an unchanged vision is not swept into the draft commit.
+  fs.writeFileSync(path.join(root, 'docs', 'vision.md'), '# Vision\n| 6 | Public repo? | Owner | not decided yet |\n');
   fs.writeFileSync(path.join(root, 'notes.txt'), 'owner notes\n');
   git(root, 'init', '-q');
   git(root, 'config', 'user.email', 't@example.com');
@@ -395,4 +398,17 @@ test('End draft reads the codex id back and stores it', async () => {
   assert.equal(r.body.resumable, true);
   const saved = JSON.parse(fs.readFileSync(path.join(root, '.build-studio', 'draft-state.json'), 'utf8'));
   assert.equal(saved.session.cliSessionId, 'cx-9');
+});
+
+// First real draft (2026-10-03): the owner settled a project-level open
+// question while drafting, the agent moved it to "decided" in the vision, and
+// End draft left vision.md uncommitted, which would block the next run.
+test('End draft also commits the vision when the draft changed it', async () => {
+  const root = draftedRepo();
+  fs.writeFileSync(path.join(root, 'docs', 'vision.md'), '# Vision\n| 6 | Public repo? | Owner | Decided: public at launch |\n');
+  const r = await postTo(root, fakeTmux({ livePid: null }), '/draft/end', {});
+  assert.equal(r.body.commit.committed, true);
+  const files = git(root, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort();
+  assert.deepEqual(files, ['docs/backlog/EX-010.md', 'docs/prds/PRD-010-plan.md', 'docs/project-state.md', 'docs/vision.md']);
+  assert.match(git(root, 'status', '--porcelain'), /notes\.txt/, 'unrelated edits still stay out');
 });

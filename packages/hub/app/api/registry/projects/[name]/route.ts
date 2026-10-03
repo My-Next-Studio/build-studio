@@ -19,6 +19,16 @@ export async function DELETE(
     // Best-effort: a server that was never started (or already dead) is fine.
   }
 
+  // Drafting and the owner interview run in tmux sessions of their own, which
+  // stopping the server leaves running. Close them too. Best effort.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { closeProjectSessions } = require(/* turbopackIgnore: true */ '@build-studio/project-server/lib/project-sessions')
+    closeProjectSessions(name)
+  } catch {
+    // A missing tmux or an older bundle must not block removal.
+  }
+
   const removed = registry.remove(name)
   if (!removed) {
     return NextResponse.json({ error: 'Project not found' }, { status: 404 })

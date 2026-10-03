@@ -214,11 +214,13 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
     // modified .gitignore on the default branch blocks the next execution run.
     // Pathspec-scoped, so nothing an agent has staged is swept in. Advisory —
     // a failed commit leaves one line to commit by hand, not a broken draft.
+    // Awaited: the leftover-draft commit below runs in the same repo, and two
+    // commits at once contend for git's index lock. Unawaited, the draft
+    // commit could exhaust its retries under load and be skipped.
     try {
       if (ensureIgnored(projectRoot) && fs.existsSync(path.join(projectRoot, '.git'))) {
-        scopedCommit(projectRoot, ['.gitignore'], 'chore: gitignore drafting state')
-          .then((r) => { if (!r.committed) console.warn(`[draft] .gitignore not committed: ${r.reason}`); })
-          .catch(() => {});
+        const r = await scopedCommit(projectRoot, ['.gitignore'], 'chore: gitignore drafting state');
+        if (!r.committed) console.warn(`[draft] .gitignore not committed: ${r.reason}`);
       }
     } catch (e) {
       console.warn(`[draft] could not update .gitignore: ${e.message}`);

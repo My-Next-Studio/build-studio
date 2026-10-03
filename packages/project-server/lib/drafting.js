@@ -238,6 +238,14 @@ function draftCommitPaths({ projectRoot, docsRel, itemIds, readItem, exists = fs
   if (out.size && exists(path.join(projectRoot, docsRel, 'project-state.md'))) {
     out.add(path.join(docsRel, 'project-state.md'));
   }
+  // The vision too: a draft that settles a project-level open question moves
+  // it from "not decided" to decided in the vision's table, and leaving that
+  // edit uncommitted blocked the next execution run (first real draft,
+  // 2026-10-03). An unchanged vision is harmless: scopedCommit commits nothing
+  // for a clean file.
+  if (out.size && exists(path.join(projectRoot, docsRel, 'vision.md'))) {
+    out.add(path.join(docsRel, 'vision.md'));
+  }
   return [...out].map((p) => (path.isAbsolute(p) ? rel(p) : p));
 }
 
