@@ -120,3 +120,19 @@ test('waitsForOwner: a defect or a certified clean verdict decides the step inst
   assert.ok(waitsForOwner(`**Approved:** no\n**Blocking:** 0\n${unrun}`));
   assert.equal(waitsForOwner('**Approved:** yes\n**Blocking:** 0'), null);
 });
+
+// The shadow questions (decide.js). could_not_run stays as first asked so the
+// trial's data stays comparable; the two added ones separate "not run" from
+// "stopped by the environment", which the first day showed it was mixing.
+test('the shadow questions: the original, plus not-executed and environment-cause', () => {
+  const { SHADOW_QUESTIONS } = require('./gate-blocked');
+  assert.deepEqual(Object.keys(SHADOW_QUESTIONS), ['could_not_run', 'not_executed', 'environment_cause']);
+  for (const q of Object.values(SHADOW_QUESTIONS)) {
+    assert.equal(q.type, 'noul');
+    assert.ok(q.instructions && q.criteria.true && q.criteria.false);
+  }
+  assert.equal(SHADOW_QUESTIONS.could_not_run.instructions,
+    'At least one check described in this report could not be executed at all, so it produced no result.',
+    'the original question must not drift, or its data stops being comparable');
+  assert.match(SHADOW_QUESTIONS.environment_cause.criteria.false, /scope or choice/);
+});

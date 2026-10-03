@@ -236,6 +236,28 @@ fully" report scored P(could not run) = 0.04, a genuine "No browser is available
 0.93, and a Swedish report of a clean run 0.04. 270–660 ms per call, about
 $0.00002 each. Three cases are a smoke test, not a calibration result.
 
+### First day of shadow data (2026-10-02, 63 reports)
+
+- The model and the regex agreed on 53. In all 10 disagreements the model said a
+  check could not run and the regex said none did; the regex flagged nothing all
+  day. Median 0.57 s, p90 0.65 s, $0.0036 in total. Every report was English.
+- **One real catch:** a review saying its verification "was blocked by the
+  normal-build guard", in prose and without the marker line. The regex cannot
+  see that. This is the case the plan was written for.
+- **The main error was the question, not the model.** Two reviews saying checks
+  "were not executed during this review" (a scope choice) scored 0.70 and 0.91:
+  the question mixed *a check was not run* with *the environment stopped it*.
+  The rest sat near 0.5 (security audits noting no live provider calls, AC rows
+  marked untestable/manual, "evidence pending"), which is the uncertainty they
+  deserve.
+- **The question was split, not replaced.** `could_not_run` is kept word for word
+  so its data stays comparable. Two single-condition questions were added:
+  `not_executed` and `environment_cause`. Re-asked on the same reports,
+  `environment_cause` scored the build-guard block 0.91 and the scope choice
+  0.07, with the second scope case at 0.42. The old synthetic cases still hold
+  (the "N/A" marker 0.03, "No browser is available" 0.96). The extra questions
+  cost almost nothing: they are answered in parallel, and output is free.
+
 ### Open
 
 - The other six decision points.

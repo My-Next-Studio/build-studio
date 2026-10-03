@@ -173,12 +173,35 @@ loop. Use this marker only when the check never got to produce a result.`;
  * false, "No browser is available" is true.
  */
 const SHADOW_QUESTIONS = {
+  // Kept exactly as first asked, so its data stays comparable across the trial.
   could_not_run: {
     type: 'noul',
     instructions: 'At least one check described in this report could not be executed at all, so it produced no result.',
     criteria: {
       true: 'A tool, browser, simulator, service, port or credential was unavailable for a check, or a check timed out or crashed before producing any result.',
       false: 'Every check the report describes ran and produced a result, whether it passed or failed.',
+    },
+  },
+  // The first day showed `could_not_run` mixing two things: a check that was
+  // simply not run (a reviewer leaving E2E out of scope: "were not executed
+  // during this review") and one the environment stopped ("blocked by the
+  // normal-build guard"). Only the second is what the marker is for. Asked as
+  // two single-condition statements, per the model's documented literal
+  // reading, so the answers can separate them.
+  not_executed: {
+    type: 'noul',
+    instructions: 'The report mentions at least one check, test, suite or verification that was not executed.',
+    criteria: {
+      true: 'It says a check was skipped, not run, not executed, left out, deferred, pending, or could not run, for any reason.',
+      false: 'Every check it mentions was executed and produced a result.',
+    },
+  },
+  environment_cause: {
+    type: 'noul',
+    instructions: 'The report names an environment problem that stopped a check from producing a result.',
+    criteria: {
+      true: 'A tool, browser, simulator, device, service, port, credential or build guard was unavailable or refused, or a check timed out or crashed before a result.',
+      false: 'No environment problem is named. Checks left out by scope or choice, mocked integrations, or work marked pending or manual do not count.',
     },
   },
 };
