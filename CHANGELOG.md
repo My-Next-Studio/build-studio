@@ -21,6 +21,27 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-03 — Onboarding starts again
+
+### Fixed
+
+- **Starting an onboarding run showed "Cannot read properties of undefined
+  (reading 'trim')", and the Workflow tab stopped working.** Onboarding is the
+  only workflow with no input (the project itself is the input). A helper
+  added to the Workflow tab for execution runs read the input without checking
+  that it exists. The run itself was created fine; only the dashboard crashed.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project**: nothing to do. An onboarding run that hit this
+error is still there, waiting at its first step. After the restart, open the
+Workflow tab and it continues.
+
+---
+
 ## 2026-10-02 — Project tabs scroll; idle projects stay off
 
 ### Added

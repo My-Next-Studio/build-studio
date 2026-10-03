@@ -410,7 +410,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     setRunRoles(data.runRoles || null)
     if (data.workflow) {
       setWfType(data.workflow.type)
-      setInput(data.workflow.input)
+      // An onboarding workflow has no input (the project itself is the input).
+      // Leaving `undefined` here crashed the builder-role effect on input.trim()
+      // as soon as an onboarding run started.
+      setInput(data.workflow.input ?? '')
       // Sync auto-advance state from server
       if (data.workflow.autoAdvance !== undefined) {
         setAutoAdvanceLocal(data.workflow.autoAdvance)
