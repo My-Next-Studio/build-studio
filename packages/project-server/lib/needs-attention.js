@@ -25,8 +25,16 @@
 const HUMAN_GATES = {
   device_testing: 'Someone has to exercise the build on a device.',
   owner_consultations: 'The owner reviews the PM output and provides notes.',
-  owner_interview: 'The PM interviews the owner about the decisions that shape the product. Start or resume the interview, then Finish (or Skip) to continue.',
+  owner_interview: 'The PM interviews the owner about the decisions that shape the product.',
   demo_review: 'The owner watches the demo and approves it.',
+};
+
+/**
+ * What to press, for a gate whose controls are not Approve / Skip. The generic
+ * line told the owner to "approve" an interview whose button is Finish.
+ */
+const HUMAN_GATE_ACTIONS = {
+  owner_interview: 'Answer in the interview below, then click Finish interview (or Skip interview).',
 };
 
 function currentStepOf(wf) {
@@ -227,7 +235,7 @@ function deriveNeedsAttention(wf) {
         step: stepKey,
         title: `${stepKey} is waiting for you`,
         detail: HUMAN_GATES[stepKey],
-        action: 'Approve or skip the gate on the Workflow tab.',
+        action: HUMAN_GATE_ACTIONS[stepKey] || 'Approve or skip the gate on the Workflow tab.',
       };
     }
   }

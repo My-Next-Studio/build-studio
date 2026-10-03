@@ -31,7 +31,7 @@ as a product the owner did not ask for. Drafting solved the same problem
 per story (`prd-drafting-in-the-dashboard.md`); the kickoff needs the same
 interview, one level up.
 
-## The method: a skill, `kickoff_interview`
+## The method: a skill, `owner_interview`
 
 A skill, sibling to `draft_prd`, rather than instructions in the step's prompt:
 
@@ -40,7 +40,7 @@ A skill, sibling to `draft_prd`, rather than instructions in the step's prompt:
   time, as `draft_prd` has been.
 - **It works on every CLI.** Skill definitions are already inlined into the
   prompt for agents whose CLI does not load `.claude/skills/`.
-- **It can be run by hand.** An owner can type `/kickoff_interview` in any
+- **It can be run by hand.** An owner can type `/owner_interview` in any
   session, as with `draft_prd`.
 
 The skill follows `draft_prd`'s structure, raised from a story to a project:
@@ -75,7 +75,7 @@ The skill follows `draft_prd`'s structure, raised from a story to a project:
    - The **Key Decisions Log** in `docs/project-state.md`, which every PM,
      reviewer and drafting session reads.
    - `docs/vision.md`, updated where an answer changes it.
-   - `docs/inputs/kickoff-interview.md`, a dated summary of the interview.
+   - `docs/inputs/owner-interview.md`, a dated summary of the interview.
      This replaces the old consultation notes file, so `team_review` and
      `pm_revision` read it the same way.
 6. **Close.** Summarise what was decided, what was deferred to which backlog
@@ -122,7 +122,7 @@ later.
 
 ## Increments
 
-1. **The skill.** `kickoff_interview` in `templates/default/.claude/skills/`
+1. **The skill.** `owner_interview` in `templates/default/.claude/skills/`
    and in Build Studio's own copy, including the defer-to-the-story rule.
 2. **The step.** Replace `owner_consultations` with `owner_interview` in the
    kickoff sequence and preset, launched as an interactive session through
@@ -162,7 +162,7 @@ the step works before the card is polished.
 - A story-level question is written into its backlog item, not asked. A later
   Draft on that item asks it.
 - Answers appear in the Key Decisions Log, and `team_review` reads
-  `docs/inputs/kickoff-interview.md`.
+  `docs/inputs/owner-interview.md`.
 - Ending the session and reopening the step resumes the same conversation.
 - Skip and Finish both advance the kickoff. Auto-advance never does.
 
@@ -170,7 +170,7 @@ the step works before the card is polished.
 
 All four increments are built.
 
-- **The skill:** `templates/default/.claude/skills/kickoff_interview/`.
+- **The skill:** `templates/default/.claude/skills/owner_interview/`.
   Kickoff runs once, in new projects, which get the template's skills at
   onboarding, so no copy is distributed to existing projects.
 - **The step:** `owner_interview` replaces `owner_consultations` in the presets
@@ -229,5 +229,12 @@ here, but likely the first workflow many people who download the repo run.
 - **Template skills reach onboarded projects.** Onboarding copied the skills
   tree only when the project had no `.claude/skills/` at all, so a project
   already using Claude Code skills got none of Build Studio's (no `draft_prd`,
-  no `kickoff_interview`). It now adds each missing skill and never overwrites
+  no `owner_interview`). It now adds each missing skill and never overwrites
   one the project has.
+
+### Renamed (2026-10-03)
+
+The skill is `owner_interview` and its summary `docs/inputs/owner-interview.md`,
+renamed from `kickoff_interview` / `kickoff-interview.md` once onboarding used
+them too. The old names showed on screen in onboarding runs: the agent's session
+took its title from the skill named in the opening prompt.

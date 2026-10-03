@@ -21,6 +21,39 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-03 — The interview skill is `owner_interview`
+
+### Changed
+
+- **The `kickoff_interview` skill is now `owner_interview`, and its summary is
+  `docs/inputs/owner-interview.md`** (was `kickoff-interview.md`). Onboarding
+  uses the interview too, and the old name showed on screen there: the agent's
+  session took its title from the skill, so an onboarding interview was
+  labelled "Kickoff interview". Questions deferred to a story are now written
+  as `Open question from the owner interview … → owner`, and `draft_prd`
+  looks for that wording.
+
+### Fixed
+
+- **The banner above an interview told you to "approve or skip the gate".**
+  The interview's buttons are **Finish interview** and **Skip interview**, and
+  the banner now says so.
+
+### Upgrade steps
+
+**In Build Studio**: rebuild the hub, run the full inject, and restart the
+app.
+
+**In each managed project**: nothing to do, unless you copied the skill into
+a project by hand after yesterday's entry. If you did, replace it:
+
+```bash
+rm -rf .claude/skills/kickoff_interview
+cp -R <build-studio>/templates/default/.claude/skills/owner_interview .claude/skills/
+```
+
+---
+
 ## 2026-10-03 — Onboarding starts again
 
 ### Fixed

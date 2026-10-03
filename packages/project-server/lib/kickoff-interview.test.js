@@ -32,7 +32,7 @@ const sent = (tmux) => tmux.calls.filter((c) => c[0] === 'sendKeys').map((c) => 
 
 test('the opening prompt names the skill, says a human is there, and carries the marker', () => {
   const p = ki.interviewPrompt('Example App');
-  assert.match(p, /`kickoff_interview` skill/);
+  assert.match(p, /`owner_interview` skill/);
   assert.match(p, /INTERACTIVE/);
   assert.ok(p.includes(ki.interviewMarker('Example App')));
   assert.match(p, /Finish interview/);
@@ -62,7 +62,7 @@ test('Resume continues the same Claude conversation', () => {
   assert.equal(s.cliSessionId, 'c-1');
   assert.equal(s.startedAt, prior.startedAt, 'the conversation keeps its original start');
   assert.match(sent(tmux)[0], /--resume 'c-1'/);
-  assert.match(fs.readFileSync(path.join(config.projectRoot, 'prompt-interview.txt'), 'utf8'), /Continue the kickoff interview/);
+  assert.match(fs.readFileSync(path.join(config.projectRoot, 'prompt-interview.txt'), 'utf8'), /Continue the owner interview/);
 });
 
 test('Codex: the id is read back by the interview marker, then resumed', () => {
@@ -108,10 +108,10 @@ test('Finish commits only the files the interview writes, and only those that ex
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ki-paths-'));
   fs.mkdirSync(path.join(root, 'docs', 'inputs'), { recursive: true });
   fs.mkdirSync(path.join(root, 'docs', 'backlog'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'docs', 'inputs', 'kickoff-interview.md'), '# x\n');
+  fs.writeFileSync(path.join(root, 'docs', 'inputs', 'owner-interview.md'), '# x\n');
   fs.writeFileSync(path.join(root, 'docs', 'project-state.md'), '# x\n');
   assert.deepEqual(ki.interviewCommitPaths(root, 'docs'), [
-    'docs/inputs/kickoff-interview.md', 'docs/project-state.md', 'docs/backlog',
+    'docs/inputs/owner-interview.md', 'docs/project-state.md', 'docs/backlog',
   ]);
 });
 

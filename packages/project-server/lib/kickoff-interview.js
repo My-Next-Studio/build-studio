@@ -2,7 +2,7 @@
 
 /**
  * The kickoff's owner_interview step: an interactive PM session, run with the
- * `kickoff_interview` skill. See docs/plans/kickoff-owner-interview.md.
+ * `owner_interview` skill. See docs/plans/kickoff-owner-interview.md.
  *
  * WHY THIS IS NOT A WORKFLOW AGENT, though it is a workflow step: a workflow
  * agent is watched (dead-process, stuck, finished-but-not-reported) and expected
@@ -27,7 +27,7 @@ const {
 const STEP = 'owner_interview';
 const WINDOW = 'interview';
 /** The file the skill writes and team_review / pm_revision read. */
-const SUMMARY_PATH = 'docs/inputs/kickoff-interview.md';
+const SUMMARY_PATH = 'docs/inputs/owner-interview.md';
 
 const sanitize = (s) => String(s || '').replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
 
@@ -64,7 +64,7 @@ backlog; they made decisions on the owner's behalf to do it. Find those, and
 ask the owner about the ones that shape the whole product.
 
 Start by reading docs/inputs/, the vision, the project state and the backlog,`;
-  return `Use the \`kickoff_interview\` skill to run the ${interviewMarker(projectName)}.
+  return `Use the \`owner_interview\` skill to run the ${interviewMarker(projectName)}.
 
 This is an INTERACTIVE session. The owner is at the keyboard and will answer.
 ${context}
@@ -99,7 +99,7 @@ function launchInterview({ config, tmuxOps, prior = null, mode = 'kickoff', find
   const cliSessionId = resuming ? priorId : (canPinSession(cli) ? crypto.randomUUID() : null);
 
   const prompt = resuming
-    ? 'Continue the kickoff interview where we left off. Re-read docs/inputs/kickoff-interview.md and the Key Decisions Log first, then pick up from the next open topic.'
+    ? 'Continue the owner interview where we left off. Re-read docs/inputs/owner-interview.md and the Key Decisions Log first, then pick up from the next open topic.'
     : interviewPrompt(projectName, mode);
   const promptFile = path.join(projectRoot, `prompt-${WINDOW}.txt`);
   fs.writeFileSync(promptFile, prompt, 'utf8');
@@ -165,7 +165,7 @@ function endInterview({ session, config, tmuxOps, findSessionId = findDraftSessi
 /** The repo-relative paths the interview writes, for committing on Finish. */
 function interviewCommitPaths(projectRoot, docsRel = 'docs', exists = fs.existsSync) {
   return [
-    path.join(docsRel, 'inputs', 'kickoff-interview.md'),
+    path.join(docsRel, 'inputs', 'owner-interview.md'),
     path.join(docsRel, 'project-state.md'),
     path.join(docsRel, 'vision.md'),
     path.join(docsRel, 'backlog'),

@@ -54,7 +54,7 @@ export function OwnerInterviewCard({ session, live, disabled, onAdvance }: Props
         platforms, what the first release must contain, hard constraints, how success is measured.
         Questions about a single story are written into that backlog item and asked when you draft it.
         &quot;Not decided yet&quot; is always a fine answer. Answers are recorded in the Key Decisions Log
-        and <code>docs/inputs/kickoff-interview.md</code>, which the review and revision steps read.
+        and <code>docs/inputs/owner-interview.md</code>, which the review and revision steps read.
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>

@@ -359,3 +359,14 @@ test('an empty fix plan that names an owner action reads as waiting on the owner
   assert.match(n.detail, /code_review/);
   assert.match(n.detail, /Run the device script/);
 });
+
+test('the interview banner names the interview\'s own buttons, not Approve', () => {
+  const wf = { type: 'kickoff', currentStep: 'owner_interview', steps: { owner_interview: { status: 'running', agents: [] } } };
+  const n = deriveNeedsAttention(wf);
+  assert.equal(n.reason, 'human_gate');
+  assert.match(n.action, /Finish interview/);
+  assert.doesNotMatch(n.action, /Approve/);
+  // Other gates keep the generic wording.
+  const demo = deriveNeedsAttention({ type: 'execution', currentStep: 'demo_review', steps: { demo_review: { status: 'pending', agents: [] } } });
+  assert.match(demo.action, /Approve or skip/);
+});

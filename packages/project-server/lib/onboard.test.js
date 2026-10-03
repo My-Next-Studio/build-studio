@@ -351,7 +351,7 @@ test('onboarding adds each missing template skill and keeps the project\'s own',
     assert.equal(fs.readFileSync(path.join(skills, 'my_skill', 'SKILL.md'), 'utf8'), '# mine\n');
     assert.equal(fs.readFileSync(path.join(skills, 'draft_prd', 'SKILL.md'), 'utf8'), '# the project\'s own draft_prd\n',
       'an existing skill is never overwritten');
-    assert.ok(fs.existsSync(path.join(skills, 'kickoff_interview', 'SKILL.md')), 'the interview skill is added');
+    assert.ok(fs.existsSync(path.join(skills, 'owner_interview', 'SKILL.md')), 'the interview skill is added');
   } finally {
     clean(root);
   }
@@ -361,7 +361,7 @@ test('onboarding a project with no skills folder still gets every template skill
   const root = makeRepo(EXAMPLE_APP_SHAPE);
   try {
     await onboardProject(root, { name: 'fixture', port: 3999 });
-    for (const s of ['draft_prd', 'kickoff_interview']) {
+    for (const s of ['draft_prd', 'owner_interview']) {
       assert.ok(fs.existsSync(path.join(root, '.claude', 'skills', s, 'SKILL.md')), s);
     }
   } finally {

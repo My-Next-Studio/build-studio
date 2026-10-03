@@ -1,9 +1,9 @@
 ---
-name: kickoff_interview
-description: Interview the project owner at kickoff or onboarding, as the PM, about the decisions that shape the whole product. Use when the user says "/kickoff_interview", "interview me about the project", or during a kickoff's or onboarding's owner_interview step. Resolves what the inputs and fresh kickoff documents already answer, asks the owner one question at a time about project-level forks, writes story-level questions into their backlog items for drafting, and records every answer where later agents look.
+name: owner_interview
+description: Interview the project owner at kickoff or onboarding, as the PM, about the decisions that shape the whole product. Use when the user says "/owner_interview", "interview me about the project", or during a kickoff's or onboarding's owner_interview step. Resolves what the inputs and fresh kickoff documents already answer, asks the owner one question at a time about project-level forks, writes story-level questions into their backlog items for drafting, and records every answer where later agents look.
 ---
 
-# Kickoff interview
+# Owner interview
 
 You are the **PM**. Read `.claude/commands/pm.md` first. Its conventions, the
 backlog lifecycle and the writing economy still apply. This skill governs *how
@@ -72,7 +72,7 @@ A question that belongs to a **single backlog item** is not asked at kickoff. It
 is asked when that item is drafted, in its own context. Write it **into the
 item's file**, at the end of its body:
 
-> **Open question from kickoff (2026-10-02) → owner:** should a missed day
+> **Open question from the owner interview (2026-10-02) → owner:** should a missed day
 > break the streak, or only reduce it? Ask when drafting this story.
 
 `draft_prd` reads the whole item before asking anything, so the question is
@@ -107,17 +107,17 @@ and go to step 6.
 Write as you go, not at the end, so an interrupted interview loses nothing.
 
 - **Key Decisions Log** in `docs/project-state.md`: one row per decision —
-  `| <date> | <decision, one sentence> | Owner (kickoff interview) | docs/inputs/kickoff-interview.md |`.
+  `| <date> | <decision, one sentence> | Owner (interview) | docs/inputs/owner-interview.md |`.
   Every PM, reviewer and drafting session reads it.
 - **`docs/vision.md`**, where an answer changes what it says. Do not leave the
   vision contradicting a decision.
-- **`docs/inputs/kickoff-interview.md`**: a dated summary — resolved from the
+- **`docs/inputs/owner-interview.md`**: a dated summary — resolved from the
   documents, asked and decided, deferred to which items, still open and for
   which role. The kickoff's review and revision steps read this file.
 - Backlog items whose scope an answer changed: update them now. An item that
   contradicts a recorded decision costs a review round later.
 
-"Not decided yet" goes into `kickoff-interview.md` under *Still open*, aimed at
+"Not decided yet" goes into `owner-interview.md` under *Still open*, aimed at
 the owner, not into the Key Decisions Log.
 
 ## 6. Close

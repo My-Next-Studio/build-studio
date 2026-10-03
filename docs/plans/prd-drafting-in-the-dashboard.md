@@ -294,7 +294,7 @@ retrofitting later.
 
 - **The kickoff interview** is planned in `kickoff-owner-interview.md`. It
   reuses this plan's launcher and interview method one level up (a
-  `kickoff_interview` skill), and hands story-level questions back to drafting.
+  `owner_interview` skill), and hands story-level questions back to drafting.
 
 ### Not planned (owner decision 2026-10-02)
 
