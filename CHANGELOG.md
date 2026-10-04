@@ -21,6 +21,37 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-04 — Archiving a learning no longer breaks links
+
+### Fixed
+
+- **Archiving a stale learning broke links, and a link-checking pre-commit
+  hook then blocked every commit after it.** A learning that is injected about
+  30 times without ever being applied moves to
+  `docs/learnings/_archive/<domain>/`. That move was a plain rename. Links to
+  the file from other learnings, from the `MEMORY.md` index and from elsewhere
+  in `docs/` kept pointing at the old path. The moved file's own relative
+  links, now one folder deeper, broke too. In a project whose pre-commit hook
+  link-checks `docs/`, the archive commit failed, and every automatic commit
+  after it stayed blocked until someone fixed the links by hand.
+
+  The move now rewrites every relative link under `docs/` that pointed at the
+  old path, rewrites the moved file's own links for its new folder, and
+  commits all of that together with the move. Anchors on links are kept. It
+  then checks that no link that worked before is broken. If one would be, the
+  move is undone and the entry stays where it is, with the reason logged. An
+  entry with no inbound links moves without editing anything else.
+
+### Upgrade steps
+
+**In Build Studio**: sync the project-server into the app and restart it.
+
+**In each managed project**: nothing required. If a project has a pre-commit
+workaround that repoints `MEMORY.md` after a learnings rename, it can be
+removed; Build Studio now handles that and the links between learnings.
+
+---
+
 ## 2026-10-03 — Drafts commit the vision; removing a project closes its sessions
 
 ### Fixed

@@ -21,6 +21,7 @@ const agentSkills = require('../agent-skills');
 const gateBlocked = require('../gate-blocked');
 const decisionPoints = require('../decision-points');
 const kickoffInterview = require('../kickoff-interview');
+const learningsArchive = require('../learnings-archive');
 const { scopedCommit } = require('../scoped-commit');
 const qaSuite = require('../qa-suite-run');
 const { reconcilePrdPath } = require('../prd-path');
@@ -1670,6 +1671,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   function archiveStaleLearnings() {
     const moved = [];
     let movedInProject = false;
+    const touchedOutsideLearnings = new Set();
     try {
       const stats = loadLearningsStats();
       const { LEARNINGS_DIR } = require('@build-studio/shared/constants');
@@ -1681,11 +1683,30 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
           const entry = stats.entries[l.title.toLowerCase()];
           if (!entry || !entry.injectionsSinceApplied) continue;
           if (entry.injectionsSinceApplied < LEARNINGS_ARCHIVE_THRESHOLD) continue;
-          const archiveDir = path.join(baseDir, '_archive', l.domain);
-          fs.mkdirSync(archiveDir, { recursive: true });
-          fs.renameSync(l.path, path.join(archiveDir, path.basename(l.path)));
+          // Not a plain rename: links into and out of the moved file are
+          // rewritten, and an entry whose move would break a link is kept
+          // where it is (lib/learnings-archive.js). In the project, inbound
+          // links are looked for across all of docs/, which is what a docs
+          // link check reads.
+          const r = learningsArchive.archiveLearning({
+            file: l.path, baseDir, domain: l.domain,
+            scanRoot: baseDir === projectLearningsDir ? path.join(projectRoot, 'docs') : baseDir,
+          });
+          if (!r.archived) {
+            console.warn(`[learnings] not archiving ${l.domain}/${path.basename(l.path)}: ${r.reason}`);
+            continue;
+          }
+          if (r.rewritten.length) console.log(`[learnings] archived ${l.domain}/${path.basename(l.path)}, links rewritten in ${r.rewritten.length} file(s)`);
           moved.push(`${l.domain}/${path.basename(l.path)}`);
-          if (baseDir === projectLearningsDir) movedInProject = true;
+          if (baseDir === projectLearningsDir) {
+            movedInProject = true;
+            // Rewritten links outside docs/learnings (e.g. in project-state.md)
+            // must land in the same commit, or the tree is broken in between.
+            for (const f of r.rewritten) {
+              const rel = path.relative(projectRoot, f);
+              if (!rel.startsWith(`docs${path.sep}learnings`)) touchedOutsideLearnings.add(rel);
+            }
+          }
         }
       }
       if (moved.length > 0) console.log(`[learnings] archived ${moved.length} stale entries (≥${LEARNINGS_ARCHIVE_THRESHOLD} injections, never applied): ${moved.join(', ')}`);
@@ -1698,7 +1719,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
       if (movedInProject) {
         try {
           const { execFileSync } = require('child_process');
-          execFileSync('git', ['add', '-A', 'docs/learnings'], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
+          execFileSync('git', ['add', '-A', 'docs/learnings', ...touchedOutsideLearnings], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
           execFileSync('git', ['commit', '-m', `docs(learnings): archive ${moved.length} stale never-applied entr${moved.length === 1 ? 'y' : 'ies'}`], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
           console.log(`[learnings] committed archive moves to docs/learnings`);
         } catch (ce) {
