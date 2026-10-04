@@ -259,3 +259,57 @@ test('a failed deploy raises its own Monitor alert on the published post', async
   assert.equal(alerts[0].kind, 'deploy-failed');
   assert.match(alerts[0].detail, /do not publish it again/);
 });
+
+// ── the MDX + choice-field contract (Launch Studio LS-180 / LS-181) ──────────
+//
+// Launch Studio can stage posts as .mdx and add per-post choice fields
+// (category, type). Build Studio's side needs no new code: the scan already
+// accepts .mdx, and the stamp is a line edit that leaves every other key and
+// the body alone. These pin that, so a later change cannot quietly break it.
+
+const MDX_POST = (lang) => `---
+title: "Fasting, explained"
+slug: "fasting-explained"
+${lang ? `lang: "${lang}"\n` : ''}category: "guides"
+type: "founder-note"
+status: "draft"
+---
+
+Intro with an escaped brace \\{ and a less-than \\< sign.
+
+<PullQuote>A quote from the founder.</PullQuote>
+
+<InFazon>Track this in the app.</InFazon>
+`;
+
+test('an EN + SV .mdx pair is one post, and publishing changes only the protocol lines', async () => {
+  const p = makeProject();
+  const staged = path.join(p.root, 'docs/marketing/content/staged');
+  fs.rmSync(path.join(staged, 'a-post.md')); fs.rmSync(path.join(staged, 'a-post.sv.md'));
+  fs.writeFileSync(path.join(staged, 'fasting-explained.mdx'), MDX_POST(null));
+  fs.writeFileSync(path.join(staged, 'fasting-explained.sv.mdx'), MDX_POST('sv'));
+  git(p.root, 'add', '-A'); git(p.root, 'commit', '-m', 'stage mdx'); git(p.root, 'push');
+
+  const posts = cp.scanStaged(p.root, 'docs/marketing/content/staged');
+  assert.equal(posts.length, 1, 'the two variants are one post');
+  assert.deepEqual(posts[0].files.map((f) => [path.basename(f.path), f.lang]), [['fasting-explained.mdx', null], ['fasting-explained.sv.mdx', 'sv']]);
+
+  const r = await publish(p, posts[0]);
+  assert.equal(r.ok, true, r.reason);
+
+  for (const [name, lang] of [['fasting-explained.mdx', null], ['fasting-explained.sv.mdx', 'sv']]) {
+    const after = fs.readFileSync(path.join(staged, name), 'utf8');
+    // Drop the three lines the stamp owns; what remains must be the original exactly.
+    const withoutStamp = after.split('\n').filter((l) => !/^(posted_to|publishedAt):/.test(l)).join('\n').replace('status: "published"', 'status: "draft"');
+    assert.equal(withoutStamp, MDX_POST(lang), `${name}: choice keys, components and escapes survive byte for byte`);
+    assert.match(after, /^status: "published"$/m);
+  }
+  assert.match(git(p.root, 'show', '--name-only', '--pretty=', 'HEAD'), /content\/blog\/fasting-explained\.sv\.mdx/);
+});
+
+test('a Markdown post is unaffected by the MDX contract (existing projects)', () => {
+  assert.deepEqual(cp.parseName('a-post.md'), { slug: 'a-post', lang: null });
+  assert.deepEqual(cp.parseName('a-post.sv.md'), { slug: 'a-post', lang: 'sv' });
+  assert.deepEqual(cp.parseName('a-post.sv.mdx'), { slug: 'a-post', lang: 'sv' });
+  assert.equal(cp.parseName('a-post.txt'), null);
+});
