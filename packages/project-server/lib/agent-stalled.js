@@ -78,6 +78,32 @@ const WAITING_MARKERS = [
 ];
 
 /**
+ * Claude Code is idle between turns but NOT finished: background shells or
+ * goal mode will wake it again. Between turns it shows a bare prompt without
+ * "esc to interrupt", which the prompt reading took as "waiting" — and with a
+ * one-line status message in its transcript, as "finished but never reported"
+ * (fazon FAZ-376, 2026-10-05: a dev agent waiting on its full test suite in two
+ * background shells, offered for Recover with a 44-character "report").
+ *
+ *     ✻ Worked for 10m 6s · done 8:00 AM · 2 shells still running
+ *     ◎ /goal active (1h)
+ *     ⏵⏵ bypass permissions on · 2 shells · ← for agents
+ *
+ * Trade-off, stated: an agent that finished but left a dev server running in a
+ * background shell is no longer flagged here; the idle timeout catches it later.
+ */
+const BACKGROUND_WORK_MARKERS = [
+  /\b\d+\s+shells?\s+still\s+running\b/i,
+  /·\s*\d+\s+shells?\s*·/,
+  /\/goal\s+active\b/i,
+];
+
+function hasBackgroundWork(paneText) {
+  const t = String(paneText || '');
+  return BACKGROUND_WORK_MARKERS.some((re) => re.test(t));
+}
+
+/**
  * Is the pane sitting at an input prompt rather than working?
  *
  * Deliberately positive-evidence-based: we look for the WORKING marker and
@@ -197,6 +223,10 @@ function classifyStalledAgent({
 
   if (!text.trim()) return null;              // unreadable pane proves nothing
 
+  // Idle between turns with background work pending is working, not waiting.
+  // A dialog still wins: an agent can ask a question while a shell runs.
+  if (hasBackgroundWork(text) && !WAITING_MARKERS.some((re) => re.test(text))) return null;
+
   // Below here the signal is "sitting at a prompt", which needs to persist —
   // a pause between tool calls is not a stall.
   if (!isAwaitingInput(text)) return null;
@@ -249,4 +279,4 @@ function classifyStalledAgent({
   };
 }
 
-module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS };
+module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS };

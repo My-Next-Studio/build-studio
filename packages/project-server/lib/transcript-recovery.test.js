@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput,
+  slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput, looksLikeReport,
 } = require('./transcript-recovery');
 
 /** Build a throwaway ~/.claude/projects tree. */
@@ -100,4 +100,21 @@ test('an agent with no CLI session id is not recoverable', () => {
 test('a transcript that exists but holds no report is not recoverable', () => {
   const home = fakeHome([['-tmp-proj', 'abc-123.jsonl', toolUse()]]);
   assert.equal(recoverAgentOutput({ cliSessionId: 'abc-123', agentCwd: '/tmp/proj' }, { home }), null);
+});
+
+test('a one-line status message is not a report (fazon FAZ-376)', () => {
+  const status = 'Still running; waiting for the notification.';
+  assert.equal(looksLikeReport(status), false);
+  const home = fakeHome([['-tmp-proj', 'abc-123.jsonl', assistantText(status)]]);
+  assert.equal(recoverAgentOutput({ cliSessionId: 'abc-123', agentCwd: '/tmp/proj' }, { home }), null);
+});
+
+test('report shapes: step markers, report headings, a tasks block, or substantial prose', () => {
+  assert.ok(looksLikeReport('**Approved:** no\n**Blocking:**\n- broken link'));
+  assert.ok(looksLikeReport('**Committed:** a1b2c3d'));
+  assert.ok(looksLikeReport('**Gate could not run:** dev server would not start'));
+  assert.ok(looksLikeReport('## Summary\nDid the thing.'));
+  assert.ok(looksLikeReport('```json\n{ "tasks": [] }\n```'));
+  assert.ok(looksLikeReport('word '.repeat(200)));
+  assert.equal(looksLikeReport('Done — tests pass.'), false);
 });

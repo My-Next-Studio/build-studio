@@ -225,3 +225,39 @@ test('no dialog, no question', () => {
     assert.equal(r.reason, 'agent_waiting');
   });
 }
+
+{
+  const { hasBackgroundWork } = require('./agent-stalled');
+  // fazon FAZ-376, 2026-10-05: a dev agent between turns, its full test suite
+  // running in two background shells.
+  const WAITING_ON_SHELLS = [
+    '✻ Worked for 10m 6s · done 8:00 AM · 2 shells still running',
+    '◎ /goal active (1h)',
+    '❯ wait for the full test run',
+    '⏵⏵ bypass permissions on · 2 shells · ← for agents',
+  ].join('\n');
+
+  test('background shells and goal mode count as pending work', () => {
+    assert.ok(hasBackgroundWork(WAITING_ON_SHELLS));
+    assert.ok(hasBackgroundWork('✻ Worked for 3m · 1 shell still running'));
+    assert.ok(hasBackgroundWork('⏵⏵ bypass permissions on · 1 shell · ← for agents'));
+    assert.ok(hasBackgroundWork('◎ /goal active (20m)'));
+    assert.equal(hasBackgroundWork('✻ Worked for 10m 6s\n❯ \n⏵⏵ bypass permissions on'), false);
+  });
+
+  test('an agent waiting on background shells is not stalled, even with a transcript text', () => {
+    const r = classifyStalledAgent({
+      paneText: WAITING_ON_SHELLS, idleMs: 30 * 60 * 1000, hasFeedback: false,
+      hasRecoverableReport: true, cli: 'claude',
+    });
+    assert.equal(r, null);
+  });
+
+  test('a dialog still wins over background work', () => {
+    const r = classifyStalledAgent({
+      paneText: WAITING_ON_SHELLS + '\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEnter to select · ↑/↓ to navigate · Esc to cancel',
+      idleMs: 30 * 60 * 1000, hasFeedback: false, cli: 'claude',
+    });
+    assert.equal(r && r.reason, 'awaiting_decision', 'a question asked mid-shell is still flagged');
+  });
+}

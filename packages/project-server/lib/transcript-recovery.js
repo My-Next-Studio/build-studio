@@ -110,7 +110,32 @@ function extractFinalAssistantText(jsonlText) {
 }
 
 /**
- * Read back what an agent produced, if anything.
+ * Does this look like a step's report, rather than a passing remark?
+ *
+ * The final assistant text is whatever the agent said last, and an agent that
+ * is still working says things too: "Still running; waiting for the
+ * notification." was offered for Recover as a 44-character "complete report"
+ * (fazon FAZ-376, 2026-10-05). Delivered, it would have closed the task on a
+ * status line.
+ *
+ * A report carries the structured markers every step's feedback format asks
+ * for, or is substantial prose: some agents write free-form summaries instead
+ * of the mandated markers, and those are still worth recovering.
+ */
+const REPORT_MARKERS = [
+  /\*\*(All issues addressed|Approved|Blocking|Committed|Tests passed|Gate could not run):\*\*/i,
+  /^#{2,3}\s+(Changes|Findings|Summary|Review)\b/im,
+  /```json[\s\S]*"tasks"\s*:/,
+];
+const MIN_PROSE_REPORT_CHARS = 800;
+
+function looksLikeReport(text) {
+  const t = String(text || '');
+  return REPORT_MARKERS.some((re) => re.test(t)) || t.trim().length >= MIN_PROSE_REPORT_CHARS;
+}
+
+/**
+ * Read back what an agent produced, if anything report-shaped.
  *
  * @returns {null|{text:string, chars:number, transcript:string}}
  */
@@ -120,10 +145,10 @@ function recoverAgentOutput(agent, opts = {}) {
   if (!file) return null;
   let text = null;
   try { text = extractFinalAssistantText(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
-  if (!text) return null;
+  if (!text || !looksLikeReport(text)) return null;
   return { text, chars: text.length, transcript: file };
 }
 
 module.exports = {
-  projectsRoot, slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput,
+  projectsRoot, slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput, looksLikeReport,
 };

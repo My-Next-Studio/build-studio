@@ -11,6 +11,7 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { hasBackgroundWork } = require('./agent-stalled');
 
 const CHECK_INTERVAL_MS = 15_000;
 const STALL_THRESHOLD_MS = 10 * 60 * 1000; // 10 min — agent stall warning
@@ -233,6 +234,11 @@ function createOverseer(config, state, broadcast) {
       // produced free-form prose summaries instead of the mandated
       // **All issues addressed:** / **Approved:** format.)
       if (!TURN_COMPLETE_PATTERN.test(pane)) return;
+      // A turn that ended with background shells or goal mode pending is a
+      // pause, not the end: the agent wakes when they report. Nudging it then
+      // told a dev agent mid-test-suite that its output "looks complete"
+      // (fazon FAZ-376, 2026-10-05). See agent-stalled.js hasBackgroundWork.
+      if (hasBackgroundWork(pane)) return;
       candidates.push({ agent, stepLabel });
     }
 

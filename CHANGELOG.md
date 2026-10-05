@@ -21,7 +21,7 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-05 — A stalled Codex or OpenCode agent is reported for what it is
+## 2026-10-05 — Fewer false "stalled agent" alarms
 
 ### Fixed
 
@@ -38,6 +38,26 @@ that move underneath you without your having edited anything.
   the model**, with the time of its last activity. The advice is to wait or to
   relaunch the step, not to answer in the terminal. A long model turn under 10
   minutes is no longer flagged at all. Claude agents are unchanged.
+
+- **A Claude agent waiting on its own background work was reported as
+  "finished but never reported", offered for Recover, and nudged to post its
+  feedback.** An agent that starts a long test suite in a background shell, or
+  runs in goal mode, sits at a bare prompt between turns until the work reports
+  back. The watchdog read that as finished. It then offered the agent's last
+  message for Recover as the step's report, even when that message was a
+  one-line status like "Still running; waiting for the notification." Recovering
+  it would have closed the task on that line.
+
+  The CLI shows background work on screen ("2 shells still running",
+  "/goal active"). An agent showing it is now treated as working. It is neither
+  flagged nor nudged, unless it is showing a question dialog, which is still
+  surfaced. Recover now offers only text shaped like a report: the step's
+  markers (`**Approved:**`, `**Committed:**`, `**Tests passed:**`, …), a
+  report heading, a task list, or at least 800 characters of prose.
+
+  Trade-off: an agent that finished but left a dev server running in a
+  background shell is no longer flagged early. The idle timeout still catches
+  it.
 
 ### Upgrade steps
 
