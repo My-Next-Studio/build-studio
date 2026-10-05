@@ -172,3 +172,56 @@ test('no dialog, no question', () => {
   assert.equal(extractQuestion(WORKING), null);
   assert.equal(extractQuestion(''), null);
 });
+
+// ── non-interactive CLIs (codex exec, opencode run) ─────────────────────────
+// launch-studio LS-187, 2026-10-05: a codex curator sent a tool result at 06:43
+// and got nothing back. The pane never shows Claude's "esc to interrupt", so it
+// was reported as "sitting at an input prompt… answer it in the live terminal".
+
+{
+  const { classifyStalledAgent, MODEL_STALL_MS } = require('./agent-stalled');
+  const NOW = Date.parse('2026-10-05T06:53:00Z');
+  const CODEX_PANE = 'docs/learnings/qa/a.md\ndocs/learnings/qa/b.md\n'; // plain output, no working marker
+  const MIN = 60 * 1000;
+
+  test('a quiet codex agent is not "at an input prompt"', () => {
+    const r = classifyStalledAgent({ paneText: CODEX_PANE, idleMs: 3 * MIN, hasFeedback: false, cli: 'codex', now: NOW });
+    assert.equal(r, null, 'three quiet minutes is a long model turn, not a stall');
+  });
+
+  test('a codex agent whose rollout has not moved reads as waiting on the model', () => {
+    const r = classifyStalledAgent({
+      paneText: CODEX_PANE, idleMs: 12 * MIN, hasFeedback: false, cli: 'codex',
+      modelLastActivityMs: NOW - 12 * MIN, now: NOW,
+    });
+    assert.equal(r.reason, 'model_stalled');
+    assert.match(r.detail, /12 min/);
+    assert.match(r.detail, /nothing to answer in its terminal/);
+    assert.doesNotMatch(r.action, /answer it in the live terminal/i);
+    assert.match(r.action, /relaunch/i);
+  });
+
+  test('the rollout beats the pane log: a streaming codex agent is fine though its log is old', () => {
+    const r = classifyStalledAgent({
+      paneText: CODEX_PANE, idleMs: 15 * MIN, hasFeedback: false, cli: 'codex',
+      modelLastActivityMs: NOW - 2 * MIN, now: NOW,
+    });
+    assert.equal(r, null);
+  });
+
+  test('without a rollout, long silence is reported as silence, not as a prompt', () => {
+    const r = classifyStalledAgent({ paneText: CODEX_PANE, idleMs: MODEL_STALL_MS + MIN, hasFeedback: false, cli: 'opencode', now: NOW });
+    assert.equal(r.reason, 'agent_silent');
+    assert.match(r.detail, /not waiting for input/);
+  });
+
+  test('credential failures are still caught on non-interactive CLIs', () => {
+    const r = classifyStalledAgent({ paneText: 'error: Invalid API key', idleMs: 1000, hasFeedback: false, cli: 'codex', now: NOW });
+    assert.equal(r.reason, 'auth_blocked');
+  });
+
+  test('Claude agents keep the prompt reading', () => {
+    const r = classifyStalledAgent({ paneText: '❯ \n⏵⏵ bypass permissions (shift+tab to cycle)', idleMs: 3 * MIN, hasFeedback: false, cli: 'claude', now: NOW });
+    assert.equal(r.reason, 'agent_waiting');
+  });
+}

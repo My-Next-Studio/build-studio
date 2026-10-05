@@ -89,6 +89,20 @@ function findRolloutFile(sessionId, home = os.homedir()) {
 }
 
 /**
+ * When the rollout was last written, as epoch ms, or null.
+ *
+ * Codex appends to its rollout as the model streams and as each tool call
+ * returns, so this is the truest "last sign of life" for a `codex exec` agent,
+ * whose pane log only changes when a command finishes. A rollout that has not
+ * moved for many minutes after a `function_call_output` means codex sent the
+ * model its tool result and has had nothing back.
+ */
+function rolloutLastWrittenMs(rolloutPath) {
+  if (!rolloutPath) return null;
+  try { return fs.statSync(rolloutPath).mtimeMs; } catch (_) { return null; }
+}
+
+/**
  * Token usage from a Codex rollout.
  *
  * Codex emits `event_msg` rows of type `token_count` carrying
@@ -172,6 +186,7 @@ function captureFromLog(logPath, home = os.homedir()) {
 module.exports = {
   sessionIdFromLog,
   findRolloutFile,
+  rolloutLastWrittenMs,
   parseRollout,
   captureFromLog,
   codexSessionRoots,

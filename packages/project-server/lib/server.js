@@ -503,6 +503,7 @@ function startServer(projectRoot, opts = {}) {
   const AGENT_MAX_AUTO_RESUMES = 2;             // then fall through to the loud halt
   const agentRecovery = require('./agent-recovery');
   const agentStalled = require('./agent-stalled');
+  const codexTelemetry = require('./codex-telemetry');
   const qaSuiteRun = require('./qa-suite-run');
   const transcriptRecovery = require('./transcript-recovery');
   // Provider usage limits (see lib/limit-block.js). Capped so a limit that keeps
@@ -787,12 +788,27 @@ function startServer(projectRoot, opts = {}) {
           // Derived onto the agent, never a halt — the owner decides.
           if (!agent.feedback) {
             try {
+              // A codex agent's truest sign of life is its rollout, which moves
+              // as the model streams; the pane log only moves when a command
+              // finishes. Found once (the search walks every session) and kept.
+              let modelLastActivityMs = null;
+              if (agent.cli === 'codex') {
+                if (!agent.codexRolloutPath) {
+                  const sid = agent.cliSessionId || codexTelemetry.sessionIdFromLog(logFile);
+                  const found = sid ? codexTelemetry.findRolloutFile(sid) : null;
+                  if (found) { agent.codexRolloutPath = found; changed = true; }
+                }
+                modelLastActivityMs = codexTelemetry.rolloutLastWrittenMs(agent.codexRolloutPath);
+              }
               const stalled = agentStalled.classifyStalledAgent({
                 paneText: tmuxOps.capturePane(target, 40),
                 idleMs,
                 hasFeedback: !!agent.feedback,
                 hasRecoverableReport: !!transcriptRecovery.recoverAgentOutput(agent),
                 waitConfirmMs: AGENT_DEAD_CONFIRM_MS,
+                cli: agent.cli || null,
+                modelLastActivityMs,
+                now,
               });
               if (stalled) {
                 if (agent.stalledReason !== stalled.reason

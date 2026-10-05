@@ -21,6 +21,32 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-05 — A stalled Codex or OpenCode agent is reported for what it is
+
+### Fixed
+
+- **A quiet Codex or OpenCode agent was reported as "sitting at an input
+  prompt… answer it in the live terminal".** Workflow agents on these CLIs run
+  non-interactively, so they never show a prompt or a dialog. The watchdog
+  judged them the way it judges Claude Code: no "esc to interrupt" on screen
+  meant waiting for input. So any Codex agent that went quiet for a couple of
+  minutes got advice that couldn't apply.
+
+  These agents are now judged on silence alone. For Codex, the watchdog reads
+  Codex's own session record, which updates as the model streams. A Codex
+  agent whose record hasn't changed for 10 minutes is reported as **waiting on
+  the model**, with the time of its last activity. The advice is to wait or to
+  relaunch the step, not to answer in the terminal. A long model turn under 10
+  minutes is no longer flagged at all. Claude agents are unchanged.
+
+### Upgrade steps
+
+**In Build Studio**: sync the project-server into the app and restart it.
+
+**In each managed project**: nothing to do.
+
+---
+
 ## 2026-10-04 — Archiving a learning no longer breaks links
 
 ### Fixed

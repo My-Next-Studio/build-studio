@@ -129,12 +129,54 @@ function extractQuestion(paneText) {
   return body ? body.slice(0, 2000) : null;
 }
 
+/**
+ * CLIs whose workflow agents run NON-interactively (`codex exec`,
+ * `opencode run`). They never draw a prompt or a dialog and never print
+ * Claude's "esc to interrupt", so the prompt reading below — absence of a
+ * working marker means "waiting" — called every quiet codex agent "sitting at
+ * an input prompt… answer it in the live terminal". There is nothing to answer:
+ * a quiet non-interactive agent is either working on a long model turn or
+ * waiting on a model that has stopped answering (launch-studio LS-187,
+ * 2026-10-05: codex sent a tool result at 06:43 and got nothing back).
+ */
+const NON_INTERACTIVE_CLIS = new Set(['codex', 'opencode']);
+
+/** How long a non-interactive agent may be silent before it reads as stalled. */
+const MODEL_STALL_MS = 10 * 60 * 1000;
+
+const clock = (ms) => {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+function classifyNonInteractive({ cli, idleMs, modelLastActivityMs, now, modelStallMs }) {
+  // The model's own activity record (codex's rollout) beats the pane log: the
+  // log only moves when a command finishes, the rollout moves as tokens stream.
+  const silentMs = Number.isFinite(modelLastActivityMs) ? now - modelLastActivityMs : idleMs;
+  if (!Number.isFinite(silentMs) || silentMs < modelStallMs) return null;
+  const minutes = Math.round(silentMs / 60000);
+  if (Number.isFinite(modelLastActivityMs)) {
+    return {
+      reason: 'model_stalled',
+      title: 'An agent is waiting on the model',
+      detail: `The ${cli} agent has had nothing back from the model for ${minutes} min (last activity ${clock(modelLastActivityMs)}). It runs non-interactively, so there is nothing to answer in its terminal.`,
+      action: 'Wait a little longer if it was mid-way through a long task, otherwise relaunch the step. Relaunching starts a fresh agent; anything it already committed is kept.',
+    };
+  }
+  return {
+    reason: 'agent_silent',
+    title: 'An agent has gone quiet',
+    detail: `The ${cli} agent has printed nothing for ${minutes} min. It runs non-interactively, so it is not waiting for input; it is either on a long model turn or stuck.`,
+    action: 'Check the agent log, then wait or relaunch the step.',
+  };
+}
+
 function classifyStalledAgent({
   paneText, idleMs, hasFeedback, hasRecoverableReport = false, waitConfirmMs = 2 * 60 * 1000,
+  cli = null, modelLastActivityMs = null, now = Date.now(), modelStallMs = MODEL_STALL_MS,
 }) {
   if (hasFeedback) return null;               // it reported; nothing to see
   const text = String(paneText || '');
-  if (!text.trim()) return null;              // unreadable pane proves nothing
 
   // 1. Auth/quota — highest confidence, and independent of timing: the message
   //    is terminal, so there is no point waiting out a confirmation window.
@@ -148,6 +190,12 @@ function classifyStalledAgent({
       };
     }
   }
+
+  // Non-interactive agents: no prompt, no dialog, so none of the readings below
+  // apply. Judge them on silence alone.
+  if (NON_INTERACTIVE_CLIS.has(cli)) return classifyNonInteractive({ cli, idleMs, modelLastActivityMs, now, modelStallMs });
+
+  if (!text.trim()) return null;              // unreadable pane proves nothing
 
   // Below here the signal is "sitting at a prompt", which needs to persist —
   // a pause between tool calls is not a stall.
@@ -201,4 +249,4 @@ function classifyStalledAgent({
   };
 }
 
-module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, AUTH_PATTERNS, WAITING_MARKERS };
+module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS };
