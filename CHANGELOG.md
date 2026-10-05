@@ -59,6 +59,16 @@ that move underneath you without your having edited anything.
   background shell is no longer flagged early. The idle timeout still catches
   it.
 
+### Changed
+
+- **Shadow decisions (only if `decisions` is enabled): the `environment_cause`
+  question no longer counts a test timeout as an environment problem.** A test
+  that ran and failed, timed out, or passed on a rerun now counts as a result.
+  This affects the shadow log only; nothing acts on these answers. Each record
+  in `~/.build-studio/decisions/shadow.jsonl` now carries `questionsVersion: 3`.
+  Older records have no tag: they are v1 if they lack `environment_cause`,
+  otherwise v2. Filter on it when comparing answers across the change.
+
 ### Upgrade steps
 
 **In Build Studio**: sync the project-server into the app and restart it.

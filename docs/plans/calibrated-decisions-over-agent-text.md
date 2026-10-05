@@ -1,6 +1,6 @@
 # Plan: calibrated decisions over agent text, measured before they are trusted
 
-> **Status: increments 1 and 2 implemented 2026-10-01, at one decision point**
+> **Status: increments 1 and 2 implemented 2026-10-01, at one decision point; question set v3 2026-10-05**
 > (proposed 2026-09-19). See *Where this stands* at the end.
 >
 > Owner request: evaluate the newly released "System One" class of decision
@@ -257,6 +257,27 @@ $0.00002 each. Three cases are a smoke test, not a calibration result.
   0.07, with the second scope case at 0.42. The old synthetic cases still hold
   (the "N/A" marker 0.03, "No browser is available" 0.96). The extra questions
   cost almost nothing: they are answered in parallel, and output is free.
+
+### Days two to four (2026-10-03 to 10-05, 125 reports on the split questions)
+
+- `environment_cause` agreed with the regex on 115. The regex flagged 3 reports,
+  and the model agreed on all 3. Errors: 0. Median 0.59 s, p95 6.5 s; $0.012
+  across all 208 reports since the start. All English.
+- Of the 10 disagreements, the model was right on 2 (another build-guard block
+  in prose; a broad suite stopped mid-run). 1 was borderline (E2E skipped by
+  instruction, plus a known local keychain limitation). It was wrong on 7. Every
+  one of the 7 was a test that ran and failed, or timed out and passed on a
+  rerun. The criteria listed "timed out" as an environment cause, and the model
+  read that literally. Same class of error as day one: the wording, not the
+  model.
+- **Question set v3 (2026-10-05).** `environment_cause` now says that a test
+  that ran and failed, timed out, or passed on a rerun produced a result. A
+  timeout counts only when the environment is what timed out. Every record now
+  carries `questionsVersion`; untagged records are v1 (no `environment_cause`)
+  or v2. Replayed on the same 14 reports: 6 of the 7 errors fell below 0.5
+  (0.86 → 0.69 stayed above). Both real catches held (0.94; 0.52, now
+  borderline), as did all three regex-flagged reports (0.83–0.93). Compare v2
+  and v3 on live data, not on this replay, before judging the trial.
 
 ### Open
 

@@ -50,7 +50,7 @@ function shadowGateBlocked({ projectConfig, wf, role, feedback }, deps = {}) {
     state: feedback,
     questions: gateBlocked.SHADOW_QUESTIONS,
     existing: { could_not_run: !!gateBlocked.parseGateBlocked(feedback) },
-    meta: { project: projectConfig && projectConfig.name, runId: wf.id, step: wf.currentStep, round: wf.round || 1, role },
+    meta: { project: projectConfig && projectConfig.name, runId: wf.id, step: wf.currentStep, round: wf.round || 1, role, questionsVersion: gateBlocked.SHADOW_QUESTIONS_VERSION },
   }, ctx).catch(() => null);
 }
 

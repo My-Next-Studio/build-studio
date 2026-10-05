@@ -196,14 +196,30 @@ const SHADOW_QUESTIONS = {
       false: 'Every check it mentions was executed and produced a result.',
     },
   },
+  // v3 (2026-10-05): v2 listed "timed out" as an environment cause, and the
+  // model took it literally. 7 of the 10 disagreements with the regex in
+  // 2026-10-03..05 were test failures or flaky timeouts that passed on a
+  // rerun: checks that ran and produced a result. "Timed out" now counts only
+  // when the environment, not a test, is what timed out.
   environment_cause: {
     type: 'noul',
     instructions: 'The report names an environment problem that stopped a check from producing a result.',
     criteria: {
-      true: 'A tool, browser, simulator, device, service, port, credential or build guard was unavailable or refused, or a check timed out or crashed before a result.',
-      false: 'No environment problem is named. Checks left out by scope or choice, mocked integrations, or work marked pending or manual do not count.',
+      true: 'A tool, browser, simulator, device, service, port, credential or build guard was unavailable or refused, so a check never started or was abandoned without a result.',
+      false: 'No environment problem is named. A test that ran and failed, timed out, or failed once and passed on a rerun produced a result and does not count. Nor do checks left out by scope or choice, mocked integrations, or work marked pending or manual.',
     },
   },
 };
 
-module.exports = { parseGateBlocked, blockingCount, waitsForOwner, SHADOW_QUESTIONS, plannerNoteForBlockedGate, GATE_BLOCKED_INSTRUCTIONS, MARKER };
+/**
+ * Logged on every shadow record, so answers can be compared across wording
+ * changes. Bump it whenever any SHADOW_QUESTIONS text changes.
+ *   1  2026-10-01  could_not_run only
+ *   2  2026-10-03  + not_executed, environment_cause
+ *   3  2026-10-05  environment_cause: a test timeout or flaky failure is a result
+ * Records written before v3 carry no tag: v1 if they lack environment_cause,
+ * else v2.
+ */
+const SHADOW_QUESTIONS_VERSION = 3;
+
+module.exports = { parseGateBlocked, blockingCount, waitsForOwner, SHADOW_QUESTIONS, SHADOW_QUESTIONS_VERSION, plannerNoteForBlockedGate, GATE_BLOCKED_INSTRUCTIONS, MARKER };

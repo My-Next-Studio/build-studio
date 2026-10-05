@@ -136,3 +136,16 @@ test('the shadow questions: the original, plus not-executed and environment-caus
     'the original question must not drift, or its data stops being comparable');
   assert.match(SHADOW_QUESTIONS.environment_cause.criteria.false, /scope or choice/);
 });
+
+// v3: a test that ran and timed out, or failed once and passed on a rerun,
+// produced a result. v2 listed "timed out" as an environment cause and the
+// model flagged 7 such reports (2026-10-03..05).
+test('environment_cause v3: test timeouts and flaky reruns are results; records carry the version', () => {
+  const { SHADOW_QUESTIONS, SHADOW_QUESTIONS_VERSION } = require('./gate-blocked');
+  const ec = SHADOW_QUESTIONS.environment_cause;
+  assert.equal(SHADOW_QUESTIONS_VERSION, 3);
+  assert.doesNotMatch(ec.criteria.true, /timed out/);
+  assert.match(ec.criteria.false, /timed out, or failed once and passed on a rerun/);
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'decision-points.js'), 'utf8');
+  assert.match(src, /questionsVersion: gateBlocked\.SHADOW_QUESTIONS_VERSION/);
+});
