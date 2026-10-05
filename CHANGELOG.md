@@ -59,6 +59,15 @@ that move underneath you without your having edited anything.
   background shell is no longer flagged early. The idle timeout still catches
   it.
 
+- **The paid-API test gate's hint only covered one of the cases it allows.**
+  When a test file names a real LLM endpoint, the gate refuses QA approval (and
+  the bugfix merge) unless the file is tagged `@llm-url-fixture`. The hint said
+  the tag was for URLs "asserted as REJECTED". So QA agents didn't tag the other
+  files that make no request: tests asserting the URL a stubbed `fetch` was
+  called with, and source-scan tests whose search pattern is the endpoint. The
+  owner's Approve was then refused for tests that cost nothing. The hint now
+  names all three cases. What the gate allows is unchanged.
+
 ### Changed
 
 - **Shadow decisions (only if `decisions` is enabled): the `environment_cause`

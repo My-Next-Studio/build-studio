@@ -517,3 +517,16 @@ async function mountRouter(root) {
     state, config, close: () => new Promise((r) => server.close(r)),
   };
 }
+
+// The waiver hint named only "asserted as REJECTED", so a QA agent whose URLs
+// were a stubbed fetch's call args and a source-scan pattern did not see them
+// as waivable, and the owner's Approve was refused (launch-studio LS-191,
+// 2026-10-05). The message must name all three no-request cases.
+test('the LLM-URL violation message names every waivable case', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'workflow.js'), 'utf8');
+  const msg = src.slice(src.indexOf('contains real LLM API URL.'), src.indexOf('contains real LLM API URL.') + 400);
+  assert.match(msg, /asserted as REJECTED/);
+  assert.match(msg, /stubbed fetch/);
+  assert.match(msg, /source-scan pattern/);
+  assert.match(msg, /@llm-url-fixture/);
+});

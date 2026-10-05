@@ -2877,17 +2877,22 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         try { content = fs.readFileSync(fullPath, 'utf8'); } catch (_) { continue; }
 
         // BLOCK: Real LLM API URLs — unless the file is tagged @llm-url-fixture.
-        // Legitimate exception: tests that assert a real endpoint is REJECTED
-        // (e.g. an EU-residency guard test sets LLM_ENDPOINT=api.anthropic.com
-        // and expects validateEndpoint to throw). The URL is the fixture for
-        // the forbidden value; no network call occurs. The tag is a visible,
-        // reviewable waiver — reviewers should verify the file truly never
-        // reaches the network (same trust model as the @real-llm tag below).
+        // Legitimate exceptions, all files where the URL is DATA, never a
+        // destination: a test asserting a real endpoint is REJECTED (an
+        // EU-residency guard sets LLM_ENDPOINT=api.anthropic.com and expects
+        // validateEndpoint to throw); a test asserting the URL a STUBBED fetch
+        // was called with; a source-scan test whose search pattern is the
+        // endpoint. The message used to name only the first, so a QA agent
+        // whose files were the other two did not recognise them as waivable
+        // and the owner's Approve was refused (launch-studio LS-191,
+        // 2026-10-05). The tag is a visible, reviewable waiver — reviewers
+        // should verify the file truly never reaches the network (same trust
+        // model as the @real-llm tag below).
         if (PAID_LLM_ENDPOINTS.test(content)) {
           if (/@llm-url-fixture/.test(content)) {
             console.log(`[workflow] llm-gate: ${relPath} contains a real LLM URL but is tagged @llm-url-fixture (URL asserted as rejected, not called) — allowed`);
           } else {
-            violations.push(`${relPath}: contains real LLM API URL. Tests must NOT call paid external APIs. (If the URL is a fixture asserted as REJECTED — e.g. a residency-guard test — tag the file with @llm-url-fixture and explain why.)`);
+            violations.push(`${relPath}: contains real LLM API URL. Tests must NOT call paid external APIs. (If the file never requests the URL — it is asserted as REJECTED by a guard, asserted on a stubbed fetch's call args, or used as a source-scan pattern — add a comment tagging the file @llm-url-fixture that says which, and commit.)`);
           }
         }
         // BLOCK: LLM SDK imports without a mock
@@ -9192,7 +9197,7 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
         if (wf.type === 'bugfix') {
           const llmScan = scanTestFilesForLlmViolations(projectRoot, def);
           if (llmScan.violations.length > 0) {
-            wf.steps.merge_to_main = { status: 'error', error: `${llmScan.violations.length} test file(s) on ${wf.branch} would call real LLM APIs. Fix them (or, for a URL asserted as REJECTED, tag the file @llm-url-fixture), commit, and retry the merge.\n\n${llmScan.violations.join('\n')}`, violations: llmScan.violations };
+            wf.steps.merge_to_main = { status: 'error', error: `${llmScan.violations.length} test file(s) on ${wf.branch} would call real LLM APIs. Fix them (or, for a file that never requests the URL, tag it @llm-url-fixture), commit, and retry the merge.\n\n${llmScan.violations.join('\n')}`, violations: llmScan.violations };
             state.saveWorkflow(wf);
             return res.status(400).json({ workflow: wf, error: `bugfix merge blocked: ${llmScan.violations.length} LLM test violation(s)`, violations: llmScan.violations });
           }
