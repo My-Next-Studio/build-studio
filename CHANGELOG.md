@@ -84,6 +84,16 @@ that move underneath you without your having edited anything.
   Requests with no `Origin` header, such as curl, agents and the app itself,
   are unaffected. To allow another origin, set `BUILD_STUDIO_ALLOWED_ORIGINS`,
   as before.
+- **A web page could read everything a project-server serves, through DNS
+  rebinding.** A page re-points its own domain at 127.0.0.1, and its requests
+  then reach the project-server as same-origin. A same-origin read sends no
+  `Origin` header, so it passed as a non-browser client. Every request is now
+  refused with 403 unless its `Host` is localhost, 127.0.0.1 or [::1] (any
+  port), or the host of an origin you allowed in
+  `BUILD_STUDIO_ALLOWED_ORIGINS`, or a specific `BUILD_STUDIO_LISTEN_HOST`.
+  The hub, agents and curl all address the servers as localhost and are
+  unaffected. If you reach Build Studio by another name, such as a LAN
+  address, add that origin to `BUILD_STUDIO_ALLOWED_ORIGINS`.
 - **Errors from End draft were never shown.** A failure to commit a draft's
   files ("Draft ended, but its files were not committed…") was set but had
   nowhere to appear. It now shows at the top of the backlog, with errors from

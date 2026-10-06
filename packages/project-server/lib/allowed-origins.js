@@ -60,11 +60,56 @@ function isAllowedOrigin(origin, allowlist) {
 }
 
 /**
- * The CORS and origin policy for every route: echo an allow-listed origin,
- * never '*', and refuse state-changing requests from any other.
+ * Hostnames a request may be addressed to.
+ *
+ * DNS rebinding: a page at attacker.example re-points its own name at
+ * 127.0.0.1, and its requests to attacker.example:<port> then reach this
+ * server as SAME-ORIGIN. A same-origin GET carries no Origin header, so the
+ * origin check passed it as a non-browser client and the page could read
+ * everything this API serves (security review, 2026-10-06). The one thing the
+ * attacker cannot change is the Host header: it is the name the browser
+ * resolved, theirs. So the name must be one of ours.
+ *
+ * Hostname only, not port: a project-server moves to the next free port when
+ * its configured one is taken, and the attacker controls the name, not the
+ * port. Loopback under every spelling, plus the hosts of any origin deliberately
+ * allowed (BUILD_STUDIO_ALLOWED_ORIGINS) and a specific listen host
+ * (BUILD_STUDIO_LISTEN_HOST), so a setup widened on purpose keeps working.
+ */
+function allowedHostnames(allowedOrigins = [], listenHost = process.env.BUILD_STUDIO_LISTEN_HOST) {
+  const names = new Set(['localhost', '127.0.0.1', '::1']);
+  for (const o of allowedOrigins) {
+    try { names.add(new URL(o).hostname.replace(/^\[|\]$/g, '').toLowerCase()); } catch (_) { /* not a URL */ }
+  }
+  if (listenHost && listenHost !== '0.0.0.0' && listenHost !== '::') names.add(String(listenHost).toLowerCase());
+  return names;
+}
+
+/**
+ * The hostname part of a Host header: `localhost:3005` → `localhost`,
+ * `[::1]:3005` → `::1`. A missing header is a non-browser client (HTTP/1.0,
+ * a raw socket) — browsers always send one — and is allowed, as a missing
+ * Origin is.
+ */
+function isAllowedHost(hostHeader, names) {
+  if (hostHeader === undefined || hostHeader === null || hostHeader === '') return true;
+  const h = String(hostHeader).trim().toLowerCase();
+  const name = h.startsWith('[') ? h.slice(1, h.indexOf(']')) : h.replace(/:\d+$/, '');
+  return names.has(name);
+}
+
+/**
+ * The CORS and origin policy for every route: refuse a request addressed to a
+ * foreign hostname, echo an allow-listed origin, never '*', and refuse
+ * state-changing requests from any other origin.
  */
 function corsMiddleware(allowedOrigins) {
+  const hostnames = allowedHostnames(allowedOrigins);
   return (req, res, next) => {
+    // First, and for every method: a rebound page's reads are the exposure.
+    if (!isAllowedHost(req.headers.host, hostnames)) {
+      return res.status(403).json({ error: 'Forbidden host' });
+    }
     const origin = req.headers.origin;
     // Vary: Origin unconditionally — the response body is identical either way,
     // but the ACAO header is not, and a cache that missed that could hand a
@@ -104,5 +149,7 @@ module.exports = {
   defaultAllowedOrigins,
   parseAllowedOrigins,
   isAllowedOrigin,
+  allowedHostnames,
+  isAllowedHost,
   corsMiddleware,
 };

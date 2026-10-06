@@ -127,3 +127,61 @@ test('a wildcard in the override is treated as a literal, never as "any"', () =>
     assert.strictEqual(r.acao, null);
   });
 }
+
+// ── DNS rebinding (security review, 2026-10-06) ────────────────────────────
+// A page whose own name is re-pointed at 127.0.0.1 talks to this server as
+// same-origin, so a GET carries no Origin and passed as a non-browser client.
+// The Host header still carries the attacker's name, and that is what is checked.
+{
+  const express = require('express');
+  const http = require('http');
+  const { corsMiddleware, isAllowedHost, allowedHostnames } = require('./allowed-origins');
+
+  async function rawGet(host, origins = ALLOW) {
+    const app = express();
+    app.use(corsMiddleware(origins));
+    let ran = false;
+    app.get('/api/thing', (req, res) => { ran = true; res.json({ secret: 1 }); });
+    const server = http.createServer(app);
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const status = await new Promise((resolve, reject) => {
+        const headers = host === undefined ? {} : { Host: host };
+        const req = http.request({ host: '127.0.0.1', port: server.address().port, path: '/api/thing', headers, setHost: host !== undefined ? false : true }, (res) => { res.resume(); resolve(res.statusCode); });
+        req.on('error', reject);
+        req.end();
+      });
+      return { status, ran };
+    } finally {
+      server.close();
+    }
+  }
+
+  test('a rebound read, addressed to a foreign name, is refused before any route runs', async () => {
+    const r = await rawGet('attacker.example:3005');
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.ran, false);
+  });
+
+  test('loopback under every spelling, on any port, is served', async () => {
+    for (const h of ['localhost:3005', '127.0.0.1:3010', '[::1]:3005', 'LOCALHOST:3005', 'localhost']) {
+      assert.strictEqual((await rawGet(h)).status, 200, h);
+    }
+  });
+
+  test('a deliberately allowed origin brings its host with it', async () => {
+    const widened = [...ALLOW, 'http://studio.lan:18080'];
+    assert.strictEqual((await rawGet('studio.lan:3005', widened)).status, 200);
+    assert.strictEqual((await rawGet('studio.lan:3005')).status, 403, 'not without the setting');
+  });
+
+  test('host parsing: a missing header is a non-browser client; look-alikes are not loopback', () => {
+    const names = allowedHostnames(ALLOW, undefined);
+    assert.strictEqual(isAllowedHost(undefined, names), true);
+    assert.strictEqual(isAllowedHost('localhost.attacker.example', names), false);
+    assert.strictEqual(isAllowedHost('127.0.0.1.nip.io:3005', names), false);
+    assert.strictEqual(isAllowedHost('[::1]', names), true);
+    assert.strictEqual(allowedHostnames(ALLOW, '0.0.0.0').has('0.0.0.0'), false, 'a wildcard bind is not a hostname');
+    assert.strictEqual(allowedHostnames(ALLOW, '192.168.1.20').has('192.168.1.20'), true);
+  });
+}
