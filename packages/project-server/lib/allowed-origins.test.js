@@ -70,3 +70,60 @@ test('a wildcard in the override is treated as a literal, never as "any"', () =>
   const list = parseAllowedOrigins('*');
   assert.strictEqual(isAllowedOrigin('https://evil.example', list), false);
 });
+
+// ── the origin guard on writes (security review, 2026-10-06) ───────────────
+// A plain-text form post from a foreign page needs no preflight, so CORS never
+// sees it: it reached POST /draft/create-story with an empty body and started
+// an agent session. The guard refuses any state-changing request from a
+// disallowed origin, before any route runs.
+{
+  const express = require('express');
+  const http = require('http');
+  const { corsMiddleware } = require('./allowed-origins');
+
+  async function send(method, headers = {}, body) {
+    const app = express();
+    app.use(express.json());
+    app.use(corsMiddleware(ALLOW));
+    let ran = false;
+    app.all('/api/thing', (req, res) => { ran = true; res.json({ ok: true }); });
+    const server = http.createServer(app);
+    await new Promise((r) => server.listen(0, r));
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.address().port}/api/thing`, { method, headers, body });
+      return { status: res.status, ran, acao: res.headers.get('access-control-allow-origin') };
+    } finally {
+      server.close();
+    }
+  }
+
+  test('a cross-site text/plain POST is refused before the route runs', async () => {
+    const r = await send('POST', { Origin: 'https://evil.example', 'Content-Type': 'text/plain' }, 'x');
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.ran, false);
+    assert.strictEqual(r.acao, null);
+  });
+
+  test('every state-changing method is guarded, and the null origin counts as foreign', async () => {
+    for (const m of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      assert.strictEqual((await send(m, { Origin: 'https://evil.example' })).ran, false, m);
+    }
+    assert.strictEqual((await send('POST', { Origin: 'null' })).status, 403);
+  });
+
+  test('the hub, curl-style callers and plain reads are unaffected', async () => {
+    const hub = await send('POST', { Origin: 'http://localhost:18080', 'Content-Type': 'application/json' }, '{}');
+    assert.strictEqual(hub.status, 200);
+    assert.strictEqual(hub.acao, 'http://localhost:18080');
+    assert.strictEqual((await send('POST', { 'Content-Type': 'application/json' }, '{}')).status, 200, 'no Origin: agents, curl');
+    const read = await send('GET', { Origin: 'https://evil.example' });
+    assert.strictEqual(read.ran, true, 'reads are left to CORS, which withholds the response');
+    assert.strictEqual(read.acao, null);
+  });
+
+  test('a foreign preflight still gets a bare 204', async () => {
+    const r = await send('OPTIONS', { Origin: 'https://evil.example' });
+    assert.strictEqual(r.status, 204);
+    assert.strictEqual(r.acao, null);
+  });
+}

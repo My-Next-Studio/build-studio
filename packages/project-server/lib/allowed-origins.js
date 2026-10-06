@@ -59,9 +59,50 @@ function isAllowedOrigin(origin, allowlist) {
   return allowlist.includes(origin);
 }
 
+/**
+ * The CORS and origin policy for every route: echo an allow-listed origin,
+ * never '*', and refuse state-changing requests from any other.
+ */
+function corsMiddleware(allowedOrigins) {
+  return (req, res, next) => {
+    const origin = req.headers.origin;
+    // Vary: Origin unconditionally — the response body is identical either way,
+    // but the ACAO header is not, and a cache that missed that could hand a
+    // hub-stamped header to some other origin.
+    res.setHeader('Vary', 'Origin');
+    if (isAllowedOrigin(origin, allowedOrigins)) {
+      // Only set ACAO when there IS an origin to echo. A no-origin caller is a
+      // non-browser client that neither needs nor reads the header.
+      if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+    // A disallowed origin still gets 204 on the preflight, just without the
+    // headers that would let it proceed — the browser fails the actual request.
+    // Answering 403 here would leak "this port is a project-server" to any page
+    // that probes it; a bare 204 is indistinguishable from an endpoint that
+    // simply does not do CORS.
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    // CORS alone does not stop writes. It stops a foreign page READING a
+    // response, and it stops JSON bodies, which need a preflight. A plain-text
+    // form post needs neither, reaches the route with an empty body, and runs.
+    // A route that needs no input then acts on it: POST /draft/create-story
+    // started an agent session from any open web page (security review,
+    // 2026-10-06), and /draft/end ended one. So any request that can change
+    // state is refused from a disallowed origin. Browsers always send Origin
+    // on a cross-origin POST, simple or not. Non-browser callers (curl,
+    // agents, the overseer) send none and are unaffected; see isAllowedOrigin.
+    if (req.method !== 'GET' && req.method !== 'HEAD' && !isAllowedOrigin(origin, allowedOrigins)) {
+      return res.status(403).json({ error: 'Forbidden origin' });
+    }
+    next();
+  };
+}
+
 module.exports = {
   DEFAULT_HUB_PORT,
   defaultAllowedOrigins,
   parseAllowedOrigins,
   isAllowedOrigin,
+  corsMiddleware,
 };

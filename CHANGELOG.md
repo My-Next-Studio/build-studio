@@ -45,6 +45,16 @@ that move underneath you without your having edited anything.
 
 ### Fixed
 
+- **Any web page open in your browser could start or end a drafting session.**
+  The project-server's CORS policy stops a foreign page from reading its
+  responses or sending JSON. It does not stop a plain-text form post, which
+  arrives with an empty body. A route that needs no input then ran on it.
+  `POST /api/draft/create-story` started an agent session in the project, and
+  `/api/draft/end` ended one. Requests that can change state (anything but
+  GET and HEAD) are now refused with 403 from any origin that is not the hub.
+  Requests with no `Origin` header, such as curl, agents and the app itself,
+  are unaffected. To allow another origin, set `BUILD_STUDIO_ALLOWED_ORIGINS`,
+  as before.
 - **Errors from End draft were never shown.** A failure to commit a draft's
   files ("Draft ended, but its files were not committed…") was set but had
   nowhere to appear. It now shows at the top of the backlog, with errors from
