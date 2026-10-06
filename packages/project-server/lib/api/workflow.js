@@ -160,6 +160,40 @@ function iosDerivedDataGuidance(config, wf) {
   return IOS_DERIVED_DATA_GUIDANCE.replace('{{RUN_ID}}', runId);
 }
 
+/**
+ * What the goal-harness builder must run before it is done.
+ *
+ * The goal used to require "the COMPLETE test suite" everywhere. On a project
+ * that sets qa_validation.scope=new-uitests that overrode the project's own
+ * decision: QA skips the XCUITest regression (it runs periodically and before
+ * a release), but the builder ran all of it, serially, before reporting. On
+ * fazon FAZ-062 (2026-10-05) that was ~700 UI tests at ~16 s each, over three
+ * hours of a single task, followed by QA testing the same branch again.
+ *
+ * So the builder follows the same scope QA does. Unit tests and every other
+ * suite still run in full; only the XCUITest regression narrows to the classes
+ * the branch adds or modifies. The list cannot be precomputed the way QA's is
+ * (the builder writes those tests), so it gets the rule and the command.
+ * Projects without the setting keep the complete suite.
+ *
+ * @returns {{goalClause: string, guidance: string}}
+ */
+function builderTestRequirement(config, baseBranch = 'main') {
+  const scope = (config && config.qa_validation && config.qa_validation.scope) || 'full';
+  if (scope !== 'new-uitests') {
+    return {
+      goalClause: 'the COMPLETE test suite (including the pre-implementation tests committed before this session started) has been run and passes',
+      guidance: '- The objective requires the COMPLETE test suite, not a relevant subset. Iterate on targeted tests while implementing, but the final verification run is the full suite.',
+    };
+  }
+  const unitTarget = config.qa_validation.unit_test_target || 'the unit-test target';
+  return {
+    goalClause: 'every unit test (including the pre-implementation tests committed before this session started) and every other non-XCUITest suite has been run in full and passes, and every XCUITest class this branch adds or modifies versus '
+      + `${baseBranch} has been run and passes; the full XCUITest regression suite is NOT required (this project sets qa_validation.scope=new-uitests, so it runs periodically and before a release)`,
+    guidance: `- The final verification run is every unit test (${unitTarget}) and every other non-XCUITest suite in full, plus ONLY the XCUITest classes this branch adds or modifies. Do NOT run the full XCUITest regression suite: this project runs it periodically and before a release, not per task. List the classes to run with\n  \`git diff --name-only --diff-filter=AM ${baseBranch}...HEAD -- '*UITests/*.swift'\`\n  and pass every XCTestCase subclass those files declare as \`-only-testing:<UITestTarget>/<Class>\`. Read the class names from the files: a file may declare several classes, none named after the file, and a shared support file declares none and adds nothing. If no classes result, no XCUITests are required.`,
+  };
+}
+
 // Agent-CLI plumbing (claude / codex / opencode) lives in @build-studio/shared/cli:
 // the role sets (developer → wf.developerCli, reviewer → wf.reviewerCli), the
 // per-role resolver (everything else → project default CLI), the OpenCode model
@@ -5200,11 +5234,12 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
     const useGoalHarness = (config.builder_strategy || 'role') === 'goal'
       && wf.taskPlan && wf.taskPlan.monolithic
       && resolveStepLaunchSettings('task_execution', wf, config.cli, config.step_groups).cli === 'claude';
+    const testRequirement = builderTestRequirement(config, wf.defaultBranch || 'main');
     const goalCondition = useGoalHarness
-      ? `Every acceptance criterion of the PRD at ${prdPath} is implemented; the COMPLETE test suite (including the pre-implementation tests committed before this session started) has been run and passes; all work is committed on the current branch; and the feedback POST from the prompt file has been sent successfully, including a per-AC evidence table.`
+      ? `Every acceptance criterion of the PRD at ${prdPath} is implemented; ${testRequirement.goalClause}; all work is committed on the current branch; and the feedback POST from the prompt file has been sent successfully, including a per-AC evidence table.`
       : null;
     const goalContext = useGoalHarness
-      ? `\n\n## GOAL HARNESS — /goal IS ARMED ON THIS SESSION\nShortly after this session starts, the dashboard sets a native /goal objective on it:\n\n> ${goalCondition}\n\nClaude Code re-checks that objective after every response and keeps the session working until it is met — declaring "done" early will not end the session. Two consequences for how you work:\n- The objective requires the COMPLETE test suite, not a relevant subset. Iterate on targeted tests while implementing, but the final verification run is the full suite.\n- Your feedback POST must include a per-AC evidence table: \`| AC | Implemented | Tested | Evidence |\`, one row per acceptance criterion, with the test name or commit as evidence.`
+      ? `\n\n## GOAL HARNESS — /goal IS ARMED ON THIS SESSION\nShortly after this session starts, the dashboard sets a native /goal objective on it:\n\n> ${goalCondition}\n\nClaude Code re-checks that objective after every response and keeps the session working until it is met — declaring "done" early will not end the session. Two consequences for how you work:\n${testRequirement.guidance}\n- Your feedback POST must include a per-AC evidence table: \`| AC | Implemented | Tested | Evidence |\`, one row per acceptance criterion, with the test name or commit as evidence.`
       : '';
 
     const devAgents = [{
@@ -10324,6 +10359,7 @@ module.exports = {
   createWorkflowRouter,
   // Exported for unit tests (pure helpers — no I/O).
   iosDerivedDataGuidance,
+  builderTestRequirement,
   resolveReviewerCliAtStart,
   DEFAULT_BUGFIX_STEPS,
   bugfixDisciplineBlock,

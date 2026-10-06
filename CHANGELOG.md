@@ -21,6 +21,35 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-06 — The builder no longer runs the full UI suite when QA doesn't
+
+### Changed
+
+- **On projects with `qa_validation.scope: new-uitests`, the goal-mode builder
+  no longer runs the full XCUITest regression suite before reporting.** That
+  setting already told QA validation to run all unit tests but only the UI test
+  classes the branch adds or changes. The full regression was left for an
+  occasional manual run before release (Operations → UITests). The builder
+  (`builder_strategy: goal`, one task per PRD) ignored it: its goal required
+  "the COMPLETE test suite". So on an iOS change it ran every UI test serially
+  before reporting. On one project that was ~700 tests at ~16 s each: a single
+  task took over three hours, and QA then tested the same branch again.
+
+  The builder now follows the same scope as QA. Unit tests and every other
+  suite still run in full; XCUITests narrow to the classes the branch adds or
+  modifies versus the default branch. Projects without the setting, or with
+  `scope: full`, still require the complete suite.
+
+### Upgrade steps
+
+**In Build Studio**: sync the project-server into the app and restart it.
+
+**In each managed project**: nothing to do. A project that wants its builder
+to keep running the full UI suite must set `qa_validation.scope: full` (which
+also makes QA run it).
+
+---
+
 ## 2026-10-05 — Fewer false "stalled agent" alarms
 
 ### Fixed
