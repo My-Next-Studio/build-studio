@@ -94,6 +94,11 @@ that move underneath you without your having edited anything.
   The hub, agents and curl all address the servers as localhost and are
   unaffected. If you reach Build Studio by another name, such as a LAN
   address, add that origin to `BUILD_STUDIO_ALLOWED_ORIGINS`.
+- **QA test steps kept failing approval over `@llm-url-fixture`.** The QA
+  agent learned that a test naming a paid LLM endpoint needs the tag only from
+  the refusal, which comes at approve time, after it has finished. So the
+  owner's Approve was refused and the files had to be tagged by hand. The
+  qa_tests prompt now states the rule, with the gate's own list of hosts.
 - **Errors from End draft were never shown.** A failure to commit a draft's
   files ("Draft ended, but its files were not committed…") was set but had
   nowhere to appear. It now shows at the top of the backlog, with errors from

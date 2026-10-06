@@ -530,3 +530,19 @@ test('the LLM-URL violation message names every waivable case', () => {
   assert.match(msg, /source-scan pattern/);
   assert.match(msg, /@llm-url-fixture/);
 });
+
+// The gate runs at approve time, after QA has finished, so QA learned the tag
+// rule only from the refusal (launch-studio LS-191 and LS-196, 2026-10-05/06).
+// The qa_tests prompt now states it, with the host list taken from the gate's
+// own regex so the two cannot drift.
+test('the qa_tests prompt states the @llm-url-fixture rule, from the gate\'s host list', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'workflow.js'), 'utf8');
+  const i = src.indexOf('## WHAT NOT TO TEST — CRITICAL');
+  assert.ok(i > 0);
+  const section = src.slice(i, src.indexOf('## FEEDBACK FORMAT', i));
+  assert.match(section, /\$\{PAID_LLM_ENDPOINTS\.source\.split\('\|'\)/);
+  assert.match(section, /`@llm-url-fixture` comment|\\`@llm-url-fixture\\` comment/);
+  const re = /api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com|openrouter\.ai/i;
+  assert.equal(re.source.split('|').map((h) => h.replace(/\\\./g, '.')).join(', '),
+    'api.anthropic.com, api.openai.com, generativelanguage.googleapis.com, openrouter.ai');
+});

@@ -7135,6 +7135,7 @@ DO NOT write integration/HTTP tests for:
 ## WHAT NOT TO TEST — CRITICAL
 
 - **No LLM/AI API tests** — no real calls (costs money), no mocked calls (proves nothing). Mark LLM-dependent cells as MANUAL.
+- **A test file that names a paid endpoint (${PAID_LLM_ENDPOINTS.source.split('|').map(h => h.replace(/\\\./g, '.')).join(', ')}) without requesting it** — asserted on a stubbed fetch's call args, asserted as REJECTED by a guard, or used as a source-scan pattern — needs an \`@llm-url-fixture\` comment at the top saying which. Without it the approve gate refuses the whole step.
 - **No E2E / browser tests** — the CI gate will reject them (this is web/Playwright; iOS XCUITests are covered by the iOS guidance above where present).
 - **No trivial tests** — "renders without error", "exports exist", etc.
 
