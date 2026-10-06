@@ -21,7 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-06 — The builder no longer runs the full UI suite when QA doesn't
+## 2026-10-06 — Create story; the builder no longer runs the full UI suite when QA doesn't
+
+### Added
+
+- **Create story, at the top of the backlog.** It opens the drafting session —
+  the same conversation the Draft buttons use, resumed if it has ended — and
+  runs a new `create_story` skill. The PM:
+  - reads the backlog and what the conversation has already covered;
+  - interviews you about the story, one question at a time;
+  - checks for an existing item that already covers it;
+  - suggests where it belongs, after what it depends on, and asks you to
+    confirm or choose another position;
+  - files it.
+
+  While a draft is running the button is disabled. Ask for a story in that
+  terminal instead ("create a story"), which runs the same skill.
+
+  The story is filed through a new endpoint, `POST /api/backlog/items`. It
+  assigns the next id, writes the item file and its line in
+  `docs/project-state.md` at the chosen position, and commits exactly those two
+  files.
+
+### Fixed
+
+- **Errors from End draft were never shown.** A failure to commit a draft's
+  files ("Draft ended, but its files were not committed…") was set but had
+  nowhere to appear. It now shows at the top of the backlog, with errors from
+  Create story.
 
 ### Changed
 
@@ -42,11 +69,15 @@ that move underneath you without your having edited anything.
 
 ### Upgrade steps
 
-**In Build Studio**: sync the project-server into the app and restart it.
+**In Build Studio**: Create story changes the hub, so rebuild it and run the
+full inject (`npx next build` in `packages/hub`, then
+`node inject-resources.js` in `packages/desktop`), and restart.
 
-**In each managed project**: nothing to do. A project that wants its builder
-to keep running the full UI suite must set `qa_validation.scope: full` (which
-also makes QA run it).
+**In each managed project**: nothing to do. The first drafting session in a
+project installs `.claude/skills/create_story/` and commits it. A project that
+already has a skill of that name keeps its own. A project that wants its
+builder to keep running the full UI suite must set `qa_validation.scope: full`
+(which also makes QA run it).
 
 ---
 

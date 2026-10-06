@@ -144,6 +144,9 @@ export function BacklogTab({
     {
       id: string; window: string; ageMs?: number | null; resumable?: boolean
       items?: string[]
+      /** 'create_story' when the session's last request was Create story,
+       *  which has no item to name in the panel header. */
+      action?: string
       /** Changes on every launch. The window name does not, so this is what
        *  tells the terminal its pane was replaced — ensureWindow kills and
        *  recreates, and a terminal watching only the name stayed attached to a
@@ -192,6 +195,10 @@ export function BacklogTab({
         const sess = res && res.session
         if (!sess) { setDraftRunning(null); return }
         setDraftRunning(sess.agentRunning ? (sess.lastItemId || '') : null)
+        // A running session can file a story at any moment (Create story, or
+        // the owner asking for one mid-draft). Re-read the list on this poll
+        // rather than the 30-second one, so a new row appears in seconds.
+        if (sess.agentRunning) void load()
         // Only restore a VIEW of something still there. A resumable-but-dead
         // session is reachable by clicking Draft again; showing a terminal for a
         // window that is gone would just fail to attach.
@@ -199,7 +206,7 @@ export function BacklogTab({
           setDraftSession(prev => prev ?? {
             id: sess.lastItemId || '', window: sess.window,
             ageMs: sess.ageMs, resumable: sess.resumable, items: sess.items,
-            launchedAt: sess.launchedAt,
+            action: sess.lastAction, launchedAt: sess.launchedAt,
           })
         } else {
           // The window is gone: drop the view and the hidden flag together, so a
@@ -213,7 +220,7 @@ export function BacklogTab({
     void read()
     const id = setInterval(() => { void read() }, 10_000)
     return () => { cancelled = true; clearInterval(id) }
-  }, [api])
+  }, [api, load])
   const [startError, setStartError] = useState<{ id: string; message: string } | null>(null)
 
   // Drafting runs OUTSIDE the workflow slot, so unlike startRun it neither
@@ -234,7 +241,7 @@ export function BacklogTab({
         setDraftMin(false)
         setDraftSession({
           id, window: res.window, resumable: res.resumable, items: res.items,
-          launchedAt: res.launchedAt,
+          action: 'draft', launchedAt: res.launchedAt,
         })
       }
     } catch (e) {
@@ -243,6 +250,33 @@ export function BacklogTab({
       setDrafting(null)
     }
   }, [])
+
+  // Create story runs the create_story skill in the SAME drafting session, so
+  // the conversation that has been drafting neighbouring stories writes this
+  // one with that context (owner request 2026-10-06). It shares Draft's
+  // one-at-a-time rule: while a draft runs the button is disabled and its
+  // tooltip says to ask in the terminal, which reaches the same skill.
+  const [creatingStory, setCreatingStory] = useState(false)
+  const startCreateStory = useCallback(async () => {
+    setCreatingStory(true)
+    setStartError(null)
+    try {
+      const res = await api.post('/draft/create-story', {})
+      if (res && res.error) { setStartError({ id: '', message: res.error }); return }
+      if (res && res.window) {
+        setDraftMin(false)
+        setDraftSession({
+          id: '', window: res.window, resumable: res.resumable, items: res.items,
+          action: 'create_story', launchedAt: res.launchedAt,
+        })
+        setDraftRunning('')
+      }
+    } catch (e) {
+      setStartError({ id: '', message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setCreatingStory(false)
+    }
+  }, [api])
 
   // Closes the session without abandoning the conversation — the next Draft
   // resumes it. Clearing context is /clear in the terminal, deliberately not a
@@ -479,12 +513,39 @@ export function BacklogTab({
   return (
     <div style={{ padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 16, fontFamily: 'var(--mono)', overflow: 'auto' }}>
       {/* Header */}
-      <div>
-        <h1 style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, letterSpacing: '0.02em' }}>Backlog</h1>
-        <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5, margin: 0, maxWidth: 700 }}>
-          Ordered list of features, bugs, and tasks. Click a row to expand details inline. Drag the <code style={{ background: 'var(--surface3)', color: 'var(--accent)', padding: '0 4px', borderRadius: 2 }}>⋮⋮</code> handle to reorder, including across releases. Items are created and edited via the project terminal — tell PM &ldquo;Add issue&rdquo; or &ldquo;Edit issue {'<ID>'}&rdquo;.
-        </p>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h1 style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, letterSpacing: '0.02em' }}>Backlog</h1>
+          <p style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5, margin: 0, maxWidth: 700 }}>
+            Ordered list of features, bugs, and tasks. Click a row to expand details inline. Drag the <code style={{ background: 'var(--surface3)', color: 'var(--accent)', padding: '0 4px', borderRadius: 2 }}>⋮⋮</code> handle to reorder, including across releases. Create story adds one with the PM, who asks where it belongs in the order. Edit an item via the project terminal — tell PM &ldquo;Edit issue {'<ID>'}&rdquo;.
+          </p>
+        </div>
+        {/*
+          Disabled, not refused, while a draft runs: the session is shared and
+          typing a second request into a busy agent can land on an open menu and
+          be read as its answer. The tooltip gives the way that is safe — asking
+          in the terminal, which the agent reads when it is ready.
+        */}
+        <button
+          onClick={() => { void startCreateStory() }}
+          disabled={creatingStory || draftRunning !== null}
+          title={draftRunning !== null
+            ? 'The drafting session is busy. Type "create a story" in its terminal: it runs the same skill in the same conversation.'
+            : 'Create a backlog story with the PM in the drafting session. It interviews you, suggests where the story belongs, and asks you to confirm the position.'}
+          className="wf-btn primary"
+          style={{ fontSize: 11, padding: '5px 12px', flexShrink: 0, opacity: creatingStory ? 0.6 : 1 }}
+        >
+          {creatingStory ? 'Opening…' : 'Create story'}
+        </button>
       </div>
+
+      {/* Errors that belong to the session rather than a row: Create story, End draft. */}
+      {startError && startError.id === '' && (
+        <div style={{
+          padding: '8px 12px', background: 'rgba(255,95,95,0.08)', border: '1px solid var(--red)',
+          borderRadius: 4, color: 'var(--red)', fontSize: 11, lineHeight: 1.45,
+        }}>{startError.message}</div>
+      )}
 
       {/*
         The drafting session, above the filter bar because it is a fixture of
@@ -522,7 +583,7 @@ export function BacklogTab({
               background: draftRunning !== null ? 'var(--green)' : 'var(--muted)',
             }} />
             <span>
-              drafting{draftSession.id ? ` · ${draftSession.id}` : ''}
+              drafting{draftSession.id ? ` · ${draftSession.id}` : (draftSession.action === 'create_story' ? ' · new story' : '')}
               <span style={{ color: 'var(--muted)' }}>
                 {draftRunning !== null ? ' · running' : ' · idle'}
                 {draftSession.items && draftSession.items.length > 1 ? ` · ${draftSession.items.length} items` : ''}

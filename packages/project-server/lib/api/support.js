@@ -26,6 +26,7 @@ const yaml = require('js-yaml');
 const {
   readItem, writeItem, nextItemId, isValidId,
   backlogDir, projectStatePath, parseBacklogSection, writeBacklogSection,
+  deriveItemPrefix, prefixFromName,
 } = require('../backlog');
 const { tidyMarkdown } = require('../markdown-tidy');
 const { assertInside } = require('../path-guard');
@@ -74,40 +75,6 @@ function serializeReport(report) {
 
 function appendNote(body, note) {
   return `${(body || '').replace(/\s+$/, '')}\n\n> [${new Date().toISOString()}] ${note}\n`;
-}
-
-// ─── item-prefix derivation ──────────────────────────────────────────────────
-
-/**
- * The project's backlog id prefix (FAZ, DR, VK, …). Prefer the dominant prefix
- * among existing backlog item files — that's the ground truth for an established
- * project. Fall back to initials of the project name for a brand-new project
- * with no items yet.
- */
-function deriveItemPrefix(projectRoot, docsPath, config) {
-  const dir = backlogDir(projectRoot, docsPath);
-  const counts = new Map();
-  if (fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir)) {
-      const m = f.match(/^([A-Z]{2,5})-\d{1,5}\.md$/);
-      if (m) counts.set(m[1], (counts.get(m[1]) || 0) + 1);
-    }
-  }
-  if (counts.size > 0) {
-    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
-  }
-  return prefixFromName((config && config.name) || path.basename(projectRoot));
-}
-
-function prefixFromName(name) {
-  const words = String(name || '').split(/[^A-Za-z0-9]+/).filter(Boolean);
-  let p;
-  if (words.length >= 2) p = words.map(w => w[0]).join('');
-  else if (words.length === 1) p = words[0].slice(0, 3);
-  else p = 'ITM';
-  p = p.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5);
-  if (p.length < 2) p = (p + 'XX').slice(0, 2);
-  return p;
 }
 
 // ─── triage prompt ───────────────────────────────────────────────────────────

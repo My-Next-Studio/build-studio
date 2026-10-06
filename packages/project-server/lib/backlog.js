@@ -207,6 +207,120 @@ function nextItemId(projectRoot, docsPath, prefix) {
   return `${prefix}-${String(max + 1).padStart(3, '0')}`;
 }
 
+/**
+ * The project's backlog id prefix (FAZ, DR, VK, …). Prefer the dominant prefix
+ * among existing backlog item files — that's the ground truth for an established
+ * project. Fall back to initials of the project name for a brand-new project
+ * with no items yet.
+ */
+function deriveItemPrefix(projectRoot, docsPath, config) {
+  const dir = backlogDir(projectRoot, docsPath);
+  const counts = new Map();
+  if (fs.existsSync(dir)) {
+    for (const f of fs.readdirSync(dir)) {
+      const m = f.match(/^([A-Z]{2,5})-\d{1,5}\.md$/);
+      if (m) counts.set(m[1], (counts.get(m[1]) || 0) + 1);
+    }
+  }
+  if (counts.size > 0) {
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }
+  return prefixFromName((config && config.name) || path.basename(projectRoot));
+}
+
+function prefixFromName(name) {
+  const words = String(name || '').split(/[^A-Za-z0-9]+/).filter(Boolean);
+  let p;
+  if (words.length >= 2) p = words.map(w => w[0]).join('');
+  else if (words.length === 1) p = words[0].slice(0, 3);
+  else p = 'ITM';
+  p = p.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5);
+  if (p.length < 2) p = (p + 'XX').slice(0, 2);
+  return p;
+}
+
+// ─── Creating an item at a chosen position ───────────────────────────────────
+
+/**
+ * Place `id` in the release groups where the owner chose.
+ *
+ * Position is given relative to an existing item (`after` / `before`) because
+ * that is how the choice is put to the owner — "after FAZ-377, which it
+ * depends on" — and an index would go stale the moment anyone reorders. With no
+ * anchor the item goes to the end of `release`, which is created (at the end)
+ * if it does not exist yet.
+ *
+ * Pure: returns new groups, never mutates its input. Throws on an anchor that
+ * is not in the backlog, or that sits in a different release than the one
+ * named — writing it somewhere the owner did not pick is worse than refusing.
+ *
+ * @returns {{groups: Array<{release:string, items:string[]}>, release: string, index: number}}
+ */
+function insertIntoGroups(groups, id, { release = null, after = null, before = null } = {}) {
+  if (after && before) throw new Error('give after or before, not both');
+  const next = (groups || []).map(g => ({ ...g, items: g.items.filter(x => x !== id) }));
+  const anchor = after || before;
+  if (anchor) {
+    const g = next.find(x => x.items.includes(anchor));
+    if (!g) throw new Error(`${anchor} is not in the backlog, so it cannot anchor the position`);
+    if (release && g.release !== release) {
+      throw new Error(`${anchor} is in "${g.release}", not "${release}"`);
+    }
+    const index = g.items.indexOf(anchor) + (after ? 1 : 0);
+    g.items.splice(index, 0, id);
+    return { groups: next, release: g.release, index };
+  }
+  if (!release) throw new Error('a release, or an item to place it after or before, is required');
+  let g = next.find(x => x.release === release);
+  if (!g) { g = { release, items: [] }; next.push(g); }
+  g.items.push(id);
+  return { groups: next, release: g.release, index: g.items.length - 1 };
+}
+
+/**
+ * Create a backlog item and its marker line in one step.
+ *
+ * The two-place contract (item file + line in project-state.md) is applied by
+ * code, not by an agent editing both files: an agent that writes one and not
+ * the other leaves an orphan the backlog view flags as unlisted. Validation and
+ * placement happen BEFORE anything is written, so a refused request leaves no
+ * half-created item behind.
+ *
+ * @returns {{id: string, release: string, index: number, item: object}}
+ */
+function createItem(projectRoot, docsPath, {
+  title, type = 'Feature', body = '', depends_on = [], release = null, after = null, before = null,
+  config = null, today = new Date().toISOString().slice(0, 10),
+} = {}) {
+  const cleanTitle = String(title || '').replace(/\s+/g, ' ').trim();
+  if (!cleanTitle) throw new Error('title is required');
+  if (!VALID_TYPES.includes(type)) throw new Error(`invalid type "${type}". Valid: ${VALID_TYPES.join(', ')}`);
+  const deps = (Array.isArray(depends_on) ? depends_on : [depends_on]).map(d => String(d || '').trim()).filter(Boolean);
+  for (const d of deps) {
+    if (!isValidId(d)) throw new Error(`invalid id in depends_on: ${d}`);
+    if (!fs.existsSync(itemFilePath(projectRoot, docsPath, d))) throw new Error(`depends_on names ${d}, which has no item file`);
+  }
+
+  const statePath = projectStatePath(projectRoot, docsPath);
+  if (!fs.existsSync(statePath)) throw new Error(`project-state.md not found at ${statePath}`);
+  const content = fs.readFileSync(statePath, 'utf8');
+  if (!content.includes(BACKLOG_START) || !content.includes(BACKLOG_END)) {
+    throw new Error('project-state.md is missing BACKLOG-START/END markers');
+  }
+
+  const id = nextItemId(projectRoot, docsPath, deriveItemPrefix(projectRoot, docsPath, config));
+  const placed = insertIntoGroups(parseBacklogSection(content), id, { release, after, before });
+  const item = {
+    id, title: cleanTitle, type, status: 'Backlog', release: placed.release,
+    created: today, prd: null, depends_on: deps, cost_actual_usd: null,
+    body: String(body || '').trim() + '\n',
+  };
+  // Item first: writeBacklogSection renders display lines from the item files.
+  writeItem(projectRoot, docsPath, item);
+  writeBacklogSection(projectRoot, docsPath, placed.groups);
+  return { id, release: placed.release, index: placed.index, item };
+}
+
 // ─── Companion-spec discovery (from the PRD's own table) ─────────────────────
 
 /**
@@ -532,6 +646,10 @@ module.exports = {
   renderBacklogSection,
   writeBacklogSection,
   nextItemId,
+  deriveItemPrefix,
+  prefixFromName,
+  insertIntoGroups,
+  createItem,
   readBacklog,
   discoverCompanionSpecs,
   parseCompanionSpecsFromPRD,

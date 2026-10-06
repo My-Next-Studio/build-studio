@@ -16,8 +16,11 @@ const express = require('express');
 const {
   readBacklog, readItem, writeItem, isValidId, discoverCompanionSpecs,
   writeBacklogSection, listItems, applyAutoTransitionsForFeatures, parseBacklogSection,
+  createItem, projectStatePath, itemFilePath,
   VALID_STATUSES,
 } = require('../backlog');
+const { tidyMarkdown } = require('../markdown-tidy');
+const { scopedCommit } = require('../scoped-commit');
 const fs = require('fs');
 const path = require('path');
 
@@ -134,6 +137,58 @@ function createBacklogRouter(config) {
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  /**
+   * Create a story (or task, or bug) at the position the owner chose.
+   *
+   * Called by the `create_story` skill at the end of its interview, never by
+   * the hub directly: the interview is where the content and the position are
+   * settled, this is where they are written. The engine allocates the id and
+   * applies both halves of the backlog contract, so an agent cannot leave an
+   * item file without its marker line, or invent a prefix (see createItem).
+   *
+   * Body: { title, type?, body?, depends_on?: string[],
+   *         release?, after?: id, before?: id }
+   * Position: `after`/`before` an existing item, or the end of `release`.
+   *
+   * Commits the two files, pathspec-scoped, on whatever branch is checked out
+   * (as drafting does). A failed commit is reported, not fatal: the item
+   * exists, and an uncommitted backlog file blocks the next execution start.
+   */
+  router.post('/backlog/items', async (req, res) => {
+    const b = req.body || {};
+    for (const k of ['after', 'before']) {
+      if (b[k] != null && !isValidId(b[k])) return res.status(400).json({ error: `invalid id in ${k}: ${b[k]}` });
+    }
+    let created;
+    try {
+      created = createItem(config.projectRoot, docsPath, {
+        title: b.title,
+        type: b.type || 'Feature',
+        // Agents put lists straight under bold lead-ins; a project that lints
+        // docs in pre-commit then refuses the commit (fazon FAZ-382).
+        body: tidyMarkdown(String(b.body || '')),
+        depends_on: b.depends_on || [],
+        release: b.release || null,
+        after: b.after || null,
+        before: b.before || null,
+        config,
+      });
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    let commit = null;
+    if (fs.existsSync(path.join(config.projectRoot, '.git'))) {
+      const rel = (p) => path.relative(config.projectRoot, p);
+      commit = await scopedCommit(config.projectRoot, [
+        rel(itemFilePath(config.projectRoot, docsPath, created.id)),
+        rel(projectStatePath(config.projectRoot, docsPath)),
+      ], `docs(${created.id}): add story to the backlog`);
+      if (!commit.committed) console.warn(`[backlog] ${created.id} created but not committed: ${commit.reason}`);
+    }
+    res.status(201).json({ id: created.id, release: created.release, index: created.index, item: created.item, commit });
   });
 
   /**

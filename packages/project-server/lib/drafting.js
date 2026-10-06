@@ -212,6 +212,68 @@ function continuePrompt({ itemId, title, sameItem = false }) {
     + ` Read the item first, then ask what you need to know.`;
 }
 
+// ─── Create story ────────────────────────────────────────────────────────────
+//
+// The Create story button runs the `create_story` skill in THIS session, not a
+// session of its own (owner request 2026-10-06): a story usually comes up while
+// drafting a neighbouring one, and the conversation that just discussed that
+// area is the one that should write it down. It shares the one-at-a-time rule
+// too: while a draft is running the button is disabled, and the owner asks for
+// a story in the terminal instead, which reaches the same skill.
+
+/** Skill the Create story button runs. Shipped in templates/default. */
+const CREATE_STORY_SKILL = 'create_story';
+
+/**
+ * Words the opening prompt always contains. For Codex and OpenCode the session
+ * id is read back from the CLI's own records by finding the prompt that opened
+ * it (draft-session-id.js); a Draft session is found by its item id, and a
+ * session opened by Create story has none, so it is found by this phrase.
+ */
+const CREATE_STORY_MARKER = 'create a new backlog story';
+
+function createStoryPrompt({ port }) {
+  // Backticked-skill form, as draftPrompt explains.
+  return `Use the \`${CREATE_STORY_SKILL}\` skill to ${CREATE_STORY_MARKER} with the owner.
+
+This is an INTERACTIVE session. The owner is at the keyboard and will answer
+questions. Interview them about the story, agree its position in the backlog
+with them, and file it through Build Studio's backlog endpoint:
+POST http://localhost:${port}/api/backlog/items
+
+Start by reading the backlog order and the items related to what the owner
+describes, then open the conversation by asking what the story is.`;
+}
+
+/** The same request, to a conversation that already knows how this project works. */
+function continueCreateStoryPrompt({ port }) {
+  return `Next: ${CREATE_STORY_MARKER} with the owner, using the \`${CREATE_STORY_SKILL}\` skill.`
+    + ' Use what we have discussed in this session; do not ask what it already answers.'
+    + ` File it through POST http://localhost:${port}/api/backlog/items.`
+    + ' Start by asking what the story is.';
+}
+
+/**
+ * Put the create_story skill in the project when it lacks one.
+ *
+ * Template skills are copied at onboarding only, so every project onboarded
+ * before this skill existed would get a button whose skill is not there — and
+ * an agent told to use a missing skill improvises one. A project that already
+ * has the skill keeps its own: it may have been edited.
+ *
+ * @returns {string|null} the repo-relative path written, or null when nothing was
+ */
+function ensureCreateStorySkill(projectRoot, templateDir) {
+  const rel = path.join('.claude', 'skills', CREATE_STORY_SKILL, 'SKILL.md');
+  const dst = path.join(projectRoot, rel);
+  if (fs.existsSync(dst)) return null;
+  const src = templateDir && path.join(templateDir, rel);
+  if (!src || !fs.existsSync(src)) return null;
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+  return rel;
+}
+
 /**
  * The files a finished draft leaves behind, repo-relative, for committing.
  *
@@ -271,4 +333,9 @@ module.exports = {
   quoteFlagValues,
   draftPrompt,
   continuePrompt,
+  CREATE_STORY_SKILL,
+  CREATE_STORY_MARKER,
+  createStoryPrompt,
+  continueCreateStoryPrompt,
+  ensureCreateStorySkill,
 };

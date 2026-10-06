@@ -1,8 +1,8 @@
 # Plan: PRD drafting as a first-class, interactive step
 
 > **Status: implemented 2026-10-02** (proposed 2026-09-06). Increments 1, 2
-> (all three CLIs) and 4 are built; increment 3 is dropped. See *Where this
-> stands* at the end.
+> (all three CLIs) and 4 are built; increment 3 is dropped. Create story added
+> 2026-10-06. See *Where this stands* at the end.
 >
 > Owner request: a **Draft** button on backlog items in status `Backlog`,
 > alongside Review and Execute, opening a session the owner can talk to — and
@@ -289,6 +289,38 @@ retrofitting later.
   which answers one message and exits, so an OpenCode draft could never ask
   the owner anything. They now open the TUI with `--prompt`. The TUI has no
   `--variant`, so the effort setting is not passed.
+
+### Built since (2026-10-06): Create story
+
+Owner request: a story can be drafted without leaving the terminal, but not
+created. A **Create story** button at the top of the backlog now runs a
+`create_story` skill in the drafting session.
+
+- **The same session as Draft.** A new story usually comes up while drafting a
+  neighbouring one, and that conversation already holds the context the story
+  needs. Create story resumes it, under the same one-at-a-time rule: while a
+  draft runs the button is disabled, and its tooltip says to ask for a story in
+  the terminal, which reaches the same skill (owner decision 2026-10-06, chosen
+  over typing into the live session or queueing the click).
+- **The skill interviews; the engine files.** The skill reads the backlog
+  order, the related items and this conversation, asks about outcome, boundary,
+  type and dependencies (about four questions at most), and checks for an
+  existing item that already covers the idea. It then files the story through a
+  new `POST /backlog/items`. The endpoint allocates the id from the prefix in
+  use, writes the item file and its marker line, and makes one pathspec-scoped
+  commit of the two. An agent editing both files by hand is how an item ends up
+  with the wrong prefix or no marker line.
+- **The owner sets the order.** The skill proposes a position, after every
+  unbuilt dependency and before anything that will depend on the story, with a
+  one-line reason, and asks the owner to confirm or pick another. Positions are
+  named by neighbouring item (`after` / `before`), not an index, which would go
+  stale on the next reorder. An anchor in a different release than the one
+  named is refused rather than guessed.
+- **Installed where it is missing.** Template skills are copied at onboarding
+  only. Every drafting launch installs `create_story` into a project that lacks
+  it, and commits it. A project's own copy is never overwritten.
+- **A story is not a PRD.** The skill records what is wanted, why, and where it
+  ends. It does not start drafting; the owner clicks Draft when ready.
 
 ### Open
 

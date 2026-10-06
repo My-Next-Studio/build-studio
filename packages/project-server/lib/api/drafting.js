@@ -8,7 +8,9 @@ const {
   DRAFT_STEP, draftSessionName, draftWindowName,
   loadDraftState, saveDraftState, buildDraftCommand, draftPrompt, continuePrompt,
   ensureIgnored, draftCommitPaths, draftCommitMessage,
+  CREATE_STORY_SKILL, CREATE_STORY_MARKER, createStoryPrompt, continueCreateStoryPrompt, ensureCreateStorySkill,
 } = require('../drafting');
+const { resolveTemplateDir } = require('../agents-md');
 const { scopedCommit } = require('../scoped-commit');
 const {
   resolveStepLaunchSettings, canPinSession, canResumeSession, sessionPinFlag, sessionResumeFlag,
@@ -22,7 +24,7 @@ const { computeDraftDelta, formatDraftDelta } = require('../draft-delta');
  * Drafting runs OUTSIDE the workflow slot — see lib/drafting.js for why that is
  * a requirement rather than a convenience.
  */
-function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraftSessionId } = {}) {
+function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraftSessionId, templateDir = resolveTemplateDir() } = {}) {
   const router = express.Router();
   const projectRoot = config.projectRoot;
   const projectName = config.name || path.basename(projectRoot);
@@ -41,8 +43,10 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
     if (session.cliSessionId) return session.cliSessionId;
     if (canPinSession(session.cli) || !canResumeSession(session.cli)) return null;
     const itemId = session.openingItemId || (session.items || [])[0];
+    // A session opened by Create story has no item; it is found by its marker.
+    const marker = !itemId && session.openingMarker ? { marker: session.openingMarker } : {};
     try {
-      return findSessionId({ cli: session.cli, projectRoot, since: session.startedAt, itemId }) || null;
+      return findSessionId({ cli: session.cli, projectRoot, since: session.startedAt, itemId, ...marker }) || null;
     } catch (e) {
       console.warn(`[draft] could not look up the ${session.cli} session id: ${e.message}`);
       return null;
@@ -210,6 +214,55 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
       });
     }
 
+    return launchInSession(res, {
+      itemId,
+      wantFresh,
+      freshPrompt: () => draftPrompt({ itemId, title: item && item.title }),
+      resumePrompt: (prior) => continuePrompt({ itemId, title: item && item.title, sameItem: prior.lastItemId === itemId }),
+    });
+  });
+
+  /**
+   * Create a backlog story with the owner, in the drafting session.
+   *
+   * The same conversation as Draft, deliberately (owner request 2026-10-06): a
+   * story usually comes up while drafting its neighbour, and that conversation
+   * already holds the context the story needs. So this shares Draft's session,
+   * its resume path and its one-at-a-time rule — the hub disables the button
+   * while a draft runs, and the owner asks for the story in the terminal.
+   *
+   * The agent files the story through POST /backlog/items, which allocates the
+   * id, places it and commits it. Nothing here writes to the backlog.
+   */
+  router.post('/draft/create-story', async (req, res) => {
+    const wantFresh = (req.body && req.body.fresh) === true;
+    return launchInSession(res, {
+      itemId: null,
+      wantFresh,
+      freshPrompt: () => createStoryPrompt({ port: config.port }),
+      resumePrompt: () => continueCreateStoryPrompt({ port: config.port }),
+    });
+  });
+
+  /**
+   * Start, continue, or resume the drafting session with a given opening
+   * request — a draft of `itemId`, or (itemId null) a new story.
+   */
+  async function launchInSession(res, { itemId, wantFresh, freshPrompt, resumePrompt }) {
+    // Every drafting session gets the create_story skill, not only one opened
+    // by Create story: while a draft runs, the owner asks for a story in the
+    // terminal, and that must reach the skill too. Projects onboarded before it
+    // existed lack it, so it is installed here, before the CLI starts, and
+    // committed so it does not sit untracked on the default branch.
+    try {
+      const added = ensureCreateStorySkill(projectRoot, templateDir);
+      if (added && fs.existsSync(path.join(projectRoot, '.git'))) {
+        const r = await scopedCommit(projectRoot, [added], `chore: add the ${CREATE_STORY_SKILL} skill`);
+        if (!r.committed) console.warn(`[draft] ${added} installed but not committed: ${r.reason}`);
+      }
+    } catch (e) {
+      console.warn(`[draft] could not install the ${CREATE_STORY_SKILL} skill: ${e.message}`);
+    }
     // Ignore the state file before writing it, and commit the rule at once: a
     // modified .gitignore on the default branch blocks the next execution run.
     // Pathspec-scoped, so nothing an agent has staged is swept in. Advisory —
@@ -290,12 +343,10 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
         console.warn(`[draft] could not compute the change delta: ${e.message}`);
       }
     }
-    const prompt = resuming
-      ? continuePrompt({ itemId, title: item && item.title, sameItem: prior.lastItemId === itemId }) + delta
-      : draftPrompt({ itemId, title: item && item.title });
+    const prompt = resuming ? resumePrompt(prior) + delta : freshPrompt();
     const inlined = agentSkills.inlineReferencedDefinitions(prompt, { cli, roots: [projectRoot], fs });
     if (inlined) {
-      console.log(`[draft] inlined .claude definitions for ${itemId} (${cli}): ${inlined.length} chars`);
+      console.log(`[draft] inlined .claude definitions for ${itemId || 'a new story'} (${cli}): ${inlined.length} chars`);
     }
 
     const promptFile = path.join(projectRoot, `prompt-${windowName}.txt`);
@@ -338,16 +389,23 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
       logFile,
       startedAt: resuming ? (prior.startedAt || new Date().toISOString()) : new Date().toISOString(),
       lastUsedAt: new Date().toISOString(),
+      // null after Create story: the session is no longer on the last draft's
+      // item, and "continue where we left off" would be wrong for it.
       lastItemId: itemId,
-      // The item the conversation OPENED on: its prompt is what identifies a
+      lastAction: itemId ? 'draft' : 'create_story',
+      // What the conversation OPENED on: its prompt is what identifies a
       // Codex/OpenCode session when the id is read back (draft-session-id.js).
+      // An item for a Draft, the marker phrase for Create story.
       openingItemId: resuming ? (prior.openingItemId || (prior.items || [])[0] || itemId) : itemId,
-      items: resuming ? [...new Set([...(prior.items || []), itemId])] : [itemId],
+      openingMarker: resuming ? (prior.openingMarker || null) : (itemId ? null : CREATE_STORY_MARKER),
+      // The items this session drafted, which End draft commits. A story is
+      // committed when it is filed, so Create story adds nothing here.
+      items: [...new Set([...(resuming ? (prior.items || []) : []), ...(itemId ? [itemId] : [])])],
       resumable: canResumeSession(cli),
     };
     saveDraftState(config.statePath, { ...state, sessionName, session });
     res.json({ ok: true, sessionName, mode: resuming ? 'resumed' : 'fresh', deltaLines: delta ? delta.split('\n').filter((l) => l.startsWith('- ')).length : 0, ...session });
-  });
+  }
 
   return router;
 }
