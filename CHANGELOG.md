@@ -43,6 +43,35 @@ that move underneath you without your having edited anything.
   `docs/project-state.md` at the chosen position, and commits exactly those two
   files.
 
+- **Run CI locally, in Operations → CI/CD.** For a project whose CI is slow
+  and whose failures used to show up only on GitHub, a project that has a local
+  runner can declare it:
+
+  ```yaml
+  deployment:
+    local_ci:
+      cmd: npm run ci:local      # run in cwd
+      cwd: web
+      status: web/.ci-local/status.json
+  ```
+
+  A **Run CI locally** button then appears above Push.
+  - **The run:** it starts `cmd` as a background process that keeps running if
+    you close the tab or restart Build Studio. Output goes to
+    `tmp/.logs/local-ci.log`. One run at a time per project.
+  - **Cancel:** stops the process group Build Studio started, and nothing else.
+  - **The panel:** shows the current step, every step with its result and time,
+    and the elapsed time, read from the runner's status file. A failure shows
+    the failing step and the end of the log.
+  - **The badge beside Push:** "Local CI ✔ for <sha>" only when a full run
+    passed on a clean tree at the current HEAD. Otherwise it says why not ("not
+    run for HEAD", "ran on a dirty tree", "partial run", "failed at <step>").
+  - **Interrupted runs:** a run that was still `running` when its process died
+    shows as interrupted.
+
+  It is information only: Push is never blocked by it. Projects without the
+  block see nothing new.
+
 ### Fixed
 
 - **Any web page open in your browser could start or end a drafting session.**
@@ -83,7 +112,10 @@ that move underneath you without your having edited anything.
 full inject (`npx next build` in `packages/hub`, then
 `node inject-resources.js` in `packages/desktop`), and restart.
 
-**In each managed project**: nothing to do. The first drafting session in a
+**In each managed project**: nothing is required. To get Run CI locally, add
+a `deployment.local_ci` block (above) to the project's
+`.build-studio/config.yaml`. It takes effect without a restart. The first
+drafting session in a
 project installs `.claude/skills/create_story/` and commits it. A project that
 already has a skill of that name keeps its own. A project that wants its
 builder to keep running the full UI suite must set `qa_validation.scope: full`

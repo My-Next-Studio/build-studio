@@ -25,6 +25,7 @@ const { createRunbooksRouter } = require('./api/runbooks');
 const { createOpsUITestsRouter } = require('./api/ops-uitests');
 const { createDemoSetupRouter } = require('./api/demo-setup');
 const { createBacklogRouter } = require('./api/backlog');
+const { createLocalCiRouter } = require('./api/local-ci');
 const { createSupportRouter } = require('./api/support');
 const { createCliConfigRouter } = require('./api/cli-config');
 const { createOverseer } = require('./overseer');
@@ -180,6 +181,7 @@ function startServer(projectRoot, opts = {}) {
   const publisher = createPublisher(config);
   const monitor = createMonitor(config, { extraAlerts: () => publisher.alerts() });
   const deploymentRouter = createDeploymentRouter(config, gitOps, { monitor });
+  const localCiRouter = createLocalCiRouter(config);
   const monitorRouter = createMonitorRouter(config, monitor);
   const publishingRouter = createPublishingRouter(config, publisher);
   const runbooksRouter = createRunbooksRouter(config);
@@ -197,6 +199,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', workflowRouter);
   app.use('/api', runRouter);
   app.use('/api', deploymentRouter);
+  app.use('/api', localCiRouter);
   app.use('/api', monitorRouter);
   app.use('/api', publishingRouter);
   app.use('/api', runbooksRouter);

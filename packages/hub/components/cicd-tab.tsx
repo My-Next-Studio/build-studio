@@ -78,6 +78,29 @@ interface CiProposal {
   hasChanges: boolean
 }
 
+/** GET /deployment/local-ci — see project-server lib/local-ci.js. */
+interface LocalCiStep { label: string; status: 'pending' | 'running' | 'passed' | 'failed'; seconds: number | null }
+interface LocalCi {
+  configured: boolean
+  cmd?: string
+  verdict?: {
+    state: 'idle' | 'starting' | 'running' | 'passed' | 'failed' | 'cancelled' | 'interrupted'
+    failedStep?: string | null
+    beforeStatus?: boolean
+    exitCode?: number | null
+  }
+  badge?: { tone: 'ok' | 'neutral' | 'warn'; label: string }
+  status?: {
+    state: string; full: boolean; commit: string; dirty: boolean
+    startedAt: string; finishedAt: string | null
+    current: { index: number; total: number; label: string } | null
+    steps: LocalCiStep[]
+  } | null
+  elapsedMs?: number | null
+  logTail?: string
+  canCancel?: boolean
+}
+
 type InvestigatePhase =
   | { phase: 'idle' }
   | { phase: 'running'; runId: string }
@@ -101,6 +124,35 @@ export function CicdTab() {
   const [commitResult, setCommitResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [ciStatus, setCiStatus] = useState<CiStatus | null>(null)
   const ciPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Local CI (deployment.local_ci). Polled every 5 s while a run is in
+  // progress and every 30 s otherwise: a run takes 45–85 minutes and is read
+  // back from the server on every load, so a reload never loses it.
+  const [localCi, setLocalCi] = useState<LocalCi | null>(null)
+  const [localCiBusy, setLocalCiBusy] = useState(false)
+  const [localCiError, setLocalCiError] = useState<string | null>(null)
+  const loadLocalCi = useCallback(() => {
+    api.get('/deployment/local-ci').then((d: LocalCi) => setLocalCi(d)).catch(() => {})
+  }, [api])
+  const localCiActive = localCi?.verdict?.state === 'running' || localCi?.verdict?.state === 'starting'
+  useEffect(() => {
+    loadLocalCi()
+    const id = setInterval(loadLocalCi, localCiActive ? 5000 : 30000)
+    return () => clearInterval(id)
+  }, [loadLocalCi, localCiActive])
+  const localCiAction = async (action: 'start' | 'cancel') => {
+    setLocalCiBusy(true)
+    setLocalCiError(null)
+    try {
+      const d = await api.post(`/deployment/local-ci/${action}`, {})
+      if (d && d.error) setLocalCiError(d.error)
+      else if (d) setLocalCi(d)
+    } catch (e) {
+      setLocalCiError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLocalCiBusy(false)
+    }
+  }
 
   // CI-fix investigation
   const [investigate, setInvestigate] = useState<InvestigatePhase>({ phase: 'idle' })
@@ -538,6 +590,44 @@ export function CicdTab() {
                 {rebaseResult.message}
               </span>
             )}
+            {/* Local CI sits above Push for the same reason Rebase does: it is
+                the step you take before pushing. It never gates Push. */}
+            {localCi?.configured && (
+              localCi.canCancel ? (
+                <button
+                  onClick={() => { void localCiAction('cancel') }}
+                  disabled={localCiBusy}
+                  title="Stop the local CI run (SIGTERM to the process group Build Studio started)."
+                  style={{
+                    padding: '6px 16px', borderRadius: 6, border: '1px solid var(--red)',
+                    background: 'transparent', color: 'var(--red)',
+                    fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
+                    cursor: localCiBusy ? 'default' : 'pointer', opacity: localCiBusy ? 0.6 : 1,
+                  }}
+                >
+                  {localCiBusy ? 'Cancelling…' : 'Cancel local CI'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => { void localCiAction('start') }}
+                  disabled={localCiBusy || localCiActive}
+                  title={`Run CI on this machine before pushing: ${localCi.cmd || ''}. Takes 45–85 minutes and keeps running if you leave this tab.`}
+                  style={{
+                    padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border)',
+                    background: 'var(--surface2)', color: localCiActive ? 'var(--muted)' : 'var(--text)',
+                    fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
+                    cursor: localCiBusy || localCiActive ? 'default' : 'pointer', opacity: localCiBusy ? 0.6 : 1,
+                  }}
+                >
+                  {localCiBusy ? 'Starting…' : localCiActive ? 'Local CI running…' : 'Run CI locally'}
+                </button>
+              )
+            )}
+            {localCiError && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--red)', maxWidth: 260, textAlign: 'right' }}>
+                {localCiError}
+              </span>
+            )}
             <button
               onClick={handlePush}
               disabled={!canPush || pushing}
@@ -561,6 +651,21 @@ export function CicdTab() {
                 maxWidth: 260, textAlign: 'right',
               }}>
                 {pushResult.message}
+              </span>
+            )}
+            {/* Information only: whether the last local run still describes
+                HEAD. Push stays enabled whatever it says. */}
+            {localCi?.configured && localCi.badge && (
+              <span
+                title="Whether the last local CI run covered exactly this commit: a full run, a clean tree, and the current HEAD."
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 10, padding: '2px 8px', borderRadius: 10,
+                  border: `1px solid ${localCi.badge.tone === 'ok' ? 'var(--green)' : localCi.badge.tone === 'warn' ? 'var(--orange)' : 'var(--border)'}`,
+                  color: localCi.badge.tone === 'ok' ? 'var(--green)' : localCi.badge.tone === 'warn' ? 'var(--orange)' : 'var(--muted)',
+                  maxWidth: 300, textAlign: 'right',
+                }}
+              >
+                {localCi.badge.label}
               </span>
             )}
             {/* Deploy targets (web GHA + iOS local fastlane etc.) — one per target,
@@ -620,6 +725,10 @@ export function CicdTab() {
             })}
           </div>
         </div>
+
+        {localCi?.configured && localCi.verdict && localCi.verdict.state !== 'idle' && (
+          <LocalCiPanel ci={localCi} />
+        )}
 
         {/* Inline commit-message input — full card width, appears on Commit click */}
         {showCommitInput && (
@@ -895,6 +1004,79 @@ const ciBtnPrimary: React.CSSProperties = {
 const ciBtnGhost: React.CSSProperties = {
   padding: '5px 12px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent',
   color: 'var(--muted)', fontFamily: 'var(--mono)', fontSize: 11, cursor: 'pointer',
+}
+
+function fmtSecs(total: number | null | undefined): string {
+  if (total == null) return ''
+  const s = Math.round(total)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+/** Progress and result of the local CI run, full card width. */
+function LocalCiPanel({ ci }: { ci: LocalCi }) {
+  const v = ci.verdict!
+  const st = ci.status
+  const [showLog, setShowLog] = useState(false)
+  const color = v.state === 'passed' ? 'var(--green)'
+    : v.state === 'failed' || v.state === 'interrupted' ? 'var(--red)'
+    : v.state === 'cancelled' ? 'var(--muted)' : 'var(--accent)'
+  const headline = {
+    starting: 'Starting…',
+    running: st?.current ? `Step ${st.current.index} of ${st.current.total} — ${st.current.label}` : 'Running',
+    passed: `Passed${st && !st.full ? ' (partial run)' : ''}${st?.dirty ? ' — on a dirty tree' : ''}`,
+    failed: v.failedStep ? `Failed at ${v.failedStep}`
+      : v.beforeStatus ? `Failed before the runner started${v.exitCode != null ? ` (exit ${v.exitCode})` : ''}` : 'Failed',
+    cancelled: 'Cancelled',
+    interrupted: 'Interrupted — the run stopped without finishing (Build Studio or the machine went down). Run it again.',
+    idle: '',
+  }[v.state]
+  const logOpen = showLog || v.state === 'failed'
+  const icon = (s: LocalCiStep['status']) => s === 'passed' ? '✔' : s === 'failed' ? '✖' : s === 'running' ? '▶' : '·'
+  const iconColor = (s: LocalCiStep['status']) => s === 'passed' ? 'var(--green)' : s === 'failed' ? 'var(--red)' : s === 'running' ? 'var(--accent)' : 'var(--muted)'
+  return (
+    <div style={{
+      padding: '10px 16px 12px', borderTop: '1px solid var(--border-subtle)',
+      display: 'flex', flexDirection: 'column', gap: 8, fontFamily: 'var(--mono)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)' }}>
+          Local CI
+        </span>
+        <span style={{ fontSize: 11, color }}>{headline}</span>
+        <span style={{ fontSize: 10, color: 'var(--muted)' }}>
+          {ci.elapsedMs != null ? fmtSecs(ci.elapsedMs / 1000) : ''}
+          {st?.commit ? ` · ${st.commit.slice(0, 7)}` : ''}
+        </span>
+        <span style={{ flex: 1 }} />
+        {ci.logTail && v.state !== 'failed' && (
+          <button onClick={() => setShowLog(x => !x)} className="wf-btn secondary" style={{ fontSize: 10, padding: '2px 8px' }}>
+            {showLog ? 'Hide log' : 'Show log'}
+          </button>
+        )}
+      </div>
+      {st && st.steps && st.steps.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '2px 16px' }}>
+          {st.steps.map((step, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, fontSize: 10, color: step.status === 'pending' ? 'var(--muted)' : 'var(--text-dim)', minWidth: 0 }}>
+              <span style={{ color: iconColor(step.status), width: 10, flexShrink: 0 }}>{icon(step.status)}</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }} title={step.label}>{step.label}</span>
+              <span style={{ color: 'var(--muted)', flexShrink: 0 }}>{fmtSecs(step.seconds)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {logOpen && ci.logTail && (
+        <pre style={{
+          margin: 0, maxHeight: 260, overflow: 'auto', padding: '8px 10px', borderRadius: 4,
+          background: 'var(--surface2)', border: '1px solid var(--border)',
+          fontSize: 10, lineHeight: 1.45, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        }}>{ci.logTail}</pre>
+      )}
+    </div>
+  )
 }
 
 function CiField({ label, value }: { label: string; value: string }) {
