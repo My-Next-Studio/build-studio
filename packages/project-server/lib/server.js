@@ -493,6 +493,14 @@ function startServer(projectRoot, opts = {}) {
   // re-blocking surfaces instead of being hammered the instant each reset lands.
   const limitBlock = require('./limit-block');
   const LIMIT_MAX_AUTO_RESUMES = 3;
+  // Non-interactive CLIs (codex) exit on a usage limit, so resuming means
+  // relaunching the conversation, and a relaunch that is still limited is
+  // refused at once for free. Probe at this interval before the announced reset.
+  const LIMIT_PROBE_EVERY_MS = 60 * 60 * 1000;
+  // After a relaunch, a pane with no limit notice proves only that the screen was
+  // cleared. Keep the block (and its counters) this long before calling it
+  // resumed, so a relaunch that hits the limit again is counted, not restarted.
+  const LIMIT_RELAUNCH_GRACE_MS = 5 * 60 * 1000;
   const LIMIT_RESUME_MESSAGE = 'The usage limit that interrupted you has reset. Continue your assigned task from where you left off — your original instructions still apply in full, including reporting your structured feedback via the curl POST at the end of your prompt.';
 
   // Periodic stale session + timeout check (every 30s)
@@ -645,12 +653,54 @@ function startServer(projectRoot, opts = {}) {
             // returning agent came to carry a whole step forward while five
             // others had said nothing (2026-08-03). It is still running; it is
             // just waiting.
+            const nonInteractive = agentStalled.NON_INTERACTIVE_CLIS.has(agent.cli);
             const verdict = limitBlock.isResumeDue(agent.blockedOnLimit, new Date(now), {
               maxResumes: LIMIT_MAX_AUTO_RESUMES,
+              ...(nonInteractive ? { probeEveryMs: LIMIT_PROBE_EVERY_MS } : {}),
             });
             if (verdict.due) {
               try {
-                if (limit.needsConfirm) {
+                if (nonInteractive) {
+                  // The process has EXITED; typing the resume message into its
+                  // pane typed it into a bare shell (zsh: command not found:
+                  // The), three times, and the run never continued
+                  // (launch-studio, 2026-10-06). Relaunch the conversation
+                  // instead, and only when the pane really is back at a shell.
+                  const exited = agentRecovery.paneReturnedToShell({
+                    paneCommand: tmuxOps.paneCommand(target),
+                    hasLiveChild: tmuxOps.hasLiveDescendant(tmuxOps.panePid(target)),
+                  });
+                  const sessionId = agent.cliSessionId
+                    || (agent.cli === 'codex' ? codexTelemetry.sessionIdFromLog(logFile) : null);
+                  if (!exited) {
+                    // Still running (it may be printing the notice on its way
+                    // out). Next tick.
+                  } else if (!agent.limitResumeScript || !sessionId) {
+                    if (!agent.blockedOnLimit.cannotRelaunch) {
+                      agent.blockedOnLimit.cannotRelaunch = !agent.limitResumeScript
+                        ? `${agent.cli} agent launched before limit relaunch existed; relaunch the step`
+                        : 'no session id in the agent log to resume';
+                      console.warn(`[limit] ${agent.role} cannot be relaunched automatically — ${agent.blockedOnLimit.cannotRelaunch}`);
+                      changed = true;
+                    }
+                  } else {
+                    // Clear the old notice first, screen and scrollback, or the
+                    // relaunched agent still reads as blocked.
+                    tmuxOps.clearHistory(target);
+                    tmuxOps.sendKeys(target, `clear; zsh ${agent.limitResumeScript} ${sessionId}`, config.projectRoot);
+                    const b = agent.blockedOnLimit;
+                    b.relaunchedAt = new Date(now).toISOString();
+                    if (verdict.probe) {
+                      b.probeCount = (b.probeCount || 0) + 1;
+                      b.lastProbeAt = b.relaunchedAt;
+                    } else {
+                      b.resumeCount = (b.resumeCount || 0) + 1;
+                      b.lastResumeAt = b.relaunchedAt;
+                    }
+                    console.log(`[limit] ${agent.role} relaunched (${agent.cli} session ${sessionId}) — ${verdict.reason}`);
+                    changed = true;
+                  }
+                } else if (limit.needsConfirm) {
                   // The CLI's chooser is on screen with "Stop and wait for
                   // limit to reset" already highlighted. It needs a bare Enter,
                   // NOT a pasted sentence — prose typed into a chooser goes
@@ -672,8 +722,11 @@ function startServer(projectRoot, opts = {}) {
             }
             continue; // never fall through to the stall timeout while blocked
           }
-          // Output resumed after a block — the agent is working again.
-          if (agent.blockedOnLimit) {
+          // Output resumed after a block — the agent is working again. Not yet
+          // straight after a relaunch: the cleared screen is not evidence.
+          const inRelaunchGrace = !!(agent.blockedOnLimit && agent.blockedOnLimit.relaunchedAt
+            && now - Date.parse(agent.blockedOnLimit.relaunchedAt) < LIMIT_RELAUNCH_GRACE_MS);
+          if (agent.blockedOnLimit && !inRelaunchGrace) {
             console.log(`[limit] ${agent.role} resumed — clearing the block`);
             agent.blockedOnLimit = undefined;
             changed = true;

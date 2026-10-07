@@ -2464,6 +2464,31 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         agent.resumeScript = resumeScriptName;
       }
 
+      // Codex: a script to continue the conversation after a usage limit lifts.
+      // `codex exec` EXITS on the limit, so the watchdog's "the limit has
+      // reset, continue" message landed in a bare shell as a command (zsh:
+      // command not found: The) and the run never resumed (launch-studio,
+      // 2026-10-06). The session id is not known at launch — codex picks it and
+      // prints it — so it is the script's argument, read from the log when the
+      // watchdog runs it. Same flags as the launch, so the model and effort hold.
+      if (agentCli === 'codex') {
+        const limitPromptFile = `prompt-limit-resume-${windowName}.txt`;
+        const limitScriptName = `start-${windowName}-limit-resume.sh`;
+        fs.writeFileSync(path.join(agentCwd, limitPromptFile),
+          'The usage limit that interrupted you has lifted and this session has been resumed with your context intact. Continue your assigned task from where you left off. Your original instructions still apply in full, including reporting your structured feedback via the curl POST at the end of your prompt.', 'utf-8');
+        fs.writeFileSync(path.join(agentCwd, limitScriptName), `#!/bin/zsh
+eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null
+unset PORT
+if ! command -v codex >/dev/null 2>&1; then
+  for p in /opt/homebrew/bin /usr/local/bin "$HOME/.npm-global/bin" "$HOME/.local/bin"; do
+    if [ -x "$p/codex" ]; then PATH="$p:$PATH"; break; fi
+  done
+fi
+${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat '${limitPromptFile}')"
+`, { mode: 0o755 });
+        agent.limitResumeScript = limitScriptName;
+      }
+
       const logFile = path.join(logsPath, `${windowName}-${wf.id}.log`);
       const keyUnset = unsetKey ? 'unset ANTHROPIC_API_KEY && ' : '';
 

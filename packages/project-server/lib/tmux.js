@@ -317,6 +317,15 @@ function createTmuxOps(config) {
     execFileSync('tmux', ['send-keys', '-t', target, 'Enter']);
   }
 
+  /**
+   * Drop a pane's scrollback. The limit watchdog reads the last 200 lines of a
+   * pane for a usage-limit notice, so a notice left from before a relaunch would
+   * keep a running agent looking blocked.
+   */
+  function clearHistory(target) {
+    try { execFileSync('tmux', ['clear-history', '-t', target], { stdio: 'ignore' }); } catch (_) { /* window gone */ }
+  }
+
   function openTerminal(sessionName) {
     const osa = `tell application "Terminal"\n  do script "tmux attach-session -t ${sessionName}"\n  activate\nend tell`;
     try { execFileSync('osascript', ['-'], { input: osa }); } catch (_) {}
@@ -339,6 +348,7 @@ function createTmuxOps(config) {
     panePid,
     hasLiveDescendant,
     sendMessage,
+    clearHistory,
     openTerminal,
   };
 }

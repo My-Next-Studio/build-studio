@@ -86,6 +86,10 @@ function parseLimitNotice(text, now = new Date()) {
  */
 function parseResetTime(raw, seenAt = new Date()) {
   const now = seenAt;
+  const dated = parseDatedReset(raw);
+  if (dated) return dated;
+  const relative = parseRelativeReset(raw, now);
+  if (relative) return relative;
   const m = RESET_RE.exec(raw || '');
   if (!m) return null;
   let hour = Number(m[1]);
@@ -105,6 +109,43 @@ function parseResetTime(raw, seenAt = new Date()) {
   return at;
 }
 
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/**
+ * Codex's form, a full date in the machine's local time:
+ *
+ *     try again at Oct 10th, 2026 6:26 AM.
+ *
+ * The clock-only RESET_RE never matched it, so a Codex block had no reset time
+ * at all (launch-studio, 2026-10-06).
+ */
+const DATED_RE = /try again at\s+([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+(\d{1,2}):(\d{2})\s*(am|pm)?/i;
+
+function parseDatedReset(raw) {
+  const m = DATED_RE.exec(raw || '');
+  if (!m) return null;
+  const month = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase());
+  if (month < 0) return null;
+  let hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const meridiem = m[6] ? m[6].toLowerCase() : null;
+  if (meridiem === 'pm' && hour < 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+  if (hour > 23 || minute > 59) return null;
+  const at = new Date(Number(m[3]), month, Number(m[2]), hour, minute, 0, 0);
+  return Number.isFinite(at.getTime()) ? at : null;
+}
+
+/** `try again in 2 hours 15 minutes`, `try again in 3 days`, relative to when it was printed. */
+function parseRelativeReset(raw, seenAt) {
+  const m = /try again in\s+((?:\d+\s*(?:days?|hours?|hrs?|minutes?|mins?|seconds?|secs?)[\s,and]*)+)/i.exec(raw || '');
+  if (!m) return null;
+  const unit = { d: 86400000, h: 3600000, m: 60000, s: 1000 };
+  let ms = 0;
+  for (const part of m[1].matchAll(/(\d+)\s*(d|h|m|s)/gi)) ms += Number(part[1]) * unit[part[2].toLowerCase()];
+  return ms > 0 ? new Date(seenAt.getTime() + ms) : null;
+}
+
 /**
  * Is a blocked agent due to be resumed?
  *
@@ -117,6 +158,24 @@ function isResumeDue(block, now = new Date(), opts = {}) {
   const maxResumes = Number.isFinite(opts.maxResumes) ? opts.maxResumes : 3;
   const unknownDelay = Number.isFinite(opts.unknownResetDelayMs) ? opts.unknownResetDelayMs : 60 * 60 * 1000;
   if (!block) return { due: false, reason: 'not blocked' };
+
+  // Probing (non-interactive CLIs): a relaunch that is still limited is refused
+  // at once and costs nothing, and the limit can lift long before the time it
+  // announced — credits bought, or a plan reset. Codex said "try again at Oct
+  // 10th" on 2026-10-06 and was usable again by the next morning. So until the
+  // announced reset, try once per interval, uncapped; the cap below applies only
+  // after the reset should have happened.
+  const probeEvery = Number.isFinite(opts.probeEveryMs) ? opts.probeEveryMs : null;
+  if (probeEvery) {
+    const reset = block.resetsAt ? new Date(block.resetsAt).getTime() : null;
+    const beforeReset = !reset || !Number.isFinite(reset) || now.getTime() < reset;
+    if (beforeReset) {
+      const last = new Date(block.lastProbeAt || block.lastResumeAt || block.detectedAt || 0).getTime();
+      return Number.isFinite(last) && now.getTime() - last >= probeEvery
+        ? { due: true, probe: true, reason: 'probing before the announced reset' }
+        : { due: false, reason: reset ? `waiting for reset at ${new Date(reset).toISOString()}, probing hourly` : 'probing hourly (no reset time announced)' };
+    }
+  }
   if ((block.resumeCount || 0) >= maxResumes) {
     // A limit that keeps re-blocking is not something to hammer: stop and let
     // it surface, rather than burning the reset the moment it arrives.
@@ -144,6 +203,12 @@ function describeBlock(block, now = new Date()) {
   const clock = valid
     ? when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : null;
+  if (block.cannotRelaunch) {
+    return `Blocked on the provider usage limit, and it cannot be relaunched automatically (${block.cannotRelaunch}). Relaunch the step once the limit has lifted.`;
+  }
+  if (block.probeCount || block.lastProbeAt) {
+    return `Blocked on the provider usage limit${clock ? ` (announced reset ${when.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })})` : ''} — checking hourly and resuming as soon as it lifts.`;
+  }
   const exhausted = isResumeDue(block, now).reason.startsWith('auto-resume exhausted');
   if (exhausted) {
     return `Blocked on the provider usage limit. Auto-resume gave up after ${block.resumeCount} attempt(s) — resume it from the live terminal.`;

@@ -21,6 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-07 — Codex agents resume after a usage limit
+
+### Fixed
+
+- **A Codex agent that hit its usage limit never continued.**
+  - **Typing into a shell:** `codex exec` exits on the limit. The watchdog
+    still typed its "the limit has reset, continue" message into the pane, which
+    was now a bare shell ("command not found: The"). After three tries it gave
+    up, and the run sat until someone relaunched it.
+  - **The fix:** a Codex agent now gets a resume script at launch. Once the limit
+    lifts, the watchdog runs it in the pane, only when the agent has exited.
+    That continues the same Codex conversation with the same model and effort.
+  - **Probing:** Codex's reset time ("try again at Oct 10th, 2026 6:26 AM") is now
+    understood. Because the limit can lift long before that time, and a refused
+    attempt costs nothing, the watchdog tries hourly until then.
+  - **OpenCode:** agents have no resume path yet. They are reported as "cannot
+    be relaunched automatically" instead of being typed at.
+  - **Agents already running:** they were launched without the script and get
+    the same message.
+### Upgrade steps
+
+**In Build Studio**: sync the project-server into the app and restart it.
+
+**In each managed project**: nothing to do. Codex agents get their resume script
+the next time they are launched.
+
+---
+
 ## 2026-10-06 — Create story; the builder no longer runs the full UI suite when QA doesn't
 
 ### Added

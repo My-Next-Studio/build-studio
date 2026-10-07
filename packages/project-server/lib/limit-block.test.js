@@ -161,3 +161,53 @@ test('a working agent is not blocked', () => {
   assert.equal(detectLimitState({ pane: '⏺ Reading the PRD…', log: '' }, NOW), null);
   assert.equal(detectLimitState({}, NOW), null);
 });
+
+// ── Codex (launch-studio, 2026-10-06) ──────────────────────────────────────
+// Codex prints a full date, which the clock-only pattern never matched, and
+// its limit can lift days before that date.
+const CODEX = "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 10th, 2026 6:26 AM.";
+
+test("Codex's dated reset is read in local time", () => {
+  const b = parseLimitNotice(CODEX, new Date('2026-10-07T00:17:59'));
+  assert.ok(b);
+  assert.equal(b.resetsAt.getTime(), new Date(2026, 9, 10, 6, 26).getTime());
+});
+
+test('a relative "try again in" is measured from when it was printed', () => {
+  const seen = new Date('2026-10-07T00:00:00');
+  assert.equal(parseResetTime('try again in 2 hours 15 minutes', seen).getTime(), seen.getTime() + (2 * 60 + 15) * 60000);
+  assert.equal(parseResetTime('try again in 3 days', seen).getTime(), seen.getTime() + 3 * 86400000);
+});
+
+test('probing: hourly and uncapped before the announced reset, then the normal cap', () => {
+  const hour = 3600000;
+  const block = { resetsAt: '2026-10-10T06:26:00', detectedAt: '2026-10-07T00:00:00', resumeCount: 3 };
+  const at = (iso) => new Date(iso);
+  assert.equal(isResumeDue(block, at('2026-10-07T00:30:00'), { probeEveryMs: hour }).due, false, 'not yet an hour');
+  const v = isResumeDue(block, at('2026-10-07T01:00:00'), { probeEveryMs: hour });
+  assert.equal(v.due, true);
+  assert.equal(v.probe, true, 'a probe, even though resumeCount is at the cap');
+  assert.equal(isResumeDue({ ...block, lastProbeAt: '2026-10-07T01:00:00' }, at('2026-10-07T01:30:00'), { probeEveryMs: hour }).due, false);
+  assert.equal(isResumeDue(block, at('2026-10-10T07:00:00'), { probeEveryMs: hour }).due, false, 'after the reset, the cap applies again');
+  assert.equal(isResumeDue({ detectedAt: '2026-10-07T00:00:00' }, at('2026-10-07T01:00:00'), { probeEveryMs: hour }).probe, true, 'no reset time: probe hourly');
+});
+
+test('the summary says when the agent cannot be relaunched, and when it is probing', () => {
+  assert.match(describeBlock({ cannotRelaunch: 'no session id', detectedAt: '2026-10-07T00:00:00' }), /cannot be relaunched automatically \(no session id\)/);
+  assert.match(describeBlock({ resetsAt: '2026-10-10T06:26:00', lastProbeAt: '2026-10-07T01:00:00' }), /checking hourly/);
+});
+
+// The watchdog relaunches a non-interactive agent rather than typing to it.
+test('server.js relaunches codex with its limit-resume script, only at a shell', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'server.js'), 'utf8');
+  const i = src.indexOf('const nonInteractive = agentStalled.NON_INTERACTIVE_CLIS.has(agent.cli);');
+  assert.ok(i > 0);
+  const body = src.slice(i, src.indexOf('} else if (limit.needsConfirm) {', i));
+  assert.match(body, /probeEveryMs: LIMIT_PROBE_EVERY_MS/);
+  assert.match(body, /paneReturnedToShell/);
+  assert.match(body, /tmuxOps\.clearHistory\(target\)/);
+  assert.match(body, /zsh \$\{agent\.limitResumeScript\} \$\{sessionId\}/);
+  assert.doesNotMatch(body, /LIMIT_RESUME_MESSAGE/, 'never the typed message for a CLI that has exited');
+  const launch = require('fs').readFileSync(require('path').join(__dirname, 'api', 'workflow.js'), 'utf8');
+  assert.match(launch, /codex exec resume\$\{dangerFlag\}\$\{modelFlag\}\$\{effortFlag\} "\$1"/);
+});
