@@ -38,8 +38,26 @@ export function TerminalPanel({ visible, onClose }: { visible: boolean; onClose:
       const fitAddon = new FitAddon()
       term.loadAddon(fitAddon)
       term.open(containerRef.current)
-      fitAddon.fit()
       termRef.current = { term, fitAddon }
+
+      // Fit more than once, as AgentTerminal does. The first fit runs before
+      // the JetBrains Mono webfont has loaded, measures the fallback font's
+      // smaller cell, and counts too many rows. The shell is then sized to that,
+      // the bottom rows sit below the panel, and the prompt cannot be reached.
+      // A font swap is not a size change, so ResizeObserver never corrects it:
+      // re-fit on the next frame, on fonts.ready, and when the socket opens.
+      const applyFit = () => {
+        if (cancelled || !containerRef.current) return
+        try { fitAddon.fit() } catch { return }
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        }
+      }
+      applyFit()
+      requestAnimationFrame(applyFit)
+      if (typeof document !== 'undefined' && document.fonts?.ready) {
+        document.fonts.ready.then(applyFit).catch(() => {})
+      }
 
       // Connect WebSocket
       const wsUrl = baseUrl.replace('http', 'ws')
@@ -48,7 +66,7 @@ export function TerminalPanel({ visible, onClose }: { visible: boolean; onClose:
 
       ws.onopen = () => {
         setConnected(true)
-        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+        applyFit()
       }
 
       ws.onmessage = (event) => {
@@ -68,13 +86,7 @@ export function TerminalPanel({ visible, onClose }: { visible: boolean; onClose:
         }
       })
 
-      // Handle resize
-      const observer = new ResizeObserver(() => {
-        fitAddon.fit()
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
-        }
-      })
+      const observer = new ResizeObserver(() => applyFit())
       observer.observe(containerRef.current)
 
       return () => {
@@ -132,7 +144,10 @@ export function TerminalPanel({ visible, onClose }: { visible: boolean; onClose:
           ✕
         </button>
       </div>
-      <div ref={containerRef} style={{ flex: 1, background: '#0d0f14', overflow: 'hidden', padding: 4 }} />
+      {/* minHeight 0: a flex item's minimum height is its content's by
+          default, so an over-tall xterm grew the panel past the window
+          instead of being clipped to it, taking the last line off-screen. */}
+      <div ref={containerRef} style={{ flex: 1, minHeight: 0, background: '#0d0f14', overflow: 'hidden', padding: 4 }} />
     </div>
   )
 }

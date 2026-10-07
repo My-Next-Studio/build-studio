@@ -428,7 +428,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
             {(prdViewerPath || terminalOpen) && (
               <div style={{
                 display: 'flex', flexDirection: 'column',
-                width: '50%', minWidth: 300, flexShrink: 0,
+                width: '50%', minWidth: 300, flexShrink: 0, minHeight: 0, overflow: 'hidden',
                 borderLeft: '1px solid var(--border)',
               }}>
                 {prdViewerPath && (

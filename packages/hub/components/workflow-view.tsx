@@ -1327,7 +1327,15 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
       </div>
 
       {/* Right: Detail panel */}
-      <div style={{ overflow: 'auto', padding: 24, minWidth: 0 }}>
+      {/* While an agent's log or live terminal is open, the column becomes a
+          flex column so the log takes exactly the space left under the banners.
+          It used to take height 100% of the column, so it overflowed by the
+          banners' height: the terminal's last line sat below the window, and the
+          wheel could not reach it, because xterm hands the wheel to tmux. */}
+      <div style={{
+        overflow: 'auto', padding: 24, minWidth: 0,
+        ...(viewingLog ? { display: 'flex', flexDirection: 'column' as const, overflow: 'hidden' } : {}),
+      }}>
         {advanceError && (
           <div style={{
             marginBottom: 12, padding: '10px 14px', borderRadius: 4,
@@ -2606,7 +2614,7 @@ function StepActions({
 function AgentLog({ logText, onClose, windowName }: { logText: string; onClose: () => void; windowName: string }) {
   const [live, setLive] = useState(false)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
         <button onClick={onClose} style={{
           padding: '3px 10px', borderRadius: 4, border: '1px solid var(--border)',

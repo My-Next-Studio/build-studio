@@ -21,7 +21,7 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-07 — Codex agents resume after a usage limit
+## 2026-10-07 — Codex agents resume after a usage limit; terminals fit the window
 
 ### Fixed
 
@@ -40,9 +40,22 @@ that move underneath you without your having edited anything.
     be relaunched automatically" instead of being typed at.
   - **Agents already running:** they were launched without the script and get
     the same message.
+- **The project terminal and the agent's live terminal could open partly off
+  screen, with the last line unreachable.** There were two causes:
+  - **The project terminal** measured its rows before its font had loaded, so
+    it counted too many. Its panel could also grow taller than the window.
+  - **An agent's log and live terminal** took the full height of a column that
+    also held the status banners, so it overflowed by their height.
+
+  Both now fit the space they have and re-measure once the font arrives.
+  Scrolling can't reach the bottom of an overflowing terminal, because the
+  terminal passes the wheel to tmux. So the fit had to be right.
+
 ### Upgrade steps
 
-**In Build Studio**: sync the project-server into the app and restart it.
+**In Build Studio**: the hub changed. Rebuild it and run the full inject
+(`npx next build` in `packages/hub`, then `node inject-resources.js` in
+`packages/desktop`), and restart.
 
 **In each managed project**: nothing to do. Codex agents get their resume script
 the next time they are launched.
