@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { archiveReplacedAgents } = require('./agent-history');
 
 function syncAgentStatus(wf, docsPath) {
   const statusFile = path.join(docsPath, 'agent-status.json');
@@ -97,6 +98,13 @@ function createStateManager(config, broadcast) {
     },
 
     saveWorkflow(wf) {
+      // Agents a re-run step replaced are kept for the scorecard (see
+      // agent-history.js). BEFORE the completion hook below, which writes the
+      // scorecard from this workflow. Advisory: a failure here costs history,
+      // never the save.
+      try {
+        if (fs.existsSync(wfFile)) archiveReplacedAgents(JSON.parse(fs.readFileSync(wfFile, 'utf8')), wf);
+      } catch (_) { /* unreadable previous state: nothing to compare */ }
       // Snapshot before each step transition so any past step can be restored
       if (wf.currentStep !== _lastStep) {
         snapshotWorkflow(wf);

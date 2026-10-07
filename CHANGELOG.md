@@ -25,6 +25,13 @@ that move underneath you without your having edited anything.
 
 ### Fixed
 
+- **The scorecard recorded only the last round of each step.** When a step ran
+  again, its new agents replaced the earlier round's. The scorecard was written
+  at the end from the agents the run still held, so the round whose findings
+  sent the work back was lost, along with its tokens, cost and time. Most runs
+  with fix rounds showed no findings at all. Replaced agents are now kept in
+  the workflow's `agentHistory`, and every round gets its own row, with a new
+  `window` field. Rows written before this are unchanged and keep the gap.
 - **A Codex agent that hit its usage limit never continued.**
   - **Typing into a shell:** `codex exec` exits on the limit. The watchdog
     still typed its "the limit has reset, continue" message into the pane, which
