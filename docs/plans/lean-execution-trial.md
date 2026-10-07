@@ -1,6 +1,6 @@
 # Plan: does the execution workflow still earn its overhead?
 
-> **Status: proposed 2026-10-06.**
+> **Status: proposed 2026-10-06; measurement increment 1 started 2026-10-07.**
 >
 > Owner request: models have improved a lot since the execution workflow was
 > designed. Question whether its steps still add enough to justify their time
@@ -70,33 +70,94 @@ much review, and whether tests are written first.
 
 ## Hypothesis
 
-A **lean run** — one strong builder, one independent review, fix rounds only
-for blocking findings, and the same gates — delivers stories of the same
-quality as the full chain. It should cost substantially less time and money,
-most of all where the chain chases medium and low findings to the cap.
+A **lean run** — one orchestrating builder that delegates where it pays
+(always including a spec-only test writer), one independent review, fix rounds
+whose re-reviews read only the fix, and the same gates — delivers stories of
+the same quality as the full chain. It should cost substantially less time and
+money, most of all where the chain runs six overlapping reviews and re-reviews
+everything each round.
 
 ## The lean preset
 
-An execution preset, selectable per run, next to the full one:
+An execution preset, selectable per run, next to the full one. **Claude only**
+to start (owner decision 2026-10-06): the builder orchestrates subagents
+through Claude Code's Agent tool, which Codex and OpenCode do not share. A
+lean run is refused, with the reason, when the builder's step group does not
+resolve to Claude; it does not quietly fall back to the full chain.
 
-1. **task_execution**, monolithic, with the goal harness on. The builder runs
-   unit tests and every non-UI suite in full, plus the UI tests its branch adds
-   or changes (as the goal does since 2026-10-06).
-2. **One review step** that combines code review and QA validation. It runs on
-   the other CLI or model family from the builder where the project has both
-   (cross-model review already exists as a step-group setting).
-3. **Fix rounds on blocking findings only.** Medium and low findings are
-   reported, and the owner can file them with the existing file-findings
-   action; they do not send the run back. Round cap 2.
+1. **task_execution** — monolithic, with the goal harness, and the configured
+   model as an **orchestrator** that may delegate. Its prompt says:
+   - **Plan the work**, then decide what to delegate, "where it sees fit".
+     Delegate parts that are independent and sizeable; do small stories
+     yourself, because every subagent re-reads the code it needs.
+   - **Tests from the spec, by a separate subagent** (required). It is given the
+     PRD and never the implementation. This keeps most of the independence
+     qa_tests gave, inside the step, and replaces it.
+   - **Implementer subagents** at the orchestrator's discretion, on a simpler
+     model for routine parts and the stronger one for hard parts. Each is given
+     an explicit file or module boundary, and the suite is run only while no
+     other subagent is editing. The harness already refuses an edit to a file
+     that changed since it was read; what it does not catch is two valid edits
+     that disagree, or a test run against someone's half-finished change.
+   - **A review subagent** before reporting. A useful first pass, but inside the
+     orchestrator's framing, so it is not the independent review.
+   - The goal's test requirement as today: unit tests and every non-UI suite in
+     full, plus the UI tests the branch adds or changes.
+2. **One review step** combining code review and QA validation, on the
+   reviewer model the project's step groups configure. The workflow never
+   overrides that choice. When the configured reviewer is the same model as the
+   builder, the hub shows it, because that is when the independent review is
+   weakest.
+3. **Fix rounds** (see below).
 4. **merge_to_main** and **capture_learnings**, unchanged, with all their gates.
 
 Dropped: qa_tests, planning (lean runs are monolithic), coverage matrix, AC
 verification, security audit and final review as separate steps. Their checks
-are named in the single review step's prompt instead, so each concern is still
+are named in the review step's prompt instead, so each concern is still
 covered once, not six times.
 
-The bugfix workflow is already close to this shape, so most of the preset is
-step configuration and prompt changes, not new engine code.
+### Fix rounds
+
+- **Strictness is a setting: loose, normal or strict.** Loose runs fix rounds
+  for blocking findings only, normal for blocking and medium (today's
+  behaviour), strict for low findings too. A per-project default set in the
+  hub, overridable at Start for one run.
+- **No fixed number of rounds.** If two rounds do not clear the bugs, that is
+  worth finding out. The existing round cap and its manual override (continue,
+  or accept the open findings) stay as the backstop.
+- **A re-review reads only what the fix changed** — the fix round's diff — and
+  confirms that each finding it was meant to address is resolved. This is also
+  what lets strict converge: a fresh full review almost always finds another
+  low, so with full-scope re-reviews strict would reach the cap nearly every
+  run. Scoped to the fix, new findings can only come from the fix itself.
+- **The full test suite still runs** on every fix round, in the gates. A fix can
+  break something outside its own diff; the scoped review would not see that,
+  the suite does.
+- **A fix round works like the implementation:** the configured model
+  orchestrates, with the same guidance on tests, review and subagents. It is
+  given the findings and the PRD, not just the findings. A two-line fix should
+  not delegate, and the "where it sees fit" rule says so.
+
+### Seeing what the orchestrator does (Claude only)
+
+The main transcript records every subagent launch: description, type, model,
+start, and result. The hub shows that as a timeline under the step — which
+subagents ran, on which model, how long, done or failed — so a lean run is not
+a single opaque pane.
+
+### Prerequisites the orchestrator brings
+
+- **The watchdog** must recognise an orchestrator waiting on running subagents,
+  as it now does for background shells and goal mode, or a waiting lean run
+  reads as stalled.
+- **Subagent cost from the start** (owner decision 2026-10-06). Subagent
+  transcripts are stored apart from the main session's. If the scorecard reads
+  only the main one, lean runs look cheaper than they are, and the trial's cost
+  verdict is wrong. So subagent tokens are counted from the first lean run.
+
+The bugfix workflow is already close to this shape, so much of the preset is
+step configuration and prompts; the orchestration guidance, the strictness
+setting, diff-scoped re-review and the timeline are new.
 
 ## The comparison
 
@@ -106,6 +167,8 @@ step configuration and prompt changes, not new engine code.
   recorded so it can be excluded or analysed on its own.
 - **Size.** About ten stories per arm per project before reading the result.
   Fewer is anecdote.
+- **Same strictness in both arms: normal.** A lean run on loose against a full
+  run on normal would measure the strictness as much as the preset.
 - **Measured per story:**
   - wall time and cost per step (already in the scorecard);
   - findings at review, by severity (needs the fix below);
@@ -119,9 +182,13 @@ step configuration and prompt changes, not new engine code.
 
 ## Measurement it needs first
 
-1. **Record findings on every review row.** The scorecard's `severity` was
-   missing for most fix runs in one project. Find out why (parser, step type,
-   feedback format) and fix it, or the comparison measures nothing.
+1. **Record findings on every review round. Done 2026-10-07.** The cause was
+   not the parser. A re-run step replaces its agents, and the scorecard was
+   written at completion from the agents the run still held, so only each
+   step's last, clean round was ever recorded. Its earlier rounds' findings,
+   tokens and time were lost. Replaced agents are now kept in the workflow's
+   agent history, and every round is written. Rows written before this keep the
+   gap; the trial starts after it.
 2. **Link a bug to the story it came from.** Add a `found_in: <story id>` field
    to Bug items. Fill it when it is known: support triage, review findings
    filed after merge, and Create story / "Add issue" when the owner names the
@@ -129,13 +196,18 @@ step configuration and prompt changes, not new engine code.
    not silently dropped.
 3. **Tag each run with its preset**, so every scorecard row can be split by
    arm.
+4. **Count subagent tokens** in the lean arm (above).
 
 ## Increments
 
 1. Measurement (above). Useful on its own even if the trial never runs.
-2. The lean preset, behind a per-run choice. The full chain stays the default.
-3. The trial, until the size above is reached.
-4. A written result in this file, and a decision: keep both, make lean the
+2. The fix-round strictness setting and diff-scoped re-review. Useful to the
+   full chain too, and independent of the preset.
+3. The lean preset, Claude only, behind a per-run choice, with the subagent
+   timeline, the watchdog's subagent awareness and subagent cost. The full
+   chain stays the default.
+4. The trial, until the size above is reached.
+5. A written result in this file, and a decision: keep both, make lean the
    default, or retire it. The result includes the failures.
 
 ## Out of scope
@@ -145,17 +217,23 @@ step configuration and prompt changes, not new engine code.
 - Choosing between builder models. The trial holds the builder model constant
   within a project, or the comparison confounds the two.
 
+## Decisions taken (2026-10-06)
+
+1. **Spec-first tests:** kept, as a required test-writer subagent that sees the
+   PRD and not the implementation.
+2. **Reviewer model:** whatever the step groups configure; never overridden;
+   same-model review shown in the hub.
+3. **Fix rounds:** loose / normal / strict, no fixed round count, the existing
+   cap and override kept, re-review scoped to the fix, the full suite always.
+4. **Claude only** to start, with a subagent timeline in the hub.
+5. **Subagent cost** measured from the first lean run.
+
 ## Open decisions
 
-1. **Keep spec-first tests in lean?** Dropping qa_tests is the biggest saving
-   and the biggest risk. A middle option: the builder writes tests first, in the
-   same session, before implementing. That is cheaper, but it is not independent.
-2. **Reviewer model.** Cross-model where available, or the same model in a fresh
-   session, for projects that have only one CLI configured.
-3. **Medium findings.** Report-only (proposed), or one fix round for mediums
-   before the cap.
-4. **Assignment.** Strict alternation (proposed) or owner choice per story.
+1. **Assignment.** Strict alternation (proposed) or owner choice per story.
    Owner choice is more convenient but biases the arms.
+2. **Where strictness is set** in the hub: the Start dialog, the project's
+   settings, or both (proposed: a project default plus a per-run override).
 
 ## Verification
 
