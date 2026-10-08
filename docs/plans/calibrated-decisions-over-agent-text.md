@@ -1,6 +1,6 @@
 # Plan: calibrated decisions over agent text, measured before they are trusted
 
-> **Status: increments 1 and 2 implemented 2026-10-01, at one decision point; question set v3 2026-10-05**
+> **Status: increments 1 and 2 implemented 2026-10-01, at one decision point; question set v3 2026-10-05; Luna comparison proposed 2026-10-07**
 > (proposed 2026-09-19). See *Where this stands* at the end.
 >
 > Owner request: evaluate the newly released "System One" class of decision
@@ -306,3 +306,26 @@ $0.00002 each. Three cases are a smoke test, not a calibration result.
   symptom stays. Start in shadow mode: log the model's verdict beside the
   agent's and the owner's eventual decision.
 - Increment 3 (calibration against known outcomes) once the log has enough cases.
+- **A one-off comparison with OpenAI's decisions model** (owner request
+  2026-10-07). OpenAI's Decisions API (public beta, `gpt-6-luna`) has the same
+  shape: state in, typed questions (predicate, choice, score), answers with
+  probabilities out. It is a larger general model, so the expectation is that
+  it reads better than Jev. It also costs more ($0.10 against $0.042 per
+  million input tokens), makes no calibration claim, and takes a larger state.
+  That last point matters here. 31 of the first 375 shadow records hit the
+  24,000-character state limit, and the clamp keeps the end of the report. For
+  a long report that drops the opening, which is often where the verdict is.
+
+  The comparison is offline, not a second shadow provider:
+  - Replay the v3 reports from the shadow log through Luna with the same
+    questions. The Jev criteria go into the instructions word for word.
+  - Compare the answers with Jev's, and with the hand-labelled disagreements
+    above. Report the clamped records separately, sending Luna the full report.
+  - Needs an OpenAI key with access to the beta. The state goes to a new
+    recipient (risk 1), and zero data retention applies only to eligible
+    accounts.
+
+  If Luna is clearly better on the same reports, it becomes a second shadow
+  provider at `gate_blocked`. That is increment 5, with a general-model
+  decisions API in place of the adapter. Otherwise the result is written here,
+  and Jev stays alone.
