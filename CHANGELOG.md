@@ -21,9 +21,57 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-07 — Codex agents resume after a usage limit; terminals fit the window
+## 2026-10-07 — A lean execution chain to trial; Codex agents resume after a usage limit; terminals fit the window
+
+### Added
+
+- **A lean execution chain, as a trial.** The Start form on the Workflow tab has
+  a new **Chain** picker. **Full** is the default and unchanged. **Lean
+  (trial)** runs:
+  - **one orchestrating builder.** It must start a subagent that writes tests
+    from the PRD without seeing the implementation; this replaces the QA-tests
+    step. It may delegate the rest to subagents, each with its own files.
+  - **one review.** The QA step runs the suite with all its gates, then
+    reviews the code, covering what the separate review steps checked. The
+    timeline calls it "Review (tests + code)".
+  - **fix rounds without a fix planner.** The findings go straight to the
+    builder, and the re-review reads only what the fix changed. The full suite
+    still runs.
+  - **the same merge gates and bookkeeping.**
+
+  Lean needs Claude on the Build group, because the builder uses Claude Code's
+  Agent tool. A lean start is refused with the reason otherwise. The backlog's
+  Execute button still starts the full chain. The API takes
+  `"preset": "lean"` on `POST /api/workflow/start` for execution runs. See
+  `docs/plans/lean-execution-trial.md` for the trial design.
+
+### Changed
+
+- **An agent's tokens and cost now include its subagents.** Claude Code
+  keeps a subagent's transcript apart from its parent's, and only the parent's
+  was read. Any agent that delegates, such as a code review with parallel
+  subagents, was under-counted, sometimes by a lot: one QA-tests agent's
+  subagent used 19.9M cache-read tokens that were never counted. Each
+  subagent is priced at its own model, and the agent's usage keeps a
+  per-subagent breakdown. Expect higher token and cost figures than before, on
+  both the scorecard and the per-step totals, for steps that delegate. Earlier
+  rows keep the old numbers.
+- **Scorecard rows have two new fields.** `preset` (`full` or `lean`) is set
+  on execution rows, so the trial can be split by chain. `subagents` gives the
+  subagent count, models and cost, which are already included in the row's
+  totals.
 
 ### Fixed
+
+- **Agents on the newest Claude models showed no cost.** The price table had
+  no entry for `claude-opus-5-5`, `claude-sonnet-5-5` or `claude-fable-5-1`, so
+  their cost was null. They are now priced from Anthropic's published rates.
+  Opus 5.5 and Fable 5.1 bill cache reads below the usual tenth of the input
+  price, which this workload is dominated by.
+- **Two Claude prices were wrong.** Sonnet 5 was priced at $3/$15 per million
+  tokens; its $2/$10 launch price became the standard price. Fable 5 was
+  priced at $3/$15; the published price is $10/$50. Costs already recorded keep
+  the old figures; new runs use the correct ones.
 
 - **The scorecard recorded only the last round of each step.** When a step ran
   again, its new agents replaced the earlier round's. The scorecard was written

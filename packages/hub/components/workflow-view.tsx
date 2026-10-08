@@ -171,6 +171,8 @@ interface Workflow {
   builderRole?: string
   /** Where builderRole came from: the picker, the PRD, or the backlog item. */
   builderRoleSource?: 'picker' | 'prd' | 'item'
+  /** Execution chain: 'lean' for the trial preset; absent means the full chain. */
+  preset?: 'lean'
   autoAdvance?: boolean
   autoAdvanceStrict?: boolean
   /** When true with autoAdvance on execution, auto-skip past demo_review. */
@@ -295,6 +297,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // Set once the owner touches the picker, so a later hint fetch cannot
   // overwrite a deliberate choice.
   const [builderRoleTouched, setBuilderRoleTouched] = useState(false)
+  // Which execution chain this run uses. '' = the full chain, as before.
+  const [execPreset, setExecPreset] = useState<'' | 'lean'>('')
   const [selectedStep, setSelectedStep] = useState<string | null>(null)
   const [logText, setLogText] = useState<string>('')
   const [viewingLog, setViewingLog] = useState<string | null>(null)
@@ -635,6 +639,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // Only sent when the owner picked one. Absent means execution[0], which is
     // what every run did before the picker existed.
     if (wfType === 'execution' && builderRole) body.builderRole = builderRole
+    if (wfType === 'execution' && execPreset) body.preset = execPreset
     // Per-run CLI pickers were removed (2026-07-21): agent CLI/model/effort is
     // set per role on the project's Agents tab (or the global Model tab).
     // api.post returns the parsed body (incl. {error}) and does NOT throw on non-2xx,
@@ -723,7 +728,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // listed in any preset's execution array (it's injected by the runner
   // post-merge_for_review). We inject it dynamically below when wf.steps
   // contains it, same pattern as fix_plan/fix_execution.
-  const projectStepKeys = projectWorkflowSteps?.[wfType]
+  // A lean run has its own fixed sequence (lean-execution.js on the server).
+  // Before a run starts, the Chain picker decides; once one exists, the run does.
+  const isLeanRun = wfType === 'execution' && (wf ? wf.preset === 'lean' : execPreset === 'lean')
+  const projectStepKeys = isLeanRun ? projectWorkflowSteps?.lean : projectWorkflowSteps?.[wfType]
   const stepMeta: Record<string, { name: string; loopHint?: string }> = Object.fromEntries(
     (WF_STEPS[wfType] || []).map(s => [s.key, { name: s.name, loopHint: s.loopHint }])
   )
@@ -733,6 +741,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     projectStepKeys && projectStepKeys.length > 0
       ? projectStepKeys.map(key => {
           const meta = stepMeta[key]
+          // In a lean run qa_validation is the one review: tests and code review.
+          if (isLeanRun && key === 'qa_validation') return { key, name: 'Review (tests + code)', loopHint: meta?.loopHint }
           return { key, name: meta?.name || humanize(key), loopHint: meta?.loopHint }
         })
       : (WF_STEPS[wfType] || [])  // fallback: no preset data yet, use catalog
@@ -748,7 +758,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // Bugfix is deliberately NOT included here: its canonical order comes from
     // the resolved `projectWorkflowSteps.bugfix` (which does list code_review),
     // so a project that removed it from that list means it.
-    if (wfType === 'execution' && !s.find(x => x.key === 'code_review')) {
+    // A lean run has no code_review step: its review is qa_validation.
+    if (wfType === 'execution' && !isLeanRun && !s.find(x => x.key === 'code_review')) {
       const qaIdx = s.findIndex(x => x.key === 'qa_validation')
       const mfrIdx = s.findIndex(x => x.key === 'merge_for_review')
       const at = qaIdx >= 0 ? qaIdx : mfrIdx >= 0 ? mfrIdx + 1 : -1
@@ -771,8 +782,10 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
         if (!s.find(x => x.key === 'fix_plan')) s.splice(at, 0, { key: 'fix_plan', name: 'Fix Plan' })
       }
       if (wf.steps?.fix_execution) {
+        // A lean fix round has no fix_plan; it follows the review that raised it.
         const planIdx = s.findIndex(x => x.key === 'fix_plan')
-        const at = planIdx >= 0 ? planIdx + 1 : s.length
+        const srcIdx = s.findIndex(x => x.key === (wf.fixSource || 'code_review'))
+        const at = planIdx >= 0 ? planIdx + 1 : srcIdx >= 0 ? srcIdx + 1 : s.length
         if (!s.find(x => x.key === 'fix_execution')) s.splice(at, 0, { key: 'fix_execution', name: 'Fix Execution' })
       }
       if (wf.steps?.review_cap_reached) {
@@ -871,6 +884,35 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                 <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Bug</span>{' '}
                 with status Backlog or Blocked. The bug file is the spec — no PRD
                 needed. Starts on a fix/&lt;id&gt; branch; the bug flips to Fixing.
+              </div>
+            )}
+          </div>
+        )}
+        {/* Execution chain — the full chain, or the lean trial preset: one
+            orchestrating Claude builder, one review, the same gates. */}
+        {wfType === 'execution' && !wf && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
+              Chain
+            </div>
+            <select
+              value={execPreset}
+              onChange={e => setExecPreset(e.target.value === 'lean' ? 'lean' : '')}
+              style={{
+                width: '100%', padding: '6px 10px', borderRadius: 4,
+                background: 'var(--surface2)', border: '1px solid var(--border)',
+                color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12,
+                outline: 'none',
+              }}
+            >
+              <option value="">Full — the project&apos;s execution steps</option>
+              <option value="lean">Lean (trial) — orchestrating builder, one review</option>
+            </select>
+            {execPreset === 'lean' && (
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+                No QA-tests step and no review panel. The builder writes tests from the PRD
+                through a separate subagent, may delegate the rest, and one review runs the
+                suite and reviews the code. Needs Claude on the Build group.
               </div>
             )}
           </div>

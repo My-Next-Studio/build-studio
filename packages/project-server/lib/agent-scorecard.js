@@ -121,6 +121,10 @@ function agentRecords(wf, project) {
       at,
       wfId: wf.id || null,
       type: wf.type || null,
+      // Which execution chain, so the lean trial can be split by arm. Rows
+      // written before this field have none; an execution row without a
+      // preset ran the full chain.
+      preset: wf.type === 'execution' ? (wf.preset || 'full') : null,
       input: wf.input || null,
       round: roundOfAgent(a, wf),
       project: project || null,
@@ -142,6 +146,11 @@ function agentRecords(wf, project) {
       // to prevent, and it slipped in here first.
       costUSD: trusted && typeof tu.costUSD === 'number' && Number.isFinite(tu.costUSD) ? tu.costUSD : null,
       usageSource: trusted ? (tu.source || 'transcript') : null,
+      // Already included in tokens and costUSD; kept apart so a delegating
+      // agent's spend can be split into its own and its subagents'.
+      subagents: trusted && tu.subagents
+        ? { count: num(tu.subagents.count), models: tu.subagents.models || [], costUSD: typeof tu.subagents.costUSD === 'number' ? tu.subagents.costUSD : null }
+        : null,
       // An archived round keeps only its parsed verdict, not its feedback.
       severity: a._severity !== undefined ? a._severity : severityFromFeedback(a.feedback),
     });

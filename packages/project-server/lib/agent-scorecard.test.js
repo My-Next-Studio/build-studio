@@ -283,3 +283,12 @@ test('a role that ran in several rounds of ONE run counts that run once', () => 
   assert.equal(rows[0].runs, 1)
   assert.equal(rows[0].roundsToConverge, 3)
 })
+
+test('every execution row names its chain, so the lean trial can be split by arm', () => {
+  const agent = { role: 'Reviewer', window: 'cr', startedAt: AFTER, completedAt: AFTER, status: 'done' };
+  // No preset on an execution run means the full chain.
+  assert.equal(agentRecords(wfWith([agent]), 'p')[0].preset, 'full');
+  assert.equal(agentRecords(wfWith([agent], { preset: 'lean' }), 'p')[0].preset, 'lean');
+  // Other run types have no chain to choose.
+  assert.equal(agentRecords(wfWith([agent], { type: 'bugfix' }), 'p')[0].preset, null);
+});

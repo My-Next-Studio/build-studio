@@ -32,6 +32,8 @@ const { suggestBuilderRole } = require('../builder-role-hint');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
+const lean = require('../lean-execution');
+const { subagentUsage, withSubagents } = require('../subagent-usage');
 
 // Common instruction fragments injected into all agent prompts.
 // Placeholders {{CONTEXT_BUDGET}} and {{SOFT_THRESHOLD}} are replaced
@@ -234,6 +236,23 @@ function resolveReviewerCliAtStart(startReviewerCli, developerCli, enabledClis) 
   return startReviewerCli || developerCli;
 }
 
+/**
+ * The approved Pencil designs a PRD's Companion Specs table lists as Done.
+ * The same rule code_review's design check applies, for the lean review.
+ */
+function approvedDesignFiles(prdText) {
+  const m = String(prdText || '').match(/^##\s+[^\n]*\bcompanion\s+specs?\b[^\n]*\n([\s\S]*?)(?=\n## |(?![\s\S]))/im);
+  if (!m) return [];
+  const out = [];
+  for (const line of m[1].split('\n')) {
+    if (/\|\s*Done\s*\|/i.test(line) && /\.pen\b|pencil|visual design/i.test(line)) {
+      const cells = line.split('|').map(c => c.trim()).filter(c => c);
+      if (cells.length >= 3) out.push(cells[cells.length - 1]);
+    }
+  }
+  return out;
+}
+
 // ─── bugfix workflow (pure helpers — unit-testable, no I/O) ───────────────────
 // A bugfix run is a lean execution flow driven by a single Bug backlog item:
 // no PRD, no planning step, no review panel. The bug file IS the spec.
@@ -267,6 +286,8 @@ function stepSequence(wf, config) {
   // sequence silently fell back to its defaults.
   if (wf && wf.type === 'kickoff') return (config && config.workflow && config.workflow.kickoff) || [];
   if (wf && wf.type === 'onboarding') return (config && config.workflow && config.workflow.onboarding) || [];
+  // A lean run has its own fixed sequence, whatever the project's preset says.
+  if (lean.isLean(wf)) return lean.LEAN_EXECUTION_STEPS.slice();
   return (config && config.workflow && config.workflow.execution) || [];
 }
 
@@ -1541,12 +1562,15 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
         }
       }
 
-      if (!found) return null;
+      // The session's subagents keep their own transcripts; without them an
+      // agent that delegates looks cheaper than it was (subagent-usage.js).
+      const subs = subagentUsage(claudeDir, sessionId, start, end, (m, t) => tokenPricing.costUSD(m, t));
+      if (!found && !subs) return null;
 
       // null when the model is not in the rate table — the caller renders that
       // as "not priced" rather than summing it as zero.
-      const cost = tokenPricing.costUSD(modelShortName, { inputTokens, outputTokens, cacheRead, cacheCreate });
-      return { inputTokens, outputTokens, cacheCreate, cacheRead, costUSD: cost, model: modelShortName || null };
+      const cost = found ? tokenPricing.costUSD(modelShortName, { inputTokens, outputTokens, cacheRead, cacheCreate }) : 0;
+      return withSubagents({ inputTokens, outputTokens, cacheCreate, cacheRead, costUSD: cost, model: modelShortName || null }, subs);
     } catch (_) {
       return null;
     }
@@ -1775,8 +1799,9 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
    */
   function launchFixPlan(wf, sourceStep, feedback, notes, prdId) {
     wf.steps[sourceStep].status = 'completed';
-    wf.currentStep = 'fix_plan';
     wf.fixSource = sourceStep; // track where the fix originated
+    if (lean.isLean(wf)) return launchLeanFix(wf, feedback, notes);
+    wf.currentStep = 'fix_plan';
 
     const roleList = (config.roles.execution || []).map(r => `- ${r.role} (/${r.skill})`).join('\n');
     const plannerAgent = [{
@@ -1849,6 +1874,37 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     }];
     wf.steps.fix_plan = { status: 'running', agents: launchWorkflowAgents(wf, plannerAgent, { useWorktrees: false }) };
     state.saveWorkflow(wf);
+  }
+
+  // A lean fix round has no fix planner. The review's findings go to the
+  // builder's role as one task, the builder orchestrates the fix, and the
+  // re-review reads only what this round changes — so the round's starting
+  // commit is recorded here.
+  function launchLeanFix(wf, feedback, notes) {
+    const builder = resolveBuilderRole(config, { role: wf.builderRole });
+    let base = null;
+    try {
+      base = require('child_process').execFileSync('git', ['rev-parse', 'HEAD'], { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    } catch (_) { /* no base: the re-review falls back to the whole branch */ }
+    wf.leanFixBase = base || null;
+    wf.fixPlan = {
+      lean: true,
+      tasks: [{
+        id: `lean-fix-r${wf.round || 1}`,
+        name: 'Fix the review findings',
+        description: feedback,
+        notes: notes || null,
+        roles: builder ? [builder.role] : [],
+      }],
+    };
+    wf.fixExecutionRound = (wf.fixExecutionRound || 0) + 1;
+    wf.currentStep = 'fix_execution';
+    wf.steps.fix_execution = { status: 'pending', agents: [], completedTasks: [] };
+    state.saveWorkflow(wf);
+    const fakeRes = { json: () => {}, status: () => ({ json: () => {} }) };
+    try { handleExecutionAdvance(wf, 'launch', notes, fakeRes, {}); } catch (e) {
+      console.error('[workflow] lean fix launch failed:', e.message);
+    }
   }
 
   // Detect the project's backlog id prefix from existing item files (e.g. LS,
@@ -3178,6 +3234,15 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       // Advisories surfaced on the completed step (visible in the UI / API) but
       // never block — e.g. a `// test-only` comment on a properly-guarded seam.
       wf.steps.merge_for_review = { status: 'completed', mergeResults, advisories: hygieneAdvisories };
+      // A lean run's one review is qa_validation, launched through its own
+      // handler, so it gets the suite run and every QA gate. The inline QA
+      // launch further down is an older, gate-less prompt.
+      if (lean.isLean(wf) && !wf.returnTo) {
+        wf.currentStep = 'qa_validation';
+        wf.steps.qa_validation = { status: 'pending', agents: [] };
+        state.saveWorkflow(wf);
+        return handleExecutionAdvance(wf, 'launch', null, res, {});
+      }
       const nextStep = wf.returnTo || 'code_review';
       wf.currentStep = nextStep;
       wf.returnTo = null;
@@ -3328,6 +3393,8 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       // Resolved server-side (config.workflow.bugfix override or DEFAULT_BUGFIX_STEPS)
       // so the hub can render the bugfix timeline the same way it does the others.
       bugfix: bugfixSequence(config),
+      // The lean trial preset's fixed sequence, for a run with preset: lean.
+      lean: lean.LEAN_EXECUTION_STEPS.slice(),
     } : null;
     // Owner-gated AC checklist — surfaced informationally in demo_review (not
     // persisted; recomputed on every fetch from ac_verification's feedback, so
@@ -3553,9 +3620,20 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
   }
 
   router.post('/workflow/start', (req, res) => {
-    const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, builderRole: startBuilderRole, override: startOverride } = req.body;
+    const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, builderRole: startBuilderRole, override: startOverride, preset: startPreset } = req.body;
     if (!type) return res.status(400).json({ error: 'type required' });
     if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return res.status(400).json({ error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
+    // Which execution chain: the full one (absent) or lean. See lean-execution.js.
+    const presetCheck = lean.validatePreset(type, startPreset);
+    if (presetCheck.error) return res.status(400).json({ error: presetCheck.error });
+    const runPreset = presetCheck.preset;
+    if (runPreset === lean.LEAN_PRESET) {
+      // Resolved the way the launcher will resolve it, including a legacy
+      // per-run developerCli, so the refusal names the CLI that would really run.
+      const probe = { type, ...(startDeveloperCli ? { developerCli: startDeveloperCli } : {}) };
+      const refusal = lean.leanStartRefusal((step) => resolveStepLaunchSettings(step, probe, config.cli, config.step_groups).cli);
+      if (refusal) return res.status(400).json({ error: refusal, leanRefused: true });
+    }
     if (startDeveloperCli && !VALID_CLIS.includes(startDeveloperCli)) {
       return res.status(400).json({ error: `developerCli must be one of ${VALID_CLIS.join(', ')}` });
     }
@@ -3903,7 +3981,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
           task_execution: { completedTasks: [] },
         };
         const MANUAL_GATES = new Set(['merge_for_review', 'demo_review', 'merge_to_main']);
-        const executionSequence = (config.workflow && config.workflow.execution) || [
+        const executionSequence = runPreset === lean.LEAN_PRESET ? lean.LEAN_EXECUTION_STEPS : (config.workflow && config.workflow.execution) || [
           'qa_tests', 'planning', 'task_execution', 'merge_for_review',
           'coverage_matrix', 'qa_validation', 'ac_verification', 'security_audit',
           'final_review', 'demo_review', 'merge_to_main', 'capture_learnings',
@@ -4001,6 +4079,8 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       // so the launcher re-resolves it the same way a bugfix's `role:` is
       // resolved — one resolution path, not two.
       ...(resolvedBuilderRole ? { builderRole: resolvedBuilderRole, builderRoleSource } : {}),
+      // Set only for a lean run; absent means the full chain.
+      ...(runPreset ? { preset: runPreset } : {}),
       ...(startDeveloperCli ? { developerCli: startDeveloperCli } : {}),
       ...(startReviewerCli
         ? { reviewerCli: resolveReviewerCliAtStart(startReviewerCli, startDeveloperCli || (config.cli && config.cli.default) || 'claude', enabledClis) }
@@ -5266,6 +5346,13 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     const goalContext = useGoalHarness
       ? `\n\n## GOAL HARNESS — /goal IS ARMED ON THIS SESSION\nShortly after this session starts, the dashboard sets a native /goal objective on it:\n\n> ${goalCondition}\n\nClaude Code re-checks that objective after every response and keeps the session working until it is met — declaring "done" early will not end the session. Two consequences for how you work:\n${testRequirement.guidance}\n- Your feedback POST must include a per-AC evidence table: \`| AC | Implemented | Tested | Evidence |\`, one row per acceptance criterion, with the test name or commit as evidence.`
       : '';
+    const leanContext = lean.isLean(wf)
+      ? lean.leanBuilderSection({
+        prdPath, testClause: testRequirement.goalClause,
+        // The goal-harness section already carries the guidance when it is armed.
+        testGuidance: useGoalHarness ? '' : testRequirement.guidance,
+      })
+      : '';
 
     const devAgents = [{
       goalCondition,
@@ -5305,7 +5392,7 @@ ${taskIdx > 0 ? `Tasks 1–${taskIdx} are already implemented and committed. You
 
 ## SCOPE — CRITICAL
 Only implement what this task describes. Do NOT implement other tasks.
-Do NOT refactor code outside this task scope.${companionContext}${designContext}${screenshotContext}${testImpactContext}${goalContext}
+Do NOT refactor code outside this task scope.${companionContext}${designContext}${screenshotContext}${testImpactContext}${goalContext}${leanContext}
 
 Use the /${role.skill} skill. Commit your changes when done. ${COMMIT_ON_CURRENT_BRANCH}`,
     }];
@@ -7382,7 +7469,8 @@ Report **Approved: yes** once every relevant cell has a test (or a justified MAN
       //   step_strategies:
       //     task_execution: fine-grained
       //     fix_execution: fine-grained
-      const taskStrategy = (config.step_strategies && config.step_strategies.task_execution) || 'monolithic';
+      // A lean run is monolithic by definition: its builder orchestrates.
+      const taskStrategy = lean.isLean(wf) ? 'monolithic' : (config.step_strategies && config.step_strategies.task_execution) || 'monolithic';
       if (taskStrategy === 'monolithic') {
         // wf.prdPath is project-root-relative (e.g. "docs/prds/PRD-011-...md");
         // resolve against projectRoot, not docsPath.
@@ -7428,7 +7516,7 @@ Report **Approved: yes** once every relevant cell has a test (or a justified MAN
             id: 1,
             name: `Implement ${prdId} end-to-end`,
             title: `Implement ${prdId} end-to-end`,
-            description: `Read the PRD in full at ${wf.prdPath}. Implement every acceptance criterion and surface the PRD specifies, in one pass. Use the pre-implementation tests at the project's test directory (committed before task_execution started) as your unit-test scaffolding — un-skip them as you implement the corresponding production code. Add UI / integration test coverage for any gesture / interaction ACs. Commit per logical chunk (per surface or per feature group is fine — your judgment on granularity); the dashboard's commit ribbon will show each commit as a milestone. When all ACs are implemented and the relevant test suite passes, POST feedback summarizing what you built, what's tested, and any residual concerns.`,
+            description: lean.isLean(wf) ? lean.leanTaskDescription(wf.prdPath) : `Read the PRD in full at ${wf.prdPath}. Implement every acceptance criterion and surface the PRD specifies, in one pass. Use the pre-implementation tests at the project's test directory (committed before task_execution started) as your unit-test scaffolding — un-skip them as you implement the corresponding production code. Add UI / integration test coverage for any gesture / interaction ACs. Commit per logical chunk (per surface or per feature group is fine — your judgment on granularity); the dashboard's commit ribbon will show each commit as a milestone. When all ACs are implemented and the relevant test suite passes, POST feedback summarizing what you built, what's tested, and any residual concerns.`,
             roles: [monoBuilder.role],
             acs_covered: ['all'],
             dependencies: [],
@@ -8330,6 +8418,9 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
         const prevFix = wf.steps.fix_execution || wf.steps.fix_plan;
         const fixFeedback = prevFix ? (prevFix.agents || []).filter(a => a.feedback).map(a => a.feedback).join('\n') : '';
         if (fixFeedback) qaRoundContext2 = `\n\n## THIS IS RE-VALIDATION (Round ${wf.round}) — RE-RUN, DO NOT RE-ANALYSE\n\n**You MUST re-execute the full test suite from scratch.** Do not cite round-${wf.round - 1} test results, do not "verify the fix reports against the spec", do not produce a methodology review. The fix-execution step claims the failures are resolved; your job is to PROVE that by re-running the tests and capturing fresh \`N passed / N failed\` output, plus re-doing the visual smoke and confirming the round-${wf.round - 1} runtime warnings (e.g. \`[Invalid Configuration]\`) are GONE on this round's launch.\n\nThe approval gate will reject feedback without fresh test-count output. The visual smoke from round ${wf.round - 1} is invalid — capture new screenshots and inspect for the same issues you flagged before.\n\n### Round ${wf.round - 1} fix reports (context only — do NOT trust them; verify by running tests):\n${fixFeedback}`;
+        // In a lean run the same agent also re-reviews the fix; this section is
+        // only about the test run, and Part 2 says how to review.
+        if (fixFeedback && lean.isLean(wf)) qaRoundContext2 += '\n\n(This section covers the test run. Reviewing the fixes themselves is Part 2, at the end of this prompt.)';
       }
 
       // Check if PRD has visual designs and playwright-cli is enabled
@@ -8547,9 +8638,11 @@ xcodebuild test \\\\
 7. **Clean up leaked simulator clones — pre AND post (and after any kill).** \`-parallel-testing-enabled YES\` clones the sim into a GLOBAL device set (\`~/Library/Developer/XCTestDevices\`) shared with every other project on this machine. Cancelled or force-killed runs orphan their clones, which accumulate and fill the boot drive (this folder hit 66 GB before the reaper existed). Run \`node "$XCTEST_CLEAN" --quiet\` BEFORE starting and AFTER finishing (success, failure, or kill). It deletes ONLY Shutdown + idle clones, so it is safe to run even while a DIFFERENT project is mid-test — a booted or freshly-created clone is never touched. **Do NOT** use \`xcrun simctl shutdown all\` or \`rm -rf ~/Library/Developer/XCTestDevices/*\` — those would destroy another project's in-flight test run.`
         : '';
 
-      const qaAgent = [{
-        role: 'QA', window: 'qa-validate', status: 'pending', reportFeedback: true,
-        instruction: `## YOU ARE A TEST RUNNER — NOT A FIX AGENT — READ THIS FIRST
+      // A lean run has no other review: the same agent runs the suite and then
+      // reviews the change (lean-execution.js). Every gate below is unchanged.
+      const qaHeader = lean.isLean(wf)
+        ? lean.leanReviewHeader()
+        : `## YOU ARE A TEST RUNNER — NOT A FIX AGENT — READ THIS FIRST
 
 **You are QA. Your ONLY job is to run the test suite and report what happened. You do NOT write code. You do NOT fix bugs.**
 
@@ -8574,13 +8667,27 @@ xcodebuild test \\\\
 
 ---
 
-You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. ${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
+You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**`;
+      const qaAgent = [{
+        role: 'QA', window: 'qa-validate', status: 'pending', reportFeedback: true,
+        instruction: `${qaHeader}\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. ${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
       }];
 
       // Launch the agent with the suite result appended. Shared by the direct
       // path and the hoisted one so there is exactly one place that starts it.
+      // Part 2 of a lean review goes last, after the suite section, so the test
+      // run reads as one block and the review as another.
+      let leanReview = '';
+      if (lean.isLean(wf)) {
+        let designFiles = [];
+        try { designFiles = approvedDesignFiles(fs.readFileSync(path.join(projectRoot, wf.prdPath || ''), 'utf8')); } catch (_) {}
+        leanReview = lean.leanReviewSection({
+          prdPath: wf.prdPath, defaultBranch: wf.defaultBranch, round: wf.round || 1,
+          fixBase: wf.leanFixBase || null, designFiles,
+        });
+      }
       const launchQaAgent = (suiteSection) => {
-        const agents = [{ ...qaAgent[0], instruction: qaAgent[0].instruction + (suiteSection || '') }];
+        const agents = [{ ...qaAgent[0], instruction: qaAgent[0].instruction + (suiteSection || '') + leanReview }];
         wf.steps.qa_validation.status = 'running';
         wf.steps.qa_validation.agents = launchWorkflowAgents(wf, agents, { useWorktrees: false, cwd: projectRoot });
         state.saveWorkflow(wf);
@@ -10057,7 +10164,8 @@ Before adding new entries, scan existing files in docs/learnings/:
       // default). Projects opt out via:
       //   step_strategies:
       //     fix_execution: fine-grained
-      const fixStrategy = (config.step_strategies && config.step_strategies.fix_execution) || 'monolithic';
+      // A lean fix round is one task for the builder, so always monolithic.
+      const fixStrategy = lean.isLean(wf) ? 'monolithic' : (config.step_strategies && config.step_strategies.fix_execution) || 'monolithic';
 
       if (fixStrategy === 'monolithic' && currentIdx === 0) {
         // Monolithic launch: pick a single role (the most common in the plan; tie-break by appearance order)
@@ -10085,12 +10193,21 @@ Before adding new entries, scan existing files in docs/learnings/:
             return `### Fix ${i + 1}/${fixPlan.tasks.length} · ${t.id || ''} — ${t.name || t.title || ''}\n\n${t.description || ''}\n\nIssues: ${issues || '(see description)'}`;
           }).join('\n\n---\n\n');
 
+          const leanTask = lean.isLean(wf) ? fixPlan.tasks[0] : null;
           const agent = {
             role: resolvedRole.role,
             window: `fix-mono-${resolvedRole.role.toLowerCase().replace(/\s+/g, '-').slice(0, 10)}`,
             status: 'pending',
             reportFeedback: true,
-            instruction: `You are a ${resolvedRole.role}. Read your role definition at .claude/commands/${resolvedRole.command} first.
+            instruction: leanTask ? `You are a ${resolvedRole.role}. Read your role definition at .claude/commands/${resolvedRole.command} first.
+
+PRD path: ${wf.prdPath}
+${lean.leanFixSection({ prdPath: wf.prdPath, findings: leanTask.description, notes: leanTask.notes })}
+
+${COMMIT_ON_CURRENT_BRANCH}
+
+Use the /${resolvedRole.skill} skill.
+${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}` : `You are a ${resolvedRole.role}. Read your role definition at .claude/commands/${resolvedRole.command} first.
 
 You are running in MONOLITHIC FIX MODE — one agent, ${fixPlan.tasks.length} fix tasks, single context.
 
@@ -10147,7 +10264,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
             broadcast('workflow-updated', {});
             return res.json({ workflow: wf, warning: `Fix loop reached ${MAX_REVIEW_ROUNDS} rounds.` });
           }
-          const returnTo = wf.returnTo || 'code_review';
+          const returnTo = wf.returnTo || (lean.isLean(wf) ? lean.leanFixReturnStep(wf) : 'code_review');
           wf.currentStep = returnTo;
           wf.steps[returnTo] = { status: 'pending', agents: [] };
           state.saveWorkflow(wf);
@@ -10170,7 +10287,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
           return res.json({ workflow: wf, warning: `Fix loop reached ${MAX_REVIEW_ROUNDS} rounds. Choose: advance anyway or cancel.` });
         }
 
-        const returnTo = wf.returnTo || 'code_review';
+        const returnTo = wf.returnTo || (lean.isLean(wf) ? lean.leanFixReturnStep(wf) : 'code_review');
         wf.currentStep = returnTo;
         wf.steps[returnTo] = { status: 'pending', agents: [] };
         state.saveWorkflow(wf);
@@ -10273,7 +10390,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
             return res.json({ workflow: wf, warning: `Fix loop reached ${MAX_REVIEW_ROUNDS} rounds.` });
           }
 
-          const returnTo2 = wf.returnTo || 'code_review';
+          const returnTo2 = wf.returnTo || (lean.isLean(wf) ? lean.leanFixReturnStep(wf) : 'code_review');
           wf.currentStep = returnTo2;
           wf.steps[returnTo2] = { status: 'pending', agents: [] };
           state.saveWorkflow(wf);
@@ -10293,7 +10410,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
       if (action === 'approve' || action === 'skip' || action === 'another_round') {
         wf.steps.review_cap_reached.status = 'skipped';
         restartCapBudget(wf);
-        const capReturnTo = wf.returnTo || 'code_review';
+        const capReturnTo = wf.returnTo || (lean.isLean(wf) ? lean.leanFixReturnStep(wf) : 'code_review');
         wf.currentStep = capReturnTo;
         wf.steps[capReturnTo] = { status: 'pending', agents: [] };
         state.saveWorkflow(wf);

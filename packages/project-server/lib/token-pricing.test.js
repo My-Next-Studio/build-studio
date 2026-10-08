@@ -117,3 +117,16 @@ test('an unknown model is still unpriced rather than guessed', () => {
   assert.equal(rateFor('not-a-real-model'), null);
   assert.equal(costUSD('not-a-real-model', { inputTokens: 1000, outputTokens: 1000 }), null);
 });
+
+test('the current Claude ids are priced at their published rates', () => {
+  const mtok = (m, k) => costUSD(m, { [k]: 1_000_000 });
+  // Opus 5.5: cache reads are 0.05x input, not the usual 0.1x.
+  assert.equal(mtok('claude-opus-5-5', 'inputTokens'), 4);
+  assert.equal(mtok('claude-opus-5-5[1m]', 'cacheRead'), 0.2);
+  assert.equal(mtok('claude-sonnet-5-5', 'outputTokens'), 10);
+  // Fable 5.1: cache reads are 0.025x input.
+  assert.equal(mtok('claude-fable-5-1', 'cacheRead'), 0.25);
+  assert.equal(mtok('claude-fable-5-1', 'outputTokens'), 50);
+  // Sonnet 5's launch price became its standard price.
+  assert.equal(mtok('claude-sonnet-5', 'inputTokens'), 2);
+});

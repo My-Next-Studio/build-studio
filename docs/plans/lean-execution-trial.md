@@ -1,6 +1,6 @@
 # Plan: does the execution workflow still earn its overhead?
 
-> **Status: proposed 2026-10-06; measurement increment 1 started 2026-10-07.**
+> **Status: proposed 2026-10-06; measurement increment 1 started 2026-10-07; lean preset core implemented 2026-10-07 (see *Where this stands*).**
 >
 > Owner request: models have improved a lot since the execution workflow was
 > designed. Question whether its steps still add enough to justify their time
@@ -119,9 +119,14 @@ covered once, not six times.
 ### Fix rounds
 
 - **Strictness is a setting: loose, normal or strict.** Loose runs fix rounds
-  for blocking findings only, normal for blocking and medium (today's
-  behaviour), strict for low findings too. A per-project default set in the
-  hub, overridable at Start for one run.
+  for blocking findings only, normal for blocking and medium, strict for low
+  findings too. A per-project default set in the hub, overridable at Start for
+  one run. Correction (2026-10-07): today's auto-advance in an execution run
+  starts a fix round only for blocking findings or failing tests, and approves
+  past mediums. So today's behaviour is loose, not normal. Medium fix rounds
+  happen only when the owner sends them back by hand. The trial's "same
+  strictness in both arms" holds either way, as long as both arms use the
+  same setting.
 - **No fixed number of rounds.** If two rounds do not clear the bugs, that is
   worth finding out. The existing round cap and its manual override (continue,
   or accept the open findings) stay as the backstop.
@@ -195,8 +200,16 @@ setting, diff-scoped re-review and the timeline are new.
    story. A bug with no link counts as unattributed and is reported as such,
    not silently dropped.
 3. **Tag each run with its preset**, so every scorecard row can be split by
-   arm.
-4. **Count subagent tokens** in the lean arm (above).
+   arm. Done 2026-10-07: every execution row carries `preset` (`full` or
+   `lean`).
+4. **Count subagent tokens** in the lean arm (above). Done 2026-10-07, for
+   every Claude agent, not only the lean arm. A subagent's transcript is
+   stored beside its parent session's, and was never read. Its tokens are now
+   added to the agent's usage and priced at the subagent's own model, with the
+   breakdown kept. The full chain delegates too (a code review with parallel
+   subagents), so counting only the lean arm would have biased the comparison.
+   First measurement: one test-sweep subagent of a QA-tests agent used 19.9M
+   cache-read tokens that the scorecard had never seen.
 
 ## Increments
 
@@ -243,3 +256,50 @@ setting, diff-scoped re-review and the timeline are new.
 - The severity fix checked against a run with known findings.
 - `found_in` checked end to end: a bug filed from support triage against a
   merged story shows up under that story in the trial's report.
+
+## Where this stands (2026-10-07)
+
+### Built
+
+- **The lean preset, behind a per-run choice.** The Start form on the
+  Workflow tab has a Chain picker: Full (the default, unchanged) or Lean
+  (trial). A lean run is refused at start, with the step and CLI named, when
+  `task_execution` or `fix_execution` would not run on Claude. The backlog's
+  Execute button still starts the full chain, until assignment is decided
+  (open decision 1).
+- **Sequence:** planning (synthesised, no planner agent), task_execution,
+  merge_for_review (the existing merge gates), qa_validation, merge_to_main,
+  capture_learnings. Lean is monolithic whatever `step_strategies` says.
+- **The builder's prompt** adds the orchestration section: plan, a required
+  spec-only test-writer subagent, optional implementers with file boundaries,
+  no suite runs while a subagent edits, a review subagent before reporting, and
+  a `### Subagents` line per subagent in the feedback.
+- **The one review is hosted on qa_validation**, not code_review. That step
+  carries every QA gate (the server-run native suite, the test-count gates,
+  strict mode), and moving them was riskier than giving its agent a second
+  job. In a lean run its header changes to "tests and code review in one step",
+  and a Part 2 after the test run covers what the dropped steps checked: ACs,
+  variants, silent failure, test quality, security, hygiene, and design
+  conformance when the PRD has an approved design. The timeline names the step
+  "Review (tests + code)".
+- **Fix rounds skip the fix planner.** The review's findings go to the
+  builder's role as one task, with the PRD, and the builder orchestrates the
+  fix under the same rules. The round's starting commit is recorded, and the
+  re-review reads only `git diff <that commit>..HEAD` while the suite still
+  runs in full. A finished fix round returns to the review that raised it.
+- **Measurement:** every execution scorecard row carries `preset`; subagent
+  tokens are counted for every Claude agent (measurement item 4).
+- **Prices for the current Claude models**, from the published rates, so a
+  subagent on one of them is costed rather than null.
+
+### Not yet
+
+- The strictness setting (increment 2). Both arms currently use today's
+  routing, which is loose (see the correction under *Fix rounds*).
+  Diff-scoped re-review exists in the lean arm only.
+- The subagent timeline in the hub. The data it needs is recorded: each
+  agent's usage now lists its subagents with type, task description, model,
+  start, end and tokens.
+- The watchdog's awareness of an orchestrator waiting on background subagents.
+- The same-model notice when the reviewer resolves to the builder's model.
+- `found_in` on Bug items (measurement item 2).
