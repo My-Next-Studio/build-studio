@@ -21,6 +21,116 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-08 — `project-state.md` stops growing: the decisions log and backlog index get their own files, a size warning, mark-done replaces instead of piling up
+
+### Changed
+
+- **Drafting a PRD no longer edits `docs/project-state.md`.** The PM role
+  and the `draft_prd` skill told the agent to update the backlog row and the
+  "Active PRD" section. In practice each draft added an entry ("Also drafted
+  …") that nothing ever removed, and `project-state.md`, which every agent
+  reads first, grew by a paragraph per PRD. Now the agent sets the status in
+  the item file only. Build Studio refreshes the index line's
+  `[Type · Status]` from the file when a draft ends and whenever the backlog
+  is read. Before, it only did so after changing a status itself.
+- **The Key Decisions Log and the backlog index move out of
+  `project-state.md`,** into `docs/decisions.md` and `docs/backlog-index.md`.
+  `project-state.md` is the file every agent reads first, and both sections
+  only grow: in one project they were 191 KB and 73 KB of a 459 KB file.
+  - **Decisions:** only the drafting and interview skills use the log, to
+    avoid re-asking settled questions, and they now open `docs/decisions.md`.
+  - **Backlog index:** the backlog markers (`<!-- BACKLOG-START -->` …
+    `<!-- BACKLOG-END -->`) now live in `docs/backlog-index.md`. Build Studio
+    reads and writes whichever file holds them: the new file when it has the
+    markers, otherwise `project-state.md`. The Backlog tab, filing from
+    support or review findings, Create story, drafting and the run's status
+    updates all follow it, and so do the commits they make. Backlog order is
+    unchanged by the move.
+
+  New projects, scaffolded or onboarded, get both files. Existing projects
+  keep working unchanged until you run the migration (below). Each heading
+  stays in `project-state.md` with a one-line pointer, so a project's older
+  copy of a skill that still looks there is sent to the new file.
+- **A warning when `project-state.md` or `ARCHITECTURE.md` gets too big.**
+  Every agent reads both first, and agents kept appending to them. The limits
+  are 40 KB for `project-state.md` and 20 KB for `ARCHITECTURE.md`. Over
+  either, a run logs a warning when it starts, and the start form in the
+  Workflow tab shows a notice. Nothing is blocked. The template, the builder
+  prompt and the cross-project doc now say what belongs in each file: the
+  present state only, and for `ARCHITECTURE.md` no per-PRD write-ups. Existing
+  projects are likely over the limit and will see the notice until trimmed.
+- **Agents revise `ARCHITECTURE.md` instead of adding to it.** The growth came
+  from build and fix commits: the builder prompt and AGENTS.md said "update
+  ARCHITECTURE.md in the same commit", and the easy way to comply was a new
+  paragraph per PRD. Now the builder is told to edit the entry its change
+  affects, and is given the file's current size against the 20 KB limit. If an
+  edit would cross the limit, it condenses or removes something stale in the
+  same edit. The AGENTS.md template and the capture-learnings step, whose
+  proposals for this file must now be revisions, say the same. A project's own
+  AGENTS.md keeps its old wording until edited.
+
+### Fixed
+
+- **Marking a PRD done piled up text in `project-state.md` instead of
+  replacing it.** It replaced only the first paragraph under "Active PRD", so
+  each run stacked another "None — X complete" line above the last one, while
+  descriptions of PRDs finished months earlier stayed below. It also replaced
+  only the date at the start of "Last updated", so summaries agents had appended
+  to that line stayed; one had reached 69,500 characters. Both are now replaced
+  whole, and `###` subsections under "Active PRD" are kept. The next PRD to
+  finish in an existing project removes that text, which stays in git history.
+- **A review blocked at Companion Specs on a PRD that said "None required".**
+  The PRD template tells the PM to keep the §10 section with "None required"
+  when a PRD needs no companion specs. The gate didn't read that note, and
+  blocked as if §10 were missing, so every such review stopped and waited for
+  an approve. Now a §10 with no table and "None required" completes the step.
+
+### Upgrade steps
+
+**In Build Studio**: the hub changed. Rebuild it and run the full inject
+(`npx next build` in `packages/hub`, then `node inject-resources.js` in
+`packages/desktop`), and restart.
+
+**In each managed project**: a project with its own copy of the
+`draft_prd` skill keeps the old instruction to edit `project-state.md`,
+because onboarding never overwrites a project's skills. Remove that line:
+
+```bash
+sed -i '' '/Update the backlog row in `docs\/project-state.md`/d' .claude/skills/draft_prd/SKILL.md
+```
+
+To move a project's decisions log and backlog index out of `project-state.md`,
+run this from the Build Studio checkout, when no run is active in that project.
+It is a dry run until you pass `--apply`. It writes `docs/decisions.md` and
+`docs/backlog-index.md`, leaves a pointer under each old heading, and does not
+commit. A section whose target file already exists is reported and left for
+you to merge by hand:
+
+```bash
+node bin/cli.js migrate-project-state /path/to/project --apply
+```
+
+Then commit the three files in the project:
+
+```bash
+git add docs/project-state.md docs/decisions.md docs/backlog-index.md
+git commit -m "docs: move the decisions log and backlog index out of project-state.md"
+```
+
+If the Workflow tab still shows the size notice after that, what is left is the
+project's own history. Cut it back by hand or as a backlog item: move old
+Active PRD entries and similar logs to `docs/history/`, rewrite
+`ARCHITECTURE.md` as a map of the code as it is now, and add a check that keeps
+both within the limits. A project's own `AGENTS.md` also keeps its old "update
+`ARCHITECTURE.md` in the same commit" line, which is what grew the file. Replace
+it with the revise rule from `templates/default/AGENTS.md`:
+
+```bash
+grep -n 'update `ARCHITECTURE.md` in the same commit' AGENTS.md
+```
+
+---
+
 ## 2026-10-07 — A lean execution chain to trial; Codex agents resume after a usage limit; terminals fit the window
 
 ### Added

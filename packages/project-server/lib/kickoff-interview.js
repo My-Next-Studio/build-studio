@@ -99,7 +99,7 @@ function launchInterview({ config, tmuxOps, prior = null, mode = 'kickoff', find
   const cliSessionId = resuming ? priorId : (canPinSession(cli) ? crypto.randomUUID() : null);
 
   const prompt = resuming
-    ? 'Continue the owner interview where we left off. Re-read docs/inputs/owner-interview.md and the Key Decisions Log first, then pick up from the next open topic.'
+    ? 'Continue the owner interview where we left off. Re-read docs/inputs/owner-interview.md and the Key Decisions Log (docs/decisions.md) first, then pick up from the next open topic.'
     : interviewPrompt(projectName, mode);
   const promptFile = path.join(projectRoot, `prompt-${WINDOW}.txt`);
   fs.writeFileSync(promptFile, prompt, 'utf8');
@@ -167,6 +167,8 @@ function interviewCommitPaths(projectRoot, docsRel = 'docs', exists = fs.existsS
   return [
     path.join(docsRel, 'inputs', 'owner-interview.md'),
     path.join(docsRel, 'project-state.md'),
+    path.join(docsRel, 'decisions.md'),
+    path.join(docsRel, 'backlog-index.md'),
     path.join(docsRel, 'vision.md'),
     path.join(docsRel, 'backlog'),
   ].filter((p) => exists(path.join(projectRoot, p)));

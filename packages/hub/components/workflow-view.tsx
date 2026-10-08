@@ -274,6 +274,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   const [interview, setInterview] = useState<{ live: boolean; agentRunning: boolean } | null>(null)
   const [recoverable, setRecoverable] = useState<RecoverableAgent[]>([])
   const [limitBlocked, setLimitBlocked] = useState<LimitBlockedAgent[]>([])
+  // project-state.md / ARCHITECTURE.md over their size limits (lib/doc-budget.js).
+  const [docBudget, setDocBudget] = useState<{ file: string; bytes: number; limitBytes: number; holds: string }[]>([])
   const [recovering, setRecovering] = useState<string | null>(null)
   const [findings, setFindings] = useState<Finding[]>([])
   const [findingOverrides, setFindingOverrides] = useState<Record<string, Finding['status']>>({})
@@ -394,6 +396,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     setNeedsAttention(data.needsAttention || null)
     setInterview(data.interview || null)
     setLimitBlocked(Array.isArray(data.limitBlocked) ? data.limitBlocked : [])
+    setDocBudget(Array.isArray(data.docBudget) ? data.docBudget : [])
     // An agent can finish its work and end its turn without ever POSTing its
     // report — the workflow then waits on output that already exists in the
     // CLI transcript on disk. Ask whether any of that is sitting there, so the
@@ -886,6 +889,26 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                 needed. Starts on a fix/&lt;id&gt; branch; the bug flips to Fixing.
               </div>
             )}
+          </div>
+        )}
+        {/* Over-limit docs: every agent in the run reads these first. A notice,
+            never a block (owner decision 2026-10-08). */}
+        {!wf && docBudget.length > 0 && (
+          <div style={{
+            marginBottom: 16, padding: '8px 12px', borderRadius: 4,
+            background: 'color-mix(in srgb, var(--orange) 8%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--orange) 40%, transparent)',
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.5,
+          }}>
+            {docBudget.map(d => (
+              <div key={d.file}>
+                <b style={{ color: 'var(--text)' }}>{d.file}</b> is {Math.round(d.bytes / 1024)} KB, over
+                its {Math.round(d.limitBytes / 1024)} KB limit. It should hold only {d.holds}.
+              </div>
+            ))}
+            <div style={{ color: 'var(--muted)', marginTop: 4 }}>
+              Every agent in a run reads {docBudget.length === 1 ? 'it' : 'them'} first. Move history to docs/history/ or the PRDs.
+            </div>
           </div>
         )}
         {/* Execution chain — the full chain, or the lean trial preset: one

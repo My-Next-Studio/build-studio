@@ -18,6 +18,7 @@ Usage:
   build-studio list [--workspace <ws>]
   build-studio list-presets [path]
   build-studio migrate-agents-md [path|--all] [--apply]
+  build-studio migrate-project-state [path|--all] [--apply]
 
 Commands:
   init <path>       Scaffold a new project and register it
@@ -27,13 +28,14 @@ Commands:
   list              List all registered projects (grouped by workspace)
   list-presets      List available presets (built-in + custom)
   migrate-agents-md Migrate projects to the AGENTS.md layout (dry-run unless --apply)
+  migrate-project-state  Move the decisions log and backlog index out of project-state.md (dry-run unless --apply)
 
 Options:
   --port <port>         Port for the server (default: auto-assigned)
   --name <name>         Project name (default: directory name)
   --workspace <ws>      Workspace/namespace to group projects (optional)
-  --all                 (migrate-agents-md) all registered projects
-  --apply               (migrate-agents-md) actually write; default is dry-run
+  --all                 (migrate-*) all registered projects
+  --apply               (migrate-*) actually write; default is dry-run
 `);
   process.exit(1);
 }
@@ -315,6 +317,48 @@ Done! Next steps:
   }
   if (!apply && actionable > 0) {
     console.log(`\n${actionable} project(s) would change. Re-run with --apply to write.\n`);
+  } else {
+    console.log('');
+  }
+
+} else if (command === 'migrate-project-state') {
+  // Moves the Key Decisions Log and the backlog index out of project-state.md,
+  // which every agent reads first, into docs/decisions.md and
+  // docs/backlog-index.md (lib/project-state-migration.js). Dry-run by default;
+  // --apply writes but does not commit. Skips a project mid-run, whose agents
+  // and server may be writing project-state.md.
+  const apply = args.includes('--apply');
+  const all = args.includes('--all');
+  const targetArg = args.find(a => !a.startsWith('--'));
+  if (!all && !targetArg) {
+    console.error('Error: path or --all required. Usage: build-studio migrate-project-state [path|--all] [--apply]');
+    process.exit(1);
+  }
+  const { planProjectStateMigration, applyProjectStateMigration } = require('@build-studio/project-server/lib/project-state-migration');
+  let targets = [];
+  if (all) {
+    const { registry } = require('@build-studio/shared');
+    targets = registry.list().map(p => ({ name: p.name, path: p.path }));
+  } else {
+    targets = [{ name: path.basename(resolveUserPath(targetArg)), path: resolveUserPath(targetArg) }];
+  }
+  console.log(`\nproject-state.md migration ${apply ? '(APPLYING)' : '(dry-run — pass --apply to write)'}\n`);
+  let actionable = 0;
+  for (const t of targets) {
+    if (fs.existsSync(path.join(t.path, '.build-studio', 'workflow-state.json'))) {
+      console.log(`  ⊘ ${t.name} — SKIPPED (active workflow state — migrate when idle)`);
+      continue;
+    }
+    const plan = planProjectStateMigration(t.path);
+    const moves = plan.filter(p => p.action === 'move');
+    console.log(`  ${moves.length ? '→' : plan.some(p => p.action === 'conflict') ? '!' : '✓'} ${t.name}`);
+    for (const p of plan) console.log(`      ${p.key}: ${p.action} — ${p.summary}`);
+    if (!moves.length) continue;
+    actionable++;
+    if (apply) for (const w of applyProjectStateMigration(t.path)) console.log(`      wrote ${w}`);
+  }
+  if (!apply && actionable > 0) {
+    console.log(`\n${actionable} project(s) would change. Re-run with --apply to write, then commit in each project.\n`);
   } else {
     console.log('');
   }

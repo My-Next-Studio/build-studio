@@ -25,7 +25,8 @@ the story is answered:
 1. The backlog item itself — the whole file, including comments and links.
    **Open questions from the owner interview** (`Open question from the owner interview … → owner`)
    were deferred to this story on purpose: ask them now, in the story's context.
-2. `docs/project-state.md` — current phase, and the **Key Decisions Log**.
+2. `docs/decisions.md` — the **Key Decisions Log** (older projects keep it
+   as a section of `docs/project-state.md`).
 3. `docs/vision.md` — especially any "explicitly not planned" section.
 4. `docs/adrs/` — the ADRs the story touches. Cross-cutting requirements there
    are constraints, not questions.
@@ -136,7 +137,9 @@ Three things this skill insists on:
 
 - Set the item's status to `Drafted` and its `prd:` field to the new file's path from the
   repository root, e.g. `docs/prds/PRD-042-short-name.md` — the form the other items use.
-- Update the backlog row in `docs/project-state.md`.
+- Do **not** edit `docs/project-state.md` or `docs/backlog-index.md`. Build
+  Studio renders the item's index line from the item file, and the PRD is not "active" until its
+  execution run starts. The PRD and the item file are the whole handoff.
 - Report, in three lines: what you resolved from documents, what the owner
   decided, and what you left as open questions for review.
 

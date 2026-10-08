@@ -152,6 +152,15 @@ test('onboardProject: creates empty workflow scaffolding (prds, learnings, tmp) 
   } finally { clean(root); }
 });
 
+test('onboardProject: seeds docs/decisions.md and docs/backlog-index.md for the PM to fill', async () => {
+  const root = makeRepo(EXAMPLE_APP_SHAPE);
+  try {
+    await onboardProject(root, { name: 'desk', port: 3099 });
+    assert.match(fs.readFileSync(path.join(root, 'docs', 'decisions.md'), 'utf8'), /^# Key Decisions Log/);
+    assert.match(fs.readFileSync(path.join(root, 'docs', 'backlog-index.md'), 'utf8'), /<!-- BACKLOG-START -->/);
+  } finally { clean(root); }
+});
+
 // ─── Files explicitly NOT created ──────────────────────────────────────────
 
 test('onboardProject: does NOT create vision.md or project-state.md (workflow outputs)', async () => {

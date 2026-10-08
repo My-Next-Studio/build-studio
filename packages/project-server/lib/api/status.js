@@ -4,6 +4,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { derivePrdPhase } = require('../prd-phase');
 const { assertInside } = require('../path-guard');
+const { BACKLOG_INDEX_FILE, backlogIndexPath } = require('../backlog');
 
 // ─── Active-PRD + Backlog parsers (used by /status/prd-phase) ───────────────
 
@@ -266,6 +267,15 @@ function createStatusRouter(config, gitOps, state) {
       const activePrdMatch = content.match(/^## Active PRD\n+(\[[^\]]+\][^\n]+)/m);
       if (activePrdMatch) activePrd = activePrdMatch[1].trim();
     }
+    // A moved index: show its own file, not the pointer left in project-state.md.
+    const indexFile = path.join(docsPath, BACKLOG_INDEX_FILE);
+    if (fs.existsSync(indexFile)) {
+      try {
+        const idx = fs.readFileSync(indexFile, 'utf8');
+        const at = idx.indexOf('## Backlog');
+        projectStateSection = (at >= 0 ? idx.slice(at) : idx).trimEnd();
+      } catch {}
+    }
 
     const commits = gitOps.getRecentCommits(10);
     let agents = null;
@@ -293,17 +303,15 @@ function createStatusRouter(config, gitOps, state) {
     } catch {} // no tags yet
 
     // Has this project been migrated to the PRD-004 backlog format? Detected
-    // by presence of the BACKLOG-START marker in project-state.md. The hub
+    // by presence of the BACKLOG-START marker in the backlog index. The hub
     // uses this to choose the default landing tab (Backlog vs Spec) when no
     // saved per-project tab preference exists yet — keeps unmigrated projects
     // on their existing default.
     let hasBacklog = false;
-    if (fs.existsSync(psFile)) {
-      try {
-        const content = fs.readFileSync(psFile, 'utf8');
-        hasBacklog = content.includes('<!-- BACKLOG-START -->');
-      } catch {}
-    }
+    try {
+      const rel = path.relative(projectRoot, docsPath) || 'docs';
+      hasBacklog = fs.readFileSync(backlogIndexPath(projectRoot, rel), 'utf8').includes('<!-- BACKLOG-START -->');
+    } catch {}
 
     res.json({
       projectStateSection, activePrd, commits, agents, git, commands, version,

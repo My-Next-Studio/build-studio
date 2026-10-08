@@ -177,6 +177,11 @@ async function onboardProject(targetPath, options = {}) {
     path.join(targetPath, 'docs', 'prds', 'TEMPLATE.md'), 'docs/prds/TEMPLATE.md', written, skipped);
   copyIfAbsent(path.join(templateDir, 'docs', 'asset-register.md'),
     path.join(targetPath, 'docs', 'asset-register.md'), 'docs/asset-register.md', written, skipped);
+  // The decisions log and the backlog index live outside project-state.md
+  // (lib/project-state-migration.js); the PM's synthesis fills them.
+  for (const f of ['decisions.md', 'backlog-index.md']) {
+    copyIfAbsent(path.join(templateDir, 'docs', f), path.join(targetPath, 'docs', f), `docs/${f}`, written, skipped);
+  }
   {
     const { ensureManifest } = require('./knowledge-manifest');
     const manifestPath = path.join(targetPath, 'docs', 'knowledge.yaml');

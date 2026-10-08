@@ -14,12 +14,14 @@
 // here would put a second, lossy copy of each decision into the conversation.
 //
 // Sources are the committed record only (git log over the docs tree, and the
-// decisions log in project-state.md). Uncommitted edits are the owner's work in
+// decisions log: docs/decisions.md, or the section of project-state.md in a
+// project not yet migrated). Uncommitted edits are the owner's work in
 // progress, not a change the project has made.
 
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { DECISIONS_FILE } = require('./project-state-migration');
 
 const MAX_PER_SECTION = 8;
 
@@ -73,7 +75,8 @@ function clip(text, n) {
  */
 function decisionsSince(projectState, sinceDate) {
   if (!projectState) return [];
-  const start = projectState.search(/^##\s+Key Decisions Log\s*$/m);
+  // `#` in docs/decisions.md, `##` as a section of project-state.md.
+  const start = projectState.search(/^#{1,2}\s+Key Decisions Log\s*$/m);
   if (start < 0) return [];
   const rest = projectState.slice(start).split('\n').slice(1);
   const out = [];
@@ -105,7 +108,7 @@ function decisionsSince(projectState, sinceDate) {
  *   so its own fresh PRD does not read as someone else's work.
  */
 function computeDraftDelta({ projectRoot, docsPath, since, own = [] }) {
-  const empty = { decisions: [], adrs: [], prds: [], items: [], otherEdits: 0 };
+  const empty = { decisions: [], decisionsSource: null, adrs: [], prds: [], items: [], otherEdits: 0 };
   if (!since || !projectRoot || !docsPath) return empty;
   const rel = path.relative(projectRoot, docsPath) || '.';
   let changed = [];
@@ -154,8 +157,10 @@ function computeDraftDelta({ projectRoot, docsPath, since, own = [] }) {
   docs('prds', prds, 60);
 
   const sinceDate = String(since).slice(0, 10);
-  const decisions = decisionsSince(read(path.join(docsPath, 'project-state.md')), sinceDate);
-  return { decisions, adrs, prds, items, otherEdits };
+  const ownFile = read(path.join(docsPath, DECISIONS_FILE));
+  const decisions = decisionsSince(ownFile || read(path.join(docsPath, 'project-state.md')), sinceDate);
+  const decisionsSource = ownFile ? `docs/${DECISIONS_FILE}` : 'docs/project-state.md → Key Decisions Log';
+  return { decisions, decisionsSource, adrs, prds, items, otherEdits };
 }
 
 /** The delta as a prompt section, or '' when nothing changed. */
@@ -167,7 +172,7 @@ function formatDraftDelta(delta, since) {
     if (rows.length > MAX_PER_SECTION) shown.push(`- …and ${rows.length - MAX_PER_SECTION} more`);
     sections.push(`${heading}\n${shown.join('\n')}`);
   };
-  list('Decisions logged (docs/project-state.md → Key Decisions Log):', delta.decisions, (d) => `${d.date} — ${d.text}`);
+  list(`Decisions logged (${delta.decisionsSource || 'docs/project-state.md → Key Decisions Log'}):`, delta.decisions, (d) => `${d.date} — ${d.text}`);
   const change = (r) => `${r.isNew ? 'new' : `was: ${r.was || 'no status'}`}${r.mine ? ', drafted in this session' : ''}`;
   list('ADRs — new, or status changed:', delta.adrs, (a) => `${a.title} — Status: ${a.status || 'none'} (${change(a)}; ${a.file})`);
   list('PRDs — new, or status changed:', delta.prds, (p) => `${p.title} — ${p.status || 'no status'} (${change(p)}; ${p.file})`);

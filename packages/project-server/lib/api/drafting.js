@@ -16,7 +16,7 @@ const {
   resolveStepLaunchSettings, canPinSession, canResumeSession, sessionPinFlag, sessionResumeFlag,
 } = require('@build-studio/shared/cli');
 const { findDraftSessionId } = require('../draft-session-id');
-const { readItem } = require('../backlog');
+const { readItem, refreshBacklogIndex } = require('../backlog');
 const agentSkills = require('../agent-skills');
 const { computeDraftDelta, formatDraftDelta } = require('../draft-delta');
 
@@ -67,6 +67,13 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
   async function commitDrafts(session) {
     const itemIds = (session && session.items) || [];
     if (!itemIds.length || !fs.existsSync(path.join(projectRoot, '.git'))) return null;
+    // The skill sets the status in the item file only; refresh the index
+    // line's [Type · Status] so the commit carries it.
+    try {
+      refreshBacklogIndex(projectRoot, docsRel);
+    } catch (e) {
+      console.warn(`[draft] backlog index not refreshed: ${e.message}`);
+    }
     const paths = draftCommitPaths({ projectRoot, docsRel, itemIds, readItem });
     if (!paths.length) return null;
     const result = await scopedCommit(projectRoot, paths, draftCommitMessage(itemIds));

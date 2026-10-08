@@ -20,8 +20,10 @@ authority.)
 
 Each project defines its own stack — see the project's `AGENTS.md` and
 `ARCHITECTURE.md` (repo root, the maintained component map: read it before
-exploring the codebase; whoever changes the component map updates it in the
-same commit). Nothing in this file assumes a particular language or framework.
+exploring the codebase; whoever changes the component map revises it in the
+same commit — editing the affected entry rather than adding a paragraph, and
+keeping it to about two pages of the code as it is now; Build Studio warns past
+20 KB). Nothing in this file assumes a particular language or framework.
 Stack-specific rules (e.g. "always `throw redirect()` in SvelteKit server
 functions") belong in the project's own `AGENTS.md`, never here. Where a
 convention below is stack-conditional (e.g. playwright-cli for browser
@@ -47,7 +49,9 @@ structures or use skill-default paths.
 |-----------|---------|------------|
 | `docs/inputs/` | Input documents provided before kickoff | Read-only reference |
 | `docs/vision.md` | Canonical vision — produced by kickoff | Update via /ceo only |
-| `docs/project-state.md` | Single source of truth for project status | Update as state changes |
+| `docs/project-state.md` | Single source of truth for project status: current state, roles, conventions | Replace lines, never append; history goes to the PRDs or `docs/history/`. Warned past 40 KB |
+| `docs/decisions.md` | Key Decisions Log, newest first | Append a row per decision; not required reading |
+| `docs/backlog-index.md` | The backlog's order: one line per item in `docs/backlog/`, between the BACKLOG markers | Add a line per new item; Build Studio renders status from the item files |
 | `docs/prds/` | PRDs: `PRD-NNN-short-name.md` | One per iteration |
 | `docs/adrs/` | Architecture Decision Records | When arch decisions are made |
 | `docs/ux/` | UX specs: `UX-NNN-short-name.md` | When PRD requires UX input |
@@ -68,7 +72,7 @@ structures or use skill-default paths.
 - All project state lives in `docs/project-state.md` — update it, not this file
 - Commands define roles; skills provide methodology
 - Review skill output through the lens of your role command
-- Log decisions in the Key Decisions Log with which role made them
+- Log decisions in the Key Decisions Log (`docs/decisions.md`) with which role made them. Put each one in the PRD or ADR it governs as well; the log is the index, and it is not required reading
 - When facing a decision with multiple valid alternatives, stop and consult the user
 - PRDs must be small enough to evaluate and throw away
 - **When a role is referenced in a prompt** — read the corresponding
@@ -146,7 +150,7 @@ required for this step regardless of which role runs it.
 5. Evaluate    → Keep or discard. If vision needs updating → /ceo
 6. Commit & push → Full regression runs in CI/CD pipeline (not per-iteration)
 7. Clean up    → Dashboard "Merge Branches" removes worktrees, branches, and logs automatically
-               → Mark PRD done in docs/project-state.md (Active PRD + Backlog table + Phase line)
+               → Mark PRD done in docs/project-state.md (Active PRD + Last updated + Phase line)
 ```
 
 **DevOps note:** Standalone infrastructure work (CI/CD pipeline, deployment setup,
@@ -357,7 +361,8 @@ implementation until the artifact exists.
 
 The owner picks a mode during kickoff (`pm_scoping` step asks the question)
 or onboarding (recorded by the discovery survey). Switching modes mid-project
-is allowed but should be a deliberate decision logged in the Key Decisions Log.
+is allowed but should be a deliberate decision logged in the Key Decisions Log
+(`docs/decisions.md`).
 
 ### Mode: Pencil-controlled — Screenshot tool: playwright-cli
 

@@ -6,8 +6,14 @@
  *     (id, title, type, status, release, prd, depends_on, cost_actual_usd, created)
  *     and a free-form body (## Requirements, ## Acceptance criteria, ## Notes).
  *   - The canonical *order* lives between `<!-- BACKLOG-START -->` and
- *     `<!-- BACKLOG-END -->` in `<docs>/project-state.md`. Content outside the
- *     markers is preserved verbatim on every write.
+ *     `<!-- BACKLOG-END -->` in the backlog index: `<docs>/backlog-index.md`,
+ *     or, in a project not yet migrated, `<docs>/project-state.md`. Content
+ *     outside the markers is preserved verbatim on every write.
+ *
+ *     The index moved out of project-state.md because every agent reads that
+ *     file first, and the index grows by a line per item forever: one
+ *     project's was 75 KB on its own. Go through backlogIndexPath() rather
+ *     than naming either file.
  *
  * This module is pure I/O + parsing. No express, no workflow concerns.
  */
@@ -48,6 +54,23 @@ function backlogDir(projectRoot, docsPath) {
 }
 function projectStatePath(projectRoot, docsPath) {
   return path.join(projectRoot, docsPath || 'docs', 'project-state.md');
+}
+
+const BACKLOG_INDEX_FILE = 'backlog-index.md';
+
+/**
+ * The file holding the backlog markers: docs/backlog-index.md when it has
+ * them, otherwise project-state.md (a project from before the move; see
+ * lib/project-state-migration.js). Existence alone is not enough: an agent in
+ * an unmigrated project, reading role text that names the new file, could
+ * create a stray one, and the whole backlog would then read as empty.
+ */
+function backlogIndexPath(projectRoot, docsPath) {
+  const own = path.join(projectRoot, docsPath || 'docs', BACKLOG_INDEX_FILE);
+  try {
+    if (fs.readFileSync(own, 'utf8').includes(BACKLOG_START)) return own;
+  } catch (_) { /* no file: the index is still in project-state.md */ }
+  return projectStatePath(projectRoot, docsPath);
 }
 function itemFilePath(projectRoot, docsPath, id) {
   if (!isValidId(id)) throw new Error(`Invalid item id: ${id}`);
@@ -109,7 +132,7 @@ function listItems(projectRoot, docsPath) {
   return out;
 }
 
-// ─── project-state.md backlog section parse / render ─────────────────────────
+// ─── backlog index section parse / render ────────────────────────────────────
 
 /**
  * Parse the backlog section into an ordered list of release groups.
@@ -162,28 +185,52 @@ function renderBacklogSection(groups, itemsById) {
 }
 
 /**
- * Splice the backlog section into project-state.md, preserving everything
+ * Splice the backlog section into the backlog index, preserving everything
  * outside the markers verbatim. Loads all items first so display lines use
- * current titles/types/statuses. Both items missing from project-state.md
- * (orphans) and IDs in project-state.md with no item file (dead refs) are
+ * current titles/types/statuses. Both items missing from the index
+ * (orphans) and IDs in the index with no item file (dead refs) are
  * left for the lint command to surface — this function neither auto-adds nor
  * auto-removes orphans.
  */
 function writeBacklogSection(projectRoot, docsPath, groups) {
-  const file = projectStatePath(projectRoot, docsPath);
-  if (!fs.existsSync(file)) throw new Error(`project-state.md not found at ${file}`);
+  const file = backlogIndexPath(projectRoot, docsPath);
+  if (!fs.existsSync(file)) throw new Error(`backlog index not found at ${file}`);
   let content = fs.readFileSync(file, 'utf8');
   const startIdx = content.indexOf(BACKLOG_START);
   const endIdx = content.indexOf(BACKLOG_END);
   if (startIdx < 0 || endIdx < 0) {
-    throw new Error(`project-state.md is missing BACKLOG-START/END markers — cannot splice.`);
+    throw new Error(`${path.basename(file)} is missing BACKLOG-START/END markers — cannot splice.`);
   }
   const items = listItems(projectRoot, docsPath);
   const itemsById = Object.fromEntries(items.map(i => [i.id, i]));
   const newSection = renderBacklogSection(groups, itemsById);
   const before = content.slice(0, startIdx + BACKLOG_START.length);
   const after = content.slice(endIdx);
-  fs.writeFileSync(file, before + newSection + after);
+  const next = before + newSection + after;
+  // Unchanged → no write, so a caller can re-render on every read without
+  // touching the file's mtime or the working tree.
+  if (next === content) return false;
+  fs.writeFileSync(file, next);
+  return true;
+}
+
+/** The release groups in the backlog index, or [] when there is none. */
+function readBacklogGroups(projectRoot, docsPath) {
+  try {
+    return parseBacklogSection(fs.readFileSync(backlogIndexPath(projectRoot, docsPath), 'utf8'));
+  } catch (_) {
+    return [];
+  }
+}
+
+/**
+ * Re-render every index line's `[Type · Status]` from the item files, keeping
+ * the order. Returns true when the file changed. Callers use it after a status
+ * moves; agents set status in the item file and never edit the line.
+ */
+function refreshBacklogIndex(projectRoot, docsPath) {
+  const groups = readBacklogGroups(projectRoot, docsPath);
+  return groups.length > 0 ? writeBacklogSection(projectRoot, docsPath, groups) : false;
 }
 
 // ─── ID assignment ───────────────────────────────────────────────────────────
@@ -280,7 +327,7 @@ function insertIntoGroups(groups, id, { release = null, after = null, before = n
 /**
  * Create a backlog item and its marker line in one step.
  *
- * The two-place contract (item file + line in project-state.md) is applied by
+ * The two-place contract (item file + line in the backlog index) is applied by
  * code, not by an agent editing both files: an agent that writes one and not
  * the other leaves an orphan the backlog view flags as unlisted. Validation and
  * placement happen BEFORE anything is written, so a refused request leaves no
@@ -301,11 +348,11 @@ function createItem(projectRoot, docsPath, {
     if (!fs.existsSync(itemFilePath(projectRoot, docsPath, d))) throw new Error(`depends_on names ${d}, which has no item file`);
   }
 
-  const statePath = projectStatePath(projectRoot, docsPath);
-  if (!fs.existsSync(statePath)) throw new Error(`project-state.md not found at ${statePath}`);
-  const content = fs.readFileSync(statePath, 'utf8');
+  const indexPath = backlogIndexPath(projectRoot, docsPath);
+  if (!fs.existsSync(indexPath)) throw new Error(`backlog index not found at ${indexPath}`);
+  const content = fs.readFileSync(indexPath, 'utf8');
   if (!content.includes(BACKLOG_START) || !content.includes(BACKLOG_END)) {
-    throw new Error('project-state.md is missing BACKLOG-START/END markers');
+    throw new Error(`${path.basename(indexPath)} is missing BACKLOG-START/END markers`);
   }
 
   const id = nextItemId(projectRoot, docsPath, deriveItemPrefix(projectRoot, docsPath, config));
@@ -507,17 +554,13 @@ function discoverCompanionSpecs(projectRoot, docsPath, item) {
 
 /**
  * Returns { groups, items }. `groups` is the ordered release structure from
- * project-state.md (with just IDs). `items` is a map id → item object so the
- * caller can hydrate display lines. Items missing from project-state.md
+ * the backlog index (with just IDs). `items` is a map id → item object so the
+ * caller can hydrate display lines. Items missing from the index
  * appear in `items` but not in any group (orphans). IDs in groups without a
  * matching item appear in `groups` but not `items` (dead refs).
  */
 function readBacklog(projectRoot, docsPath) {
-  const stateFile = projectStatePath(projectRoot, docsPath);
-  let groups = [];
-  if (fs.existsSync(stateFile)) {
-    groups = parseBacklogSection(fs.readFileSync(stateFile, 'utf8'));
-  }
+  const groups = readBacklogGroups(projectRoot, docsPath);
   const itemList = listItems(projectRoot, docsPath);
   const items = Object.fromEntries(itemList.map(i => [i.id, i]));
   return { groups, items };
@@ -635,6 +678,10 @@ module.exports = {
   isValidId,
   backlogDir,
   projectStatePath,
+  BACKLOG_INDEX_FILE,
+  backlogIndexPath,
+  readBacklogGroups,
+  refreshBacklogIndex,
   itemFilePath,
   parseItemFile,
   serializeItemFile,

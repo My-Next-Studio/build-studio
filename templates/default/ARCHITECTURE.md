@@ -6,8 +6,11 @@ exploring the codebase** — don't re-derive what it already tells you.
 
 **Maintenance:** whoever changes the component map (new module, moved
 responsibility, new seam or guardrail) updates this file **in the same commit**.
-Keep it under ~2 pages. Status and conventions live in `docs/project-state.md`;
-decision rationale lives in `docs/adrs/` — never duplicate either here.
+Keep it under ~2 pages; Build Studio warns past 20 KB. It describes the code as
+it is now, not how it got there: no per-PRD paragraphs, and when a component is
+removed, delete its entry. Status and conventions live in `docs/project-state.md`;
+decision rationale lives in `docs/adrs/`; a PRD's story lives in the PRD. Never
+duplicate any of them here.
 
 > This is a new project — the sections below fill in as components land.
 > Builders: when your PRD introduces the first real component, replace the

@@ -285,7 +285,7 @@ export function BacklogTab({
     try {
       const res = await api.post('/draft/end', {})
       if (res && res.error) { setStartError({ id: '', message: res.error }); return }
-      // Ending commits the draft's PRD, item and project-state. A failure is not
+      // Ending commits the draft's PRD, item and backlog index. A failure is not
       // fatal (the files are on disk), but left unsaid it surfaces later as a
       // dirty tree that refuses the next run.
       if (res && res.commit && !res.commit.committed) {
@@ -411,7 +411,7 @@ export function BacklogTab({
     return { all, feat, bug, task }
   }, [groups, items])
 
-  // Item files with no line between the BACKLOG markers in project-state.md.
+  // Item files with no line between the BACKLOG markers in the backlog index.
   // They belong to no release group, so without this strip they render nowhere.
   const unlisted = useMemo(() => {
     const grouped = new Set<string>()
@@ -665,7 +665,7 @@ export function BacklogTab({
             ⚠ {unlisted.length} unlisted item{unlisted.length === 1 ? '' : 's'}
           </span>
           <span style={{ color: 'var(--text-dim)' }}>
-            {' '}— item file exists in <Code>docs/backlog/</Code> but has no line between the BACKLOG markers in <Code>docs/project-state.md</Code>, so it belongs to no release. Tell PM to re-splice it, or add the line by hand.
+            {' '}— item file exists in <Code>docs/backlog/</Code> but has no line between the BACKLOG markers in <Code>docs/backlog-index.md</Code>, so it belongs to no release. Tell PM to re-splice it, or add the line by hand.
           </span>
           <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
             {unlisted.map(id => {
@@ -683,10 +683,10 @@ export function BacklogTab({
       {!loading && !error && groups.length === 0 && (
         <div style={{ padding: 24, color: 'var(--text-dim)', fontSize: 12, lineHeight: 1.6 }}>
           <p style={{ margin: 0 }}>
-            No backlog markers in <Code>docs/project-state.md</Code>.
+            No backlog markers in <Code>docs/backlog-index.md</Code> or <Code>docs/project-state.md</Code>.
           </p>
           <p style={{ marginTop: 8 }}>
-            Add a <Code>{'<!-- BACKLOG-START -->'}…{'<!-- BACKLOG-END -->'}</Code> section and put item files at <Code>docs/backlog/{'<ID>'}.md</Code>.
+            Add a <Code>{'<!-- BACKLOG-START -->'}…{'<!-- BACKLOG-END -->'}</Code> section to <Code>docs/backlog-index.md</Code> and put item files at <Code>docs/backlog/{'<ID>'}.md</Code>.
           </p>
         </div>
       )}

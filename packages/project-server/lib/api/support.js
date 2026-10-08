@@ -25,7 +25,7 @@ const path = require('path');
 const yaml = require('js-yaml');
 const {
   readItem, writeItem, nextItemId, isValidId,
-  backlogDir, projectStatePath, parseBacklogSection, writeBacklogSection,
+  backlogDir, backlogIndexPath, readBacklogGroups, writeBacklogSection,
   deriveItemPrefix, prefixFromName,
 } = require('../backlog');
 const { tidyMarkdown } = require('../markdown-tidy');
@@ -206,16 +206,13 @@ function createSupportRouter(config, {
   // ─── materialization (server-written; the agent never writes items) ──────────
 
   /**
-   * Add `<newId>` as a marker line to project-state.md's BACKLOG section.
+   * Add `<newId>` as a marker line to the backlog index's BACKLOG section.
    * `bucket === 'bugs'` files it under the "Bugs — fix next" heading (created
    * right after BACKLOG-START if absent); otherwise it goes under the first
    * existing (non-Bugs) release heading, or a new "Unscheduled" heading.
    */
   function addMarkerLine(newId, bucket) {
-    const statePath = projectStatePath(projectRoot, docsPath);
-    const groups = fs.existsSync(statePath)
-      ? parseBacklogSection(fs.readFileSync(statePath, 'utf8'))
-      : [];
+    const groups = readBacklogGroups(projectRoot, docsPath);
     if (bucket === 'bugs') {
       let g = groups.find(x => x.release === BUGS_HEADING);
       if (!g) { g = { release: BUGS_HEADING, items: [] }; groups.unshift(g); }
@@ -263,7 +260,7 @@ function createSupportRouter(config, {
   }
 
   /**
-   * Auto-commit a filed item + its project-state marker line so the owner
+   * Auto-commit a filed item + its backlog-index marker line so the owner
    * never has to commit filings manually (owner decision 2026-07-17,
    * `support.auto_commit`, default on). Commits land on WHATEVER branch is
    * checked out — during an execution run that is the feature branch, which
@@ -277,13 +274,13 @@ function createSupportRouter(config, {
     if (!enabled || !newId || !fs.existsSync(path.join(projectRoot, '.git'))) return;
     const paths = [
       path.relative(projectRoot, path.join(projectRoot, docsPath || 'docs', 'backlog', `${newId}.md`)),
-      path.relative(projectRoot, projectStatePath(projectRoot, docsPath)),
+      path.relative(projectRoot, backlogIndexPath(projectRoot, docsPath)),
     ];
     const result = await scopedCommit(projectRoot, paths, `chore(support): file ${newId} (from ${report.id})`);
     if (result.committed) {
       report.filed_commit = result.sha || 'concurrent';
     } else {
-      report.body = appendNote(report.body, `Filed as ${newId} but NOT committed — ${result.reason}. Commit docs/backlog/${newId}.md + project-state.md manually.`);
+      report.body = appendNote(report.body, `Filed as ${newId} but NOT committed — ${result.reason}. Commit docs/backlog/${newId}.md + ${path.relative(projectRoot, backlogIndexPath(projectRoot, docsPath))} manually.`);
     }
   }
 
@@ -314,7 +311,7 @@ function createSupportRouter(config, {
         writeReport(reportDir, report); // before the await — see the decision route
         await autoCommitFiling(report, report.linked_item);
       } catch (e) {
-        // Filing failed (e.g. no project-state.md markers) — surface the proposal
+        // Filing failed (e.g. no backlog-index markers) — surface the proposal
         // so the owner can act rather than losing the triage.
         report.status = 'proposed';
         report.body = appendNote(report.body, `Auto-file failed: ${e.message}`);

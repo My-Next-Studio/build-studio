@@ -35,4 +35,4 @@ Synthesize input documents into a coherent vision. Make strategic decisions.
 ## What You Produce
 
 - `docs/vision.md` — the canonical vision document
-- Strategic decisions logged in Key Decisions Log
+- Strategic decisions logged in the Key Decisions Log (`docs/decisions.md`)

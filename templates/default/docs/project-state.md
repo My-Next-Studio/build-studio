@@ -2,6 +2,11 @@
 
 > [One-line project description]
 
+<!-- Every agent reads this file first, so it holds the present only: current
+     state, roles, conventions and the backlog index. Replace lines, don't
+     append to them. Decisions go in docs/decisions.md, PRD history in the PRDs
+     or docs/history/. Build Studio warns when this file passes 40 KB. -->
+
 ## Input Documents
 
 [References to docs/inputs/ files]
@@ -51,8 +56,8 @@ Global learnings from other projects are injected automatically by the workflow 
 
 ## Key Decisions Log
 
-| Date | Decision | Role | Reference |
-|------|----------|------|-----------|
+Moved to [`docs/decisions.md`](decisions.md). It is not required reading:
+open it when drafting, or when a PRD, ADR or item cites a decision.
 
 ## Active PRD
 
@@ -60,18 +65,5 @@ None — run kickoff first.
 
 ## Backlog
 
-> **PRD-004 format.** Each backlog item is one file at `docs/backlog/<PREFIX>-NNN.md`
-> (YAML frontmatter: `id, title, type, status, release, created, prd, depends_on, cost_actual_usd`).
-> `<PREFIX>` is a 2–4 letter uppercase code derived from the project name
-> (e.g. example-graph → `EG`, example-web → `EW`). The ordered list between the markers
-> below is the source of truth for **membership and order** — the dashboard renders
-> from it, so every item file MUST have a matching line here. See the `/pm` skill's
-> backlog rules. Do **not** use a legacy markdown table.
-
-<!-- BACKLOG-START -->
-
-### [Release / phase name — e.g. "Phase 1 — Foundation"]
-
-- [Filled during kickoff by /pm — one `- <PREFIX>-NNN — Title  [Type · Status]` line per item]
-
-<!-- BACKLOG-END -->
+Moved to [`docs/backlog-index.md`](backlog-index.md): the order of the backlog,
+one line per item in `docs/backlog/`. Item status lives in the item files.

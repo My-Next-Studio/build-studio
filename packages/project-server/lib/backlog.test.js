@@ -153,6 +153,20 @@ test('writeBacklogSection round-trips via parseBacklogSection', () => {
   assert.deepEqual(reparsed, groups);
 });
 
+test('writeBacklogSection picks up a status an agent set in the item file, and skips an unchanged write', () => {
+  const root = tmpProject();
+  const file = path.join(root, 'docs', 'project-state.md');
+  fs.writeFileSync(file, `# state\n${BACKLOG_START}\n${BACKLOG_END}\n`);
+  writeItem(root, 'docs', { id: 'EX-001', title: 'A', type: 'Feature', status: 'Backlog', body: '' });
+  const groups = [{ release: 'Release 0.1', items: ['EX-001'] }];
+  assert.equal(writeBacklogSection(root, 'docs', groups), true);
+  assert.equal(writeBacklogSection(root, 'docs', groups), false);
+  // The PM drafts a PRD: only the item file changes.
+  writeItem(root, 'docs', { id: 'EX-001', title: 'A', type: 'Feature', status: 'Drafted', body: '' });
+  assert.equal(writeBacklogSection(root, 'docs', groups), true);
+  assert.match(fs.readFileSync(file, 'utf8'), /EX-001 — A\s+\[Feature · Drafted\]/);
+});
+
 test('writeBacklogSection renders missing-item placeholder for dead refs', () => {
   const root = tmpProject();
   fs.writeFileSync(path.join(root, 'docs', 'project-state.md'),

@@ -76,3 +76,39 @@ test('no Active PRD section and no matching row → content unchanged', () => {
   assert.equal(content, md);
   assert.equal(backlogRowChanged, false);
 });
+
+test('Active PRD: earlier "None — … complete" lines and stale entries are replaced, not stacked', () => {
+  const md = [
+    '## Active PRD',
+    '',
+    '**[PRD-020 — New thing](prds/PRD-020.md)** — In Execution.',
+    '',
+    'None — PRD-019 complete. Next: scope next PRD.',
+    '',
+    'Also drafted 2026-10-03: **[PRD-021](prds/PRD-021.md)** — Round 0.',
+    '',
+    '**[PRD-012 — Old](prds/PRD-012.md)** — Draft, Electron pinned at 43.4.1.',
+    '',
+    '### Completed prep work',
+    '',
+    '## Backlog',
+  ].join('\n');
+  const { content } = markPrdDoneContent(md, 'PRD-020', TODAY);
+  assert.match(content, /## Active PRD\n\nNone — PRD-020 complete\. Next: scope next PRD\.\n\n### Completed prep work/);
+  assert.equal(content.match(/None — /g).length, 1);
+  assert.doesNotMatch(content, /PRD-019|PRD-021|PRD-012/);
+});
+
+test('Last updated: the whole line is replaced, including summaries appended after the date', () => {
+  const md = '- **Last updated:** 2026-07-01 (**PRD-138 — commentary removed.** A long run summary.) and more\n- **Next:** x\n';
+  const { content } = markPrdDoneContent(md, 'PRD-1', TODAY);
+  assert.equal(content, '- **Last updated:** 2026-07-19\n- **Next:** x\n');
+});
+
+const { companionSpecsDeclaredNone } = require('./workflow');
+
+test('companion specs: "None required" with no table is a declared none, a table or silence is not', () => {
+  assert.equal(companionSpecsDeclaredNone('\nNone required. Restructuring existing docs.\n'), true);
+  assert.equal(companionSpecsDeclaredNone('\n> keep the note "None required"\n\n| Spec | Owner |\n|--|--|\n| UX-1 | UX |\n'), false);
+  assert.equal(companionSpecsDeclaredNone('\nTBD\n'), false);
+});

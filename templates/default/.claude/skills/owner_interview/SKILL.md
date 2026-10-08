@@ -31,7 +31,8 @@ Read, in this order:
    inferences are your question list.
 2. `docs/vision.md` — fresh from the kickoff or onboarding. At onboarding,
    also the ADRs in `docs/adrs/`.
-3. `docs/project-state.md` — phase, roles, and the **Key Decisions Log**.
+3. `docs/project-state.md` — phase and roles; `docs/decisions.md` — the
+   **Key Decisions Log**.
 4. `docs/backlog/` — the items the PM just scoped.
 
 Then say what is already answered, one line each, before asking anything:
@@ -106,9 +107,9 @@ and go to step 6.
 
 Write as you go, not at the end, so an interrupted interview loses nothing.
 
-- **Key Decisions Log** in `docs/project-state.md`: one row per decision —
+- **Key Decisions Log** in `docs/decisions.md`, newest first: one row per decision —
   `| <date> | <decision, one sentence> | Owner (interview) | docs/inputs/owner-interview.md |`.
-  Every PM, reviewer and drafting session reads it.
+  Drafting sessions check it before asking the owner anything.
 - **`docs/vision.md`**, where an answer changes what it says. Do not leave the
   vision contradicting a decision.
 - **`docs/inputs/owner-interview.md`**: a dated summary — resolved from the

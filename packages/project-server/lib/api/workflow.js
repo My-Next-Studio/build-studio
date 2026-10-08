@@ -8,7 +8,7 @@ const opencodeTelemetry = require('../opencode-telemetry');
 const codexTelemetry = require('../codex-telemetry');
 const tokenPricing = require('../token-pricing');
 const agentScorecard = require('../agent-scorecard');
-const { transitionFeaturesForPRD, parseBacklogSection, writeBacklogSection, readItem, isValidId, writeItem } = require('../backlog');
+const { transitionFeaturesForPRD, refreshBacklogIndex, readBacklogGroups, BACKLOG_INDEX_FILE, readItem, isValidId, writeItem } = require('../backlog');
 const { deriveNeedsAttention } = require('../needs-attention');
 const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
 const agentRecovery = require('../agent-recovery');
@@ -33,6 +33,7 @@ const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS 
 const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
 const lean = require('../lean-execution');
+const docBudget = require('../doc-budget');
 const { subagentUsage, withSubagents } = require('../subagent-usage');
 
 // Common instruction fragments injected into all agent prompts.
@@ -637,7 +638,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
 
   /**
    * Advance any backlog items (Feature, Bug, or Task) linked to this PRD to
-   * `targetStatus`, then re-render the BACKLOG section in project-state.md so
+   * `targetStatus`, then re-render the BACKLOG section of the backlog index so
    * the display lines reflect the new statuses. Safe to call when there's no
    * PRD path (no-op) or when no items match (no-op). Forward-only — never reverts.
    */
@@ -648,12 +649,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
       if (result.transitioned.length === 0) return;
       console.log(`[backlog] PRD ${prdRelPath}: ${result.transitioned.length} item(s) → ${targetStatus}: ${result.transitioned.map(t => t.id).join(', ')}`);
       // Re-render the order block so display lines pick up new statuses.
-      const statePath = path.join(projectRoot, config.docs_path || './docs', 'project-state.md');
-      if (fs.existsSync(statePath)) {
-        const content = fs.readFileSync(statePath, 'utf8');
-        const groups = parseBacklogSection(content);
-        if (groups.length > 0) writeBacklogSection(projectRoot, config.docs_path || './docs', groups);
-      }
+      refreshBacklogIndex(projectRoot, config.docs_path || './docs');
     } catch (e) {
       console.warn(`[backlog] advanceLinkedFeatures(${prdRelPath} → ${targetStatus}) failed:`, e.message);
     }
@@ -678,7 +674,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   /**
    * Set a backlog item's status (bugfix lifecycle: Backlog/Blocked → Fixing →
    * Done, or Fixing → Backlog on cancel) and re-render the BACKLOG section of
-   * project-state.md so its marker line reflects the new status. `extraFields`
+   * the backlog index so its marker line reflects the new status. `extraFields`
    * merges additional frontmatter (e.g. `{ fixed_in: <sha> }` at merge).
    *
    * Uses the validated backlog `writeItem` — all three bugfix statuses (Fixing,
@@ -691,13 +687,9 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
     const updated = { ...item, status, ...(extraFields || {}) };
     writeItem(projectRoot, relDocs, updated);
     try {
-      const statePath = path.join(projectRoot, relDocs, 'project-state.md');
-      if (fs.existsSync(statePath)) {
-        const groups = parseBacklogSection(fs.readFileSync(statePath, 'utf8'));
-        if (groups.length > 0) writeBacklogSection(projectRoot, relDocs, groups);
-      }
+      refreshBacklogIndex(projectRoot, relDocs);
     } catch (e) {
-      console.warn(`[bugfix] project-state re-render for ${id}→${status} failed:`, e.message);
+      console.warn(`[bugfix] backlog index re-render for ${id}→${status} failed:`, e.message);
     }
     return true;
   }
@@ -716,7 +708,10 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
       // Scope strictly to the backlog status files. A review may legitimately run
       // with the owner's unrelated PRD drafts uncommitted (the start guardrail
       // allows it), so a broad `git add docs/` would sweep those into this commit.
-      const paths = [`${docsRel}/project-state.md`, `${docsRel}/backlog`];
+      // The index is its own file after the move, a section of project-state.md
+      // before it; `git add` refuses a missing path, so only existing ones.
+      const paths = [`${docsRel}/project-state.md`, `${docsRel}/${BACKLOG_INDEX_FILE}`, `${docsRel}/backlog`]
+        .filter(p => fs.existsSync(path.join(projectRoot, p)));
       execFileSync('git', ['add', '--', ...paths], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
       const staged = execFileSync('git', ['diff', '--cached', '--name-only', '--', ...paths], { cwd: projectRoot, encoding: 'utf8' }).trim();
       if (!staged) return false;
@@ -1942,9 +1937,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     const prefix = detectBacklogPrefix();
     let releases = [];
     try {
-      const psFile = path.join(docsPath, 'project-state.md');
-      const ps = fs.existsSync(psFile) ? fs.readFileSync(psFile, 'utf8') : '';
-      releases = require('../backlog').parseBacklogSection(ps).map(g => g.release);
+      releases = readBacklogGroups(projectRoot, path.relative(projectRoot, docsPath) || 'docs').map(g => g.release);
     } catch (_) {}
     // Clean the staging dir so a re-propose never mixes with a stale run.
     try { fs.rmSync(FINDINGS_PROPOSAL_DIR, { recursive: true, force: true }); } catch (_) {}
@@ -2051,8 +2044,8 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     // Never trust the agent's manifest value (it invented "LA" for a project
     // whose 65 items are all "LS").
     const prefix = detectBacklogPrefix();
-    const psFile = path.join(projectRoot, docsRel, 'project-state.md');
-    if (!fs.existsSync(psFile)) return { filed: [], error: 'project-state.md not found' };
+    const psFile = bl.backlogIndexPath(projectRoot, docsRel);
+    if (!fs.existsSync(psFile)) return { filed: [], error: `${path.relative(projectRoot, psFile)} not found` };
     const filed = [];
     const today = new Date().toISOString().slice(0, 10);
     for (const it of approvedItems) {
@@ -2073,7 +2066,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       filed.push({ id, title: it.title || id });
     }
     if (filed.length === 0) return { filed: [] };
-    // Scoped commit — item files + project-state.md only, race-safe against
+    // Scoped commit — item files + the backlog index only, race-safe against
     // any concurrently-staging agent.
     try {
       const { execFileSync } = require('child_process');
@@ -3429,6 +3422,9 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       }));
     res.json({
       workflow: wf, projectWorkflowSteps, preset: config.preset, pathologySignals, findings, needsAttention,
+      // project-state.md / ARCHITECTURE.md over their size limits, for the
+      // hub's notice. Two stat calls; empty when both are within limits.
+      docBudget: docBudget.docBudgetWarnings(projectRoot, path.relative(projectRoot, docsPath) || 'docs'),
       // Which lens actually implemented what. Derived, not stored — the agents
       // already carry their roles, and a run has more than one lens by design
       // (the fix loop retargets deliberately). See lib/run-roles.js.
@@ -4095,6 +4091,11 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     if (type === 'bugfix' && wf.taskPlan) initTaskExecution(wf);
 
     state.saveWorkflow(wf);
+
+    // Over-limit docs are logged, never refused (lib/doc-budget.js).
+    for (const w of docBudget.docBudgetWarnings(projectRoot, path.relative(projectRoot, docsPath) || 'docs')) {
+      console.warn(`[workflow] ${docBudget.formatDocBudgetWarning(w)}`);
+    }
 
     // Human gates, reported on the START RESPONSE — not only from the Backlog
     // tab's pre-click scan. That scan covered one of three ways a run begins:
@@ -5330,8 +5331,11 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     // A maintained repo map (component locations, guardrails, test infra) cuts
     // the builder's initial exploration cost — point at it when it exists, and
     // make keeping it current part of the change.
+    // Builders appending a paragraph per PRD is what grew one project's map to
+    // 280 KB. The note says revise, not add, and states the size against the
+    // limit so the trade-off is visible at the moment of the edit.
     const archNote = fs.existsSync(path.join(projectRoot, 'ARCHITECTURE.md'))
-      ? `\nBefore exploring the codebase, read ARCHITECTURE.md at the repo root — the maintained component map, guardrails, and test-infrastructure notes. Don't re-derive what it already tells you. If your changes alter the component map (new module, moved responsibility, new seam), update ARCHITECTURE.md in the same commit.\n`
+      ? `\nBefore exploring the codebase, read ARCHITECTURE.md at the repo root — the maintained component map, guardrails, and test-infrastructure notes. Don't re-derive what it already tells you. If your changes alter the component map (new module, moved responsibility, new seam), revise ARCHITECTURE.md in the same commit: edit the entry your change affects rather than adding a paragraph, delete entries for code you removed, and write no PRD narrative (that belongs in the PRD). ${docBudget.architectureBudgetLine(projectRoot)}\n`
       : '';
 
     // The /goal harness is a Claude Code native feature — arm it only when the
@@ -5979,7 +5983,7 @@ Fix only the issues raised. Commit your changes.`,
       const skill = pmRole ? pmRole.skill : 'pm';
       const agents = [{
         role: 'PM', window: 'pm', status: 'pending', reportFeedback: true,
-        instruction: `You are the Product Manager. Read docs/vision.md and docs/inputs/. Produce:\n1. docs/project-state.md — fill in all template sections (roles, workflow, conventions, backlog)\n2. The BACKLOG — use the PRD-004 per-item format, NOT a markdown table. For each planned iteration write a file docs/backlog/<PREFIX>-NNN.md with YAML frontmatter (id, title, type: Feature, status, release, created: null, prd, depends_on: [], cost_actual_usd: null) AND add a matching line "- <PREFIX>-NNN — Title  [Type · Status]" under a "### <Release>" heading between the <!-- BACKLOG-START -->/<!-- BACKLOG-END --> markers in project-state.md (every item file MUST have a matching marker line, or it renders as nothing). <PREFIX> = a 2–4 letter uppercase code derived from the project name (e.g. example-graph → EG, example-web → EW), numbered 001+. The first item (the one you draft PRD-001 for) is status Drafted with its prd field set to docs/prds/PRD-001-*.md; the rest are status Backlog. See the /${skill} skill's backlog rules for exact steps.\n3. docs/prds/PRD-001-*.md — the first iteration PRD. Start from docs/prds/TEMPLATE.md — copy it and fill it in.\n\nWhile scoping, check docs/inputs/ for the owner's preference on visual design workflow. THREE options:\n  (a) Pencil-controlled — designer authors .pen files; frontend_dev verifies via heatmap-diff\n  (b) Claude Design — designer iterates in claude.ai/design; exports a handoff bundle to design-system/; frontend_dev invokes the bundle's SKILL skill and recreates from HTML prototypes (no heatmap-diff)\n  (c) Agent-autonomous — no design source artifact; frontend_dev works from PRD + UX spec + brand-guidelines.md alone\n\nIf the input documents don't specify which, flag it in your feedback — the owner needs to decide. Record the decision in project-state.md under Project Conventions, e.g.:\n  "Visual design workflow: Pencil-controlled"\n  "Visual design workflow: Claude Design (bundle at design-system/)"\n  "Visual design workflow: agent-autonomous"\n\nThe execution flow uses this convention to decide whether to include or skip the visual_design step and which verification protocol applies.\n\nUse the /${skill} skill. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
+        instruction: `You are the Product Manager. Read docs/vision.md and docs/inputs/. Produce:\n1. docs/project-state.md — fill in all template sections (roles, workflow, conventions); the backlog goes in docs/backlog-index.md (step 2)\n2. The BACKLOG — use the PRD-004 per-item format, NOT a markdown table. For each planned iteration write a file docs/backlog/<PREFIX>-NNN.md with YAML frontmatter (id, title, type: Feature, status, release, created: null, prd, depends_on: [], cost_actual_usd: null) AND add a matching line "- <PREFIX>-NNN — Title  [Type · Status]" under a "### <Release>" heading between the <!-- BACKLOG-START -->/<!-- BACKLOG-END --> markers in docs/backlog-index.md (every item file MUST have a matching marker line, or it renders as nothing). <PREFIX> = a 2–4 letter uppercase code derived from the project name (e.g. example-graph → EG, example-web → EW), numbered 001+. The first item (the one you draft PRD-001 for) is status Drafted with its prd field set to docs/prds/PRD-001-*.md; the rest are status Backlog. See the /${skill} skill's backlog rules for exact steps.\n3. docs/prds/PRD-001-*.md — the first iteration PRD. Start from docs/prds/TEMPLATE.md — copy it and fill it in.\n\nWhile scoping, check docs/inputs/ for the owner's preference on visual design workflow. THREE options:\n  (a) Pencil-controlled — designer authors .pen files; frontend_dev verifies via heatmap-diff\n  (b) Claude Design — designer iterates in claude.ai/design; exports a handoff bundle to design-system/; frontend_dev invokes the bundle's SKILL skill and recreates from HTML prototypes (no heatmap-diff)\n  (c) Agent-autonomous — no design source artifact; frontend_dev works from PRD + UX spec + brand-guidelines.md alone\n\nIf the input documents don't specify which, flag it in your feedback — the owner needs to decide. Record the decision in project-state.md under Project Conventions, e.g.:\n  "Visual design workflow: Pencil-controlled"\n  "Visual design workflow: Claude Design (bundle at design-system/)"\n  "Visual design workflow: agent-autonomous"\n\nThe execution flow uses this convention to decide whether to include or skip the visual_design step and which verification protocol applies.\n\nUse the /${skill} skill. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
       }];
       wf.steps.pm_scoping = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
       state.saveWorkflow(wf);
@@ -6315,11 +6319,12 @@ Fix only the issues raised. Commit your changes.`,
           `Produce three artifacts:\n\n` +
           `1. docs/project-state.md — fill in all template sections.\n` +
           `   - Completed PRDs table populated from git log + README "Released"/"Live" sections\n` +
+          `   - Owner and role decisions you find go in docs/decisions.md (the Key Decisions Log), not here\n` +
           `   - Backlog — use the PRD-004 per-item format, NOT a markdown table: one file ` +
           `docs/backlog/<PREFIX>-NNN.md per item (frontmatter: id, title, type, status, release, ` +
           `created: null, prd, depends_on: [], cost_actual_usd: null) AND a matching line ` +
           `"- <PREFIX>-NNN — Title  [Type · Status]" under a "### <Release>" heading between the ` +
-          `<!-- BACKLOG-START -->/<!-- BACKLOG-END --> markers in project-state.md (every item file MUST ` +
+          `<!-- BACKLOG-START -->/<!-- BACKLOG-END --> markers in docs/backlog-index.md (every item file MUST ` +
           `have a matching marker line). <PREFIX> = a 2–4 letter uppercase code from the project name ` +
           `(e.g. example-web → EW), numbered 001+. Populate items from any "Next steps" / "Roadmap" / ` +
           `IMPLEMENTATION_PLAN-equivalent files; default status Backlog. See the /${skill} skill's backlog rules.\n\n` +
@@ -6794,6 +6799,10 @@ Fix only the issues raised. Commit your changes.`,
       // heading is found.
       const prdPath = path.join(projectRoot, wf.prdPath || '');
       let allSpecs = [];
+      // §10 present with no table and an explicit "None required": the
+      // template tells the PM to write exactly that when a PRD needs no
+      // companion specs. It used to block like a missing §10.
+      let declaredNone = false;
       try {
         const prdContent = fs.readFileSync(prdPath, 'utf8');
         // Primary: find any "## … Companion Spec[s] …" heading regardless of
@@ -6807,6 +6816,7 @@ Fix only the issues raised. Commit your changes.`,
         if (!csMatch) csMatch = prdContent.match(/^## §?10[.\s].*?\n([\s\S]*?)(?=\n## §?\d|$)/m);
         if (csMatch) {
           const section = csMatch[1];
+          declaredNone = companionSpecsDeclaredNone(section);
           // Markdown table rows always start AND end with `|`. Filtering on
           // `.includes('|')` alone catches prose lines whose inline-code
           // contains pipe characters (e.g. `LOW | ELEVATED | MEDIUM | HIGH`),
@@ -6905,6 +6915,14 @@ Fix only the issues raised. Commit your changes.`,
         state.saveWorkflow(wf);
         broadcast('workflow-updated', {});
         return res.json({ workflow: wf });
+      }
+      if (allSpecs.length === 0 && declaredNone) {
+        console.log('[workflow] §10 says "None required" — companion_specs complete');
+        wf.steps.companion_specs = { status: 'completed', note: 'PRD §10: none required' };
+        completeReviewWorkflow(wf);
+        state.saveWorkflow(wf);
+        broadcast('workflow-updated', {});
+        return res.json({ workflow: wf, completed: true });
       }
       if (allSpecs.length === 0) {
         // No §10 companion specs found. This was historically a silent
@@ -9641,7 +9659,7 @@ Many bugs teach nothing durable — a one-off typo, an unforeseeable dependency 
 
 Write a learning ONLY when the lesson is reusable AND cross-project. Classification:
 - **CROSS-PROJECT** (→ a learning file): a pattern that applies to any project on similar tech (e.g. "always test the retry path after a partial-commit failure with the target repointed", "cross-product state must be keyed on productId, not draftId").
-- **PROJECT-SPECIFIC** (→ NOT a learning): this project's paths, schema, config, or infra. Mention it in feedback and, if the repo has ARCHITECTURE.md, propose the exact edit there instead.
+- **PROJECT-SPECIFIC** (→ NOT a learning): this project's paths, schema, config, or infra. Mention it in feedback and, if the repo has ARCHITECTURE.md, propose the exact revision there instead: a rewrite of the entry it belongs to, not an added paragraph (the file has a 20 KB limit).
 
 ## FILE FORMAT (only if you are writing a learning)
 
@@ -9702,7 +9720,7 @@ Every learning must be classified as either:
 - "This project uses Fastify not Express" ← project fact, not a learning
 - Anything about this project's specific file paths, database schema, or deployment setup
 
-DO NOT write project-specific items as learnings. Instead, mention them in your feedback so the team can fix the config or docs directly — and if the repo has an ARCHITECTURE.md at its root, propose the exact edit to its relevant component section (component facts, guardrails, and test-infrastructure notes belong THERE, not in the learnings pool).
+DO NOT write project-specific items as learnings. Instead, mention them in your feedback so the team can fix the config or docs directly — and if the repo has an ARCHITECTURE.md at its root, propose the exact revision of its relevant entry (component facts, guardrails, and test-infrastructure notes belong THERE, not in the learnings pool). Revise the entry in place rather than adding a paragraph: the file is the map of the code as it is now and stays under 20 KB.
 
 ## File Format — ONE FILE PER LEARNING
 
@@ -10426,6 +10444,17 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
   return router;
 }
 
+/**
+ * True when a PRD's Companion Specs section declares there are none: no
+ * table row, and the "None required" note the PRD template prescribes.
+ * Pure; exported for tests.
+ */
+function companionSpecsDeclaredNone(section) {
+  const text = String(section || '');
+  const tableRow = text.split('\n').some((l) => { const t = l.trim(); return t.startsWith('|') && t.endsWith('|'); });
+  return !tableRow && /\bnone\s+(?:are\s+)?required\b/i.test(text);
+}
+
 // Pure project-state.md rewrite for a completed PRD (no I/O — exported for
 // unit tests; markPrdDone wraps it with read/write/commit).
 // Returns { content, backlogRowChanged }.
@@ -10479,13 +10508,24 @@ function markPrdDoneContent(original, prdId, today) {
   if (backlogRowChanged) content = lines.join('\n');
 
   // ---- Active PRD section update ----
-  // Replace the first PARAGRAPH under `## Active PRD` — contiguous non-blank,
-  // non-heading lines. Entries are often multi-line (title link + wrapped
-  // description); replacing only the first line strips the title and orphans
-  // the rest. Subsections like "Completed prep work" (example-ios) still stay.
-  const activePrdPattern = /^(## Active PRD\n+)(.*(?:\n(?!\s*$)(?!#).*)*)/m;
-  if (activePrdPattern.test(content)) {
-    content = content.replace(activePrdPattern, `$1None — ${prdId} complete. Next: scope next PRD.`);
+  // Replace everything under `## Active PRD` up to the next heading, not just
+  // the first paragraph. Replacing one paragraph left the rest in place, so
+  // each run stacked another "None — X complete" above the last one and the
+  // descriptions of long-finished PRDs stayed: one project carried eleven such
+  // lines over ~60 KB of history, in the file every agent reads first.
+  // Subsections (`### Completed prep work`) still stay.
+  {
+    const ls = content.split('\n');
+    const head = ls.findIndex((l) => /^## Active PRD\s*$/.test(l));
+    if (head >= 0) {
+      let start = head + 1;
+      while (start < ls.length && ls[start].trim() === '') start++;
+      let end = start;
+      while (end < ls.length && !/^#/.test(ls[end])) end++;
+      while (end > start && ls[end - 1].trim() === '') end--;
+      ls.splice(start, end - start, `None — ${prdId} complete. Next: scope next PRD.`);
+      content = ls.join('\n');
+    }
   }
 
   // ---- Phase line + Last updated ----
@@ -10493,7 +10533,9 @@ function markPrdDoneContent(original, prdId, today) {
     /- \*\*Phase:\*\* Phase (\d+) — Iteration (\d+) complete\..*/,
     (match, phase, iter) => `- **Phase:** Phase ${phase} — Iteration ${parseInt(iter, 10) + 1} complete. ${prdId} done.`
   );
-  content = content.replace(/- \*\*Last updated:\*\* \d{4}-\d{2}-\d{2}/, `- **Last updated:** ${today}`);
+  // The whole line: agents appended a summary of each PRD after the date, and
+  // replacing only the date kept them (one line had reached 69,500 characters).
+  content = content.replace(/^- \*\*Last updated:\*\* \d{4}-\d{2}-\d{2}.*$/m, `- **Last updated:** ${today}`);
 
   return { content, backlogRowChanged };
 }
@@ -10515,6 +10557,7 @@ module.exports = {
   validateBuilderRole,
   buildBugfixTask,
   markPrdDoneContent,
+  companionSpecsDeclaredNone,
   collectMissingAcArtifacts, findPlaywrightConfigs,
   qaStrictGateVerdict,
   extractOwnerChecklist,

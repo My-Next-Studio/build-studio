@@ -277,8 +277,9 @@ function ensureCreateStorySkill(projectRoot, templateDir) {
 /**
  * The files a finished draft leaves behind, repo-relative, for committing.
  *
- * The draft_prd skill's handoff writes three things: the PRD, the backlog item
- * (status `Drafted`, `prd:` set) and the backlog row in project-state.md. None
+ * The draft_prd skill's handoff writes two things: the PRD and the backlog item
+ * (status `Drafted`, `prd:` set). commitDrafts then re-renders the item's
+ * line in the backlog index, which is why that file is included. None
  * of them were committed, so they sat on the default branch until the next
  * execution start refused the dirty tree (owner request 2026-10-01: commit the
  * PRD when the draft ends).
@@ -297,8 +298,11 @@ function draftCommitPaths({ projectRoot, docsRel, itemIds, readItem, exists = fs
     out.add(path.join(docsRel, 'backlog', `${id}.md`));
     if (item.prd && exists(path.join(projectRoot, item.prd))) out.add(item.prd);
   }
-  if (out.size && exists(path.join(projectRoot, docsRel, 'project-state.md'))) {
-    out.add(path.join(docsRel, 'project-state.md'));
+  // The backlog index (its own file, or project-state.md before the move).
+  // project-state.md stays listed either way: a project's older copy of the
+  // skill may still edit it, and a clean file commits nothing.
+  for (const f of ['backlog-index.md', 'project-state.md']) {
+    if (out.size && exists(path.join(projectRoot, docsRel, f))) out.add(path.join(docsRel, f));
   }
   // The vision too: a draft that settles a project-level open question moves
   // it from "not decided" to decided in the vision's table, and leaving that

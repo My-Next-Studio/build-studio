@@ -22,7 +22,8 @@ context: the owner should not have to repeat what they just told you.
 
 Then read:
 
-1. The backlog order in `docs/project-state.md`, between `<!-- BACKLOG-START -->`
+1. The backlog order in `docs/backlog-index.md` (in an older project, a section of
+   `docs/project-state.md`), between `<!-- BACKLOG-START -->`
    and `<!-- BACKLOG-END -->` — releases are the `###` headings, items the lines
    under them, in order.
 2. The items that look related: their files in `docs/backlog/`, including their
@@ -98,8 +99,8 @@ The body is markdown, self-contained for whoever drafts it later (see pm.md):
 ```
 
 **File it through Build Studio, never by editing the files yourself.** The
-endpoint allocates the id, writes the item file and its line in
-`docs/project-state.md`, and commits both. Editing them by hand gets the id
+endpoint allocates the id, writes the item file and its line in the backlog
+index, and commits both. Editing them by hand gets the id
 prefix or one of the two places wrong.
 
 The endpoint is `POST http://localhost:<port>/api/backlog/items`. The prompt
@@ -150,5 +151,5 @@ ready.
   drafting.
 - **Choosing the position silently.** Always ask; the order is the owner's.
 - **Filing a duplicate** of an item that already covers the idea.
-- **Editing `docs/backlog/` or `project-state.md` directly** instead of the
+- **Editing `docs/backlog/` or the backlog index directly** instead of the
   endpoint.

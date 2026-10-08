@@ -4,7 +4,7 @@
  * Endpoints:
  *   GET  /api/backlog              → { groups, items }
  *                                    `groups` is the canonical order from
- *                                    project-state.md's BACKLOG section.
+ *                                    the backlog index's BACKLOG section.
  *                                    `items` is { id → frontmatter+body }.
  *   GET  /api/backlog/items/:id    → single item
  *
@@ -16,7 +16,7 @@ const express = require('express');
 const {
   readBacklog, readItem, writeItem, isValidId, discoverCompanionSpecs,
   writeBacklogSection, listItems, applyAutoTransitionsForFeatures, parseBacklogSection,
-  createItem, projectStatePath, itemFilePath,
+  createItem, backlogIndexPath, readBacklogGroups, refreshBacklogIndex, itemFilePath,
   VALID_STATUSES,
 } = require('../backlog');
 const { tidyMarkdown } = require('../markdown-tidy');
@@ -46,16 +46,11 @@ function createBacklogRouter(config) {
       // file exists → Drafted). If anything moved, re-render the order block
       // so the display lines pick up the new statuses immediately.
       const auto = applyAutoTransitionsForFeatures(config.projectRoot, docsPath);
-      if (auto.changed) {
-        // Re-parse current groups (order is unchanged) and re-render to refresh
-        // the [Type · Status] suffixes in project-state.md.
-        const statePath = path.join(config.projectRoot, docsPath, 'project-state.md');
-        if (fs.existsSync(statePath)) {
-          const content = fs.readFileSync(statePath, 'utf8');
-          const groups = parseBacklogSection(content);
-          if (groups.length > 0) writeBacklogSection(config.projectRoot, docsPath, groups);
-        }
-      }
+      // Re-render the index on every read, not only after an auto-transition:
+      // agents set status in the item file and no longer touch the index
+      // line, so a stale [Type · Status] suffix is refreshed here. Order is
+      // unchanged, and an up-to-date section is not rewritten.
+      refreshBacklogIndex(config.projectRoot, docsPath);
 
       const { groups, items } = readBacklog(config.projectRoot, docsPath);
       res.json({ groups, items: hydrate(items), autoTransitioned: auto.transitioned });
@@ -88,11 +83,11 @@ function createBacklogRouter(config) {
    *   2. For each item whose release changed compared to its file's current
    *      `release:` frontmatter, rewrite the file with the new release.
    *      Items not mentioned in any group are left untouched.
-   *   3. Re-render the BACKLOG section in project-state.md from the new
+   *   3. Re-render the BACKLOG section in the backlog index from the new
    *      groups using current item titles/types/statuses.
    *
    * Failure mode: if file-update step succeeds for some items and fails for
-   * one, that item's file is in the new release but project-state.md hasn't
+   * one, that item's file is in the new release but the index hasn't
    * been rewritten yet — the orphan-lint command will catch the divergence.
    * Single-user workflow makes this risk small; revisit with a tmp+rename
    * scheme if multi-writer scenarios appear.
@@ -184,7 +179,7 @@ function createBacklogRouter(config) {
       const rel = (p) => path.relative(config.projectRoot, p);
       commit = await scopedCommit(config.projectRoot, [
         rel(itemFilePath(config.projectRoot, docsPath, created.id)),
-        rel(projectStatePath(config.projectRoot, docsPath)),
+        rel(backlogIndexPath(config.projectRoot, docsPath)),
       ], `docs(${created.id}): add story to the backlog`);
       if (!commit.committed) console.warn(`[backlog] ${created.id} created but not committed: ${commit.reason}`);
     }
@@ -235,11 +230,7 @@ function createBacklogRouter(config) {
       // "shipped" (case-insensitive). When absent, the item's release
       // doesn't change — the operator can drag-reorder manually if they
       // want a different grouping.
-      const statePath = path.join(config.projectRoot, docsPath, 'project-state.md');
-      let groups = [];
-      if (fs.existsSync(statePath)) {
-        groups = parseBacklogSection(fs.readFileSync(statePath, 'utf8'));
-      }
+      const groups = readBacklogGroups(config.projectRoot, docsPath);
 
       const updatedItem = { ...existing, status: body.status };
       let movedToShipped = false;
