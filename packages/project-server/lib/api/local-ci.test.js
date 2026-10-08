@@ -88,7 +88,9 @@ test('a run goes from running to passed, logging its output', async () => {
   await withServer(root, 'a:0,b:0', async (call) => {
     const start = await call('/start', 'POST');
     assert.equal(start.status, 200);
-    const done = await until(async () => { const r = await call(); return r.body.verdict.state === 'passed' && r.body; });
+    // The runner writes "passed" a moment before its process exits, so wait for
+    // the exit too; under load the two can be read in between.
+    const done = await until(async () => { const r = await call(); return r.body.verdict.state === 'passed' && !r.body.canCancel && r.body; });
     assert.equal(done.status.steps.length, 2);
     assert.match(done.logTail, /step a\nstep b/);
     assert.equal(done.canCancel, false);
