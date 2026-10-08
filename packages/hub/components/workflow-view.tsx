@@ -171,8 +171,10 @@ interface Workflow {
   builderRole?: string
   /** Where builderRole came from: the picker, the PRD, or the backlog item. */
   builderRoleSource?: 'picker' | 'prd' | 'item'
-  /** Execution chain: 'lean' for the trial preset; absent means the full chain. */
+  /** Execution chain: 'lean' (the default); absent means the full chain. */
   preset?: 'lean'
+  /** Set when a run that would have been lean by default runs the full chain, and why. */
+  presetFallback?: string
   autoAdvance?: boolean
   autoAdvanceStrict?: boolean
   /** When true with autoAdvance on execution, auto-skip past demo_review. */
@@ -299,8 +301,9 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   // Set once the owner touches the picker, so a later hint fetch cannot
   // overwrite a deliberate choice.
   const [builderRoleTouched, setBuilderRoleTouched] = useState(false)
-  // Which execution chain this run uses. '' = the full chain, as before.
-  const [execPreset, setExecPreset] = useState<'' | 'lean'>('')
+  // Which execution chain this run uses. Lean is the default; 'full' asks for
+  // the project's execution steps.
+  const [execPreset, setExecPreset] = useState<'lean' | 'full'>('lean')
   const [selectedStep, setSelectedStep] = useState<string | null>(null)
   const [logText, setLogText] = useState<string>('')
   const [viewingLog, setViewingLog] = useState<string | null>(null)
@@ -642,7 +645,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // Only sent when the owner picked one. Absent means execution[0], which is
     // what every run did before the picker existed.
     if (wfType === 'execution' && builderRole) body.builderRole = builderRole
-    if (wfType === 'execution' && execPreset) body.preset = execPreset
+    if (wfType === 'execution') body.preset = execPreset
     // Per-run CLI pickers were removed (2026-07-21): agent CLI/model/effort is
     // set per role on the project's Agents tab (or the global Model tab).
     // api.post returns the parsed body (incl. {error}) and does NOT throw on non-2xx,
@@ -911,8 +914,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             </div>
           </div>
         )}
-        {/* Execution chain — the full chain, or the lean trial preset: one
-            orchestrating Claude builder, one review, the same gates. */}
+        {/* Execution chain — lean (the default): one orchestrating Claude
+            builder, one review, the same gates; or the full chain. */}
         {wfType === 'execution' && !wf && (
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
@@ -920,7 +923,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             </div>
             <select
               value={execPreset}
-              onChange={e => setExecPreset(e.target.value === 'lean' ? 'lean' : '')}
+              onChange={e => setExecPreset(e.target.value === 'full' ? 'full' : 'lean')}
               style={{
                 width: '100%', padding: '6px 10px', borderRadius: 4,
                 background: 'var(--surface2)', border: '1px solid var(--border)',
@@ -928,8 +931,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                 outline: 'none',
               }}
             >
-              <option value="">Full — the project&apos;s execution steps</option>
-              <option value="lean">Lean (trial) — orchestrating builder, one review</option>
+              <option value="lean">Lean — orchestrating builder, one review</option>
+              <option value="full">Full — the project&apos;s execution steps</option>
             </select>
             {execPreset === 'lean' && (
               <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
@@ -1031,6 +1034,17 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
                 routes by the files a fix touches, not by who built it.
               </div>
             )}
+          </div>
+        )}
+
+        {/* Lean is the default; say so when a run fell back to the full chain. */}
+        {wf && wf.type === 'execution' && wf.presetFallback && (
+          <div style={{
+            marginBottom: 16, padding: '6px 10px', borderRadius: 4,
+            background: 'var(--surface2)', border: '1px solid var(--border)',
+            fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.5,
+          }}>
+            Running the full chain instead of the lean default. {wf.presetFallback}
           </div>
         )}
 

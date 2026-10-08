@@ -26,12 +26,24 @@ test('the lean sequence drops qa_tests and the separate review steps, and keeps 
   assert.ok(seq.indexOf('merge_for_review') < seq.indexOf('qa_validation'));
 });
 
-test('validatePreset: absent or full is the full chain, lean is execution only', () => {
-  assert.deepEqual(lean.validatePreset('execution', undefined), { preset: null });
+test('validatePreset: lean is the default, full asks for the full chain, execution only', () => {
+  assert.deepEqual(lean.validatePreset('execution', undefined), { preset: 'lean', defaulted: true });
+  assert.deepEqual(lean.validatePreset('execution', ''), { preset: 'lean', defaulted: true });
   assert.deepEqual(lean.validatePreset('execution', 'full'), { preset: null });
   assert.deepEqual(lean.validatePreset('execution', 'lean'), { preset: 'lean' });
+  // Other run types have no chain to choose, so no default either.
+  assert.deepEqual(lean.validatePreset('bugfix', undefined), { preset: null });
+  assert.deepEqual(lean.validatePreset('review', undefined), { preset: null });
   assert.match(lean.validatePreset('review', 'lean').error, /execution runs only/);
   assert.match(lean.validatePreset('execution', 'tiny').error, /full, lean/);
+});
+
+test('resolveStartPreset: an asked-for lean run is refused, a defaulted one falls back to full', () => {
+  const refusal = 'task_execution runs on codex';
+  assert.deepEqual(lean.resolveStartPreset({ preset: 'lean', defaulted: true }, null), { preset: 'lean' });
+  assert.deepEqual(lean.resolveStartPreset({ preset: 'lean' }, refusal), { refusal });
+  assert.deepEqual(lean.resolveStartPreset({ preset: 'lean', defaulted: true }, refusal), { preset: null, fallback: refusal });
+  assert.deepEqual(lean.resolveStartPreset({ preset: null }, null), { preset: null });
 });
 
 test('a lean run is refused when a build step is not on Claude, naming the step and CLI', () => {

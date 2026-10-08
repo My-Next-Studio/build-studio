@@ -46,11 +46,17 @@ function isLean(wf) {
 }
 
 /**
- * Validate a `preset` on a start request. Returns { preset } or { error }.
- * Absent means the full chain; only execution runs have a choice.
+ * Validate a `preset` on a start request. Returns { preset, defaulted } or
+ * { error }. `preset` is null for the full chain.
+ *
+ * Lean is the default: an execution start without a preset is lean, with
+ * `defaulted: true`, and `full` asks for the full chain. Only execution runs
+ * have a choice.
  */
 function validatePreset(type, preset) {
-  if (preset === undefined || preset === null || preset === '') return { preset: null };
+  if (preset === undefined || preset === null || preset === '') {
+    return type === 'execution' ? { preset: LEAN_PRESET, defaulted: true } : { preset: null };
+  }
   if (!EXECUTION_PRESETS.includes(preset)) {
     return { error: `preset must be one of: ${EXECUTION_PRESETS.join(', ')}` };
   }
@@ -72,6 +78,20 @@ function leanStartRefusal(cliFor) {
   const list = offenders.map((s) => `${s.step} runs on ${s.cli}`).join(', ');
   return `A lean run needs Claude for the build steps, because the builder orchestrates subagents with Claude Code's Agent tool: ${list}. `
     + 'Set the Build group to Claude on the Model page, or start the full chain instead.';
+}
+
+/**
+ * The chain a start request runs, from validatePreset's result and the lean
+ * refusal (or null). A lean run the owner asked for by name is refused rather
+ * than quietly run as the full chain; a defaulted one falls back to the full
+ * chain, so a project whose build steps run on another CLI keeps starting runs.
+ * Returns { preset } or { refusal }, plus `fallback` (the refusal text) when it
+ * fell back.
+ */
+function resolveStartPreset(presetCheck, refusal) {
+  if (presetCheck.preset !== LEAN_PRESET || !refusal) return { preset: presetCheck.preset };
+  if (presetCheck.defaulted) return { preset: null, fallback: refusal };
+  return { refusal };
 }
 
 /** The step a finished lean fix round returns to: the review that raised it. */
@@ -230,6 +250,7 @@ module.exports = {
   isLean,
   validatePreset,
   leanStartRefusal,
+  resolveStartPreset,
   leanFixReturnStep,
   leanTaskDescription,
   leanBuilderSection,

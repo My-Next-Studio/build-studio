@@ -142,6 +142,22 @@ required for this step regardless of which role runs it.
 
 ### Execution Phase
 
+Execution runs use the **lean** chain by default:
+
+```text
+1. Builder     → One Claude builder orchestrates the PRD: plans, starts a test-writer subagent that writes
+                 the tests from the PRD (never from the implementation), may delegate parts to implementer
+                 subagents with explicit file boundaries, and commits a tested implementation
+2. Merge gates → The branch is collected and the mechanical scans run
+3. Review      → One step runs the PRD-scoped suites with every QA gate AND reviews the code (ACs, variants,
+                 silent failure, test quality, security, hygiene, design conformance); findings go back to
+                 the builder, and the re-review reads only the fix round's diff while the suite runs in full
+4. Merge & learn → Merge to main, capture learnings, mark the PRD done
+```
+
+The **full** chain is the alternative, picked per run (Chain picker → Full) for a
+story that warrants it, such as a security-sensitive surface or a data migration:
+
 ```text
 1. /qa         → Write E2E test spec from PRD + all companion specs → e2e/prd-NNN-*.spec.ts (tests fail intentionally)
 2. Agent Team  → Implement (lead + specialists in parallel; /devops joins when PRD requires infra/CI/CD changes)

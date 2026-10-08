@@ -119,14 +119,50 @@ test('start lean: the run carries the preset and only the lean steps', async () 
   } finally { await srv.close(); repo.clean(); }
 });
 
-test('start without a preset is the full chain, unchanged', async () => {
+test('start without a preset is lean: lean is the default', async () => {
   const repo = makeFixtureRepo();
   const srv = await mountRouter(repo.root);
   try {
     const res = await srv.post('/api/workflow/start', { type: 'execution', input: 'LS-002' });
     assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.workflow.preset, 'lean');
+    assert.deepEqual(Object.keys(res.body.workflow.steps), LEAN_EXECUTION_STEPS);
+    assert.equal(res.body.workflow.presetFallback, undefined);
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('start with preset full is the full chain', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    const res = await srv.post('/api/workflow/start', { type: 'execution', input: 'LS-002', preset: 'full' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
     assert.equal(res.body.workflow.preset, undefined);
     assert.ok(res.body.workflow.steps.qa_tests, 'the full chain keeps qa_tests');
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('a defaulted lean start falls back to the full chain when the build group runs on another CLI', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root, (config) => {
+    config.cli = { ...(config.cli || {}), groups: { ...((config.cli || {}).groups || {}), build: { cli: 'codex' } } };
+  });
+  try {
+    const res = await srv.post('/api/workflow/start', { type: 'execution', input: 'LS-002' });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.workflow.preset, undefined);
+    assert.ok(res.body.workflow.steps.qa_tests, 'the full chain keeps qa_tests');
+    assert.match(res.body.workflow.presetFallback, /task_execution runs on codex/);
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('a review start is unaffected by the lean default', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    const res = await srv.post('/api/workflow/start', { type: 'review', input: 'LS-002' });
+    assert.notEqual(res.body.leanRefused, true);
+    assert.equal((res.body.workflow || {}).preset, undefined);
   } finally { await srv.close(); repo.clean(); }
 });
 

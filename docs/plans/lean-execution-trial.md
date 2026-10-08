@@ -1,6 +1,6 @@
 # Plan: does the execution workflow still earn its overhead?
 
-> **Status: proposed 2026-10-06; measurement increment 1 started 2026-10-07; lean preset core implemented 2026-10-07 (see *Where this stands*).**
+> **Status: proposed 2026-10-06; measurement increment 1 started 2026-10-07; lean preset core implemented 2026-10-07; lean made the default 2026-10-08 (see *Where this stands*).**
 >
 > Owner request: models have improved a lot since the execution workflow was
 > designed. Question whether its steps still add enough to justify their time
@@ -256,6 +256,31 @@ setting, diff-scoped re-review and the timeline are new.
 - The severity fix checked against a run with known findings.
 - `found_in` checked end to end: a bug filed from support triage against a
   merged story shows up under that story in the trial's report.
+
+## Lean is the default (2026-10-08)
+
+Owner request: lean runs are clearly faster, and the quality looks comparable
+but is hard to judge by eye. Make lean the default everywhere, and fix quality
+problems as they are found rather than waiting for the trial's numbers.
+
+This settles open decision 1 differently from both options: neither
+alternation nor a per-story choice, but lean for every run unless the owner
+asks for the full chain. What changed:
+
+- An execution start with no preset is lean. That covers the Workflow tab, the
+  backlog's per-item Start button and any API caller. `preset: full` asks for
+  the full chain; the Chain picker now starts on Lean and offers Full.
+- A lean run the owner asked for by name is still refused when a build step
+  would not run on Claude. A defaulted one falls back to the full chain
+  instead, so a project that builds on another CLI keeps working. The run
+  records why (`presetFallback`) and the Workflow tab shows it.
+
+What this costs the comparison: the full arm is now only the runs the owner
+opts into, so it is no longer a fair sample. Quality is read from lean runs
+against the full chain's history instead: findings per review round and
+escaped defects, by project, from the scorecard rows tagged `full` before this
+date. A quality problem found in a lean run is fixed in the lean prompts or
+gates, and recorded here.
 
 ## Where this stands (2026-10-07)
 

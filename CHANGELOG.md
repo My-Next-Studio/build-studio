@@ -21,7 +21,7 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-08 — `project-state.md` stops growing: the decisions log and backlog index get their own files, a size warning, mark-done replaces instead of piling up
+## 2026-10-08 — Lean execution is the default; `project-state.md` stops growing: the decisions log and backlog index get their own files, a size warning, mark-done replaces instead of piling up
 
 ### Added
 
@@ -37,6 +37,18 @@ that move underneath you without your having edited anything.
 
 ### Changed
 
+- **Execution runs use the lean chain by default.** One Claude builder
+  orchestrates the run (a spec-only test-writer subagent, optional implementer
+  subagents) and one review runs the suite and reviews the code, with the same
+  merge and QA gates. Until now lean was a trial you picked in the Workflow
+  tab's Chain picker, and every other start ran the full chain. Now every
+  execution start without a preset is lean: the Workflow tab, the backlog's
+  per-item Start button and API callers. To run the full chain (QA tests first,
+  the review panel), pick **Full** in the Chain picker, or send
+  `preset: "full"`. A run you asked to be lean is still refused when a build
+  step would not run on Claude. A run that is lean only by default falls back
+  to the full chain instead, and the Workflow tab says why. Runs already in
+  progress keep their chain.
 - **Drafting a PRD no longer edits `docs/project-state.md`.** The PM role
   and the `draft_prd` skill told the agent to update the backlog row and the
   "Active PRD" section. In practice each draft added an entry ("Also drafted
@@ -103,7 +115,7 @@ that move underneath you without your having edited anything.
 (`npx next build` in `packages/hub`, then `node inject-resources.js` in
 `packages/desktop`), and restart.
 
-**In each managed project**: a project with its own copy of the
+**In each managed project**: the lean default needs nothing. A project with its own copy of the
 `draft_prd` skill keeps the old instruction to edit `project-state.md`,
 because onboarding never overwrites a project's skills. Remove that line:
 
@@ -140,7 +152,9 @@ project's CI as a step after dependency install, run from the repo root:
 mkdir -p scripts && cp /path/to/build-studio/templates/default/scripts/check-docs-budget.mjs scripts/
 node scripts/check-docs-budget.mjs
 # CI step: node scripts/check-docs-budget.mjs --self-test && node scripts/check-docs-budget.mjs
-``` A project's own `AGENTS.md` also keeps its old "update
+```
+
+A project's own `AGENTS.md` also keeps its old "update
 `ARCHITECTURE.md` in the same commit" line, which is what grew the file. Replace
 it with the revise rule from `templates/default/AGENTS.md`:
 

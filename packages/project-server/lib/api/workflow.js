@@ -3619,17 +3619,20 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, builderRole: startBuilderRole, override: startOverride, preset: startPreset } = req.body;
     if (!type) return res.status(400).json({ error: 'type required' });
     if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return res.status(400).json({ error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
-    // Which execution chain: the full one (absent) or lean. See lean-execution.js.
+    // Which execution chain: lean (the default, or asked for) or full. See lean-execution.js.
     const presetCheck = lean.validatePreset(type, startPreset);
     if (presetCheck.error) return res.status(400).json({ error: presetCheck.error });
-    const runPreset = presetCheck.preset;
-    if (runPreset === lean.LEAN_PRESET) {
+    let leanRefusal = null;
+    if (presetCheck.preset === lean.LEAN_PRESET) {
       // Resolved the way the launcher will resolve it, including a legacy
       // per-run developerCli, so the refusal names the CLI that would really run.
       const probe = { type, ...(startDeveloperCli ? { developerCli: startDeveloperCli } : {}) };
-      const refusal = lean.leanStartRefusal((step) => resolveStepLaunchSettings(step, probe, config.cli, config.step_groups).cli);
-      if (refusal) return res.status(400).json({ error: refusal, leanRefused: true });
+      leanRefusal = lean.leanStartRefusal((step) => resolveStepLaunchSettings(step, probe, config.cli, config.step_groups).cli);
     }
+    const presetResolution = lean.resolveStartPreset(presetCheck, leanRefusal);
+    if (presetResolution.refusal) return res.status(400).json({ error: presetResolution.refusal, leanRefused: true });
+    const runPreset = presetResolution.preset;
+    if (presetResolution.fallback) console.log(`[workflow] Lean default not available, starting the full chain: ${presetResolution.fallback}`);
     if (startDeveloperCli && !VALID_CLIS.includes(startDeveloperCli)) {
       return res.status(400).json({ error: `developerCli must be one of ${VALID_CLIS.join(', ')}` });
     }
@@ -4077,6 +4080,8 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       ...(resolvedBuilderRole ? { builderRole: resolvedBuilderRole, builderRoleSource } : {}),
       // Set only for a lean run; absent means the full chain.
       ...(runPreset ? { preset: runPreset } : {}),
+      // Why a run that would have been lean by default runs the full chain.
+      ...(presetResolution.fallback ? { presetFallback: presetResolution.fallback } : {}),
       ...(startDeveloperCli ? { developerCli: startDeveloperCli } : {}),
       ...(startReviewerCli
         ? { reviewerCli: resolveReviewerCliAtStart(startReviewerCli, startDeveloperCli || (config.cli && config.cli.default) || 'claude', enabledClis) }
