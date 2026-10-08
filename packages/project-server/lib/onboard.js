@@ -182,6 +182,10 @@ async function onboardProject(targetPath, options = {}) {
   for (const f of ['decisions.md', 'backlog-index.md']) {
     copyIfAbsent(path.join(templateDir, 'docs', f), path.join(targetPath, 'docs', f), `docs/${f}`, written, skipped);
   }
+  // The docs-budget check (lib/doc-budget.js's limits as a CI step); the
+  // DevOps agent wires it into the project's CI during devops_detect.
+  copyIfAbsent(path.join(templateDir, 'scripts', 'check-docs-budget.mjs'),
+    path.join(targetPath, 'scripts', 'check-docs-budget.mjs'), 'scripts/check-docs-budget.mjs', written, skipped);
   {
     const { ensureManifest } = require('./knowledge-manifest');
     const manifestPath = path.join(targetPath, 'docs', 'knowledge.yaml');

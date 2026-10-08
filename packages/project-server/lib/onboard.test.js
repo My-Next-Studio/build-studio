@@ -161,6 +161,19 @@ test('onboardProject: seeds docs/decisions.md and docs/backlog-index.md for the 
   } finally { clean(root); }
 });
 
+test('onboardProject: seeds scripts/check-docs-budget.mjs, and leaves an existing one alone', async () => {
+  const root = makeRepo(EXAMPLE_APP_SHAPE);
+  try {
+    await onboardProject(root, { name: 'desk', port: 3099 });
+    assert.match(fs.readFileSync(path.join(root, 'scripts', 'check-docs-budget.mjs'), 'utf8'), /--self-test/);
+  } finally { clean(root); }
+  const custom = makeRepo({ ...EXAMPLE_APP_SHAPE, 'scripts/check-docs-budget.mjs': '// project-tuned\n' });
+  try {
+    await onboardProject(custom, { name: 'desk', port: 3099 });
+    assert.equal(fs.readFileSync(path.join(custom, 'scripts', 'check-docs-budget.mjs'), 'utf8'), '// project-tuned\n');
+  } finally { clean(custom); }
+});
+
 // ─── Files explicitly NOT created ──────────────────────────────────────────
 
 test('onboardProject: does NOT create vision.md or project-state.md (workflow outputs)', async () => {

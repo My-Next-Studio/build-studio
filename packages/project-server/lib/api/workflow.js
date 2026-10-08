@@ -6148,7 +6148,7 @@ Fix only the issues raised. Commit your changes.`,
 
       const agents = [{
         role: 'DevOps', window: 'devops-init', status: 'pending', reportFeedback: true,
-        instruction: `You are DevOps. Read docs/project-state.md, docs/vision.md, the PRD in docs/prds/, and all ADRs in docs/adrs/.\n\nYour job is to initialize the project scaffold so that Frontend and Backend developers can start from a clean, working base — no duplicate scaffolding, no merge conflicts.\n\nBased on the ADRs and PRD, do what is needed:\n- Initialize the framework (e.g. create-next-app) if not already done\n- Set up deployment target (e.g. vercel link) if applicable\n- Provision storage/database if specified in ADRs\n- Install shared dependencies from ADRs (framework, DB client, CSS, fonts)\n- Create initial config files (tsconfig, eslint, tailwind, postcss, etc.)\n- Run DB migrations/schema if applicable\n- Set up environment variables template (.env.example)\n- If docs/project-state.md indicates "Visual design: Pencil-controlled", create an initial .pen file for the project using the Pencil MCP tools (open_document with 'new') so it is ready for the visual_design step in execution iterations\n- Commit a clean, building scaffold that passes lint\n\nIf the project is already scaffolded and no infra work is needed, report that and commit nothing.${featuresContext}\n\nUse the /${devopsRole.skill} skill. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
+        instruction: `You are DevOps. Read docs/project-state.md, docs/vision.md, the PRD in docs/prds/, and all ADRs in docs/adrs/.\n\nYour job is to initialize the project scaffold so that Frontend and Backend developers can start from a clean, working base — no duplicate scaffolding, no merge conflicts.\n\nBased on the ADRs and PRD, do what is needed:\n- Initialize the framework (e.g. create-next-app) if not already done\n- Set up deployment target (e.g. vercel link) if applicable\n- Provision storage/database if specified in ADRs\n- Install shared dependencies from ADRs (framework, DB client, CSS, fonts)\n- Create initial config files (tsconfig, eslint, tailwind, postcss, etc.)\n- Run DB migrations/schema if applicable\n- Set up environment variables template (.env.example)\n- In the project's CI workflow, add a step right after dependency install, run from the repo root: \`node scripts/check-docs-budget.mjs --self-test && node scripts/check-docs-budget.mjs\` (the script is already in scripts/; it keeps docs/project-state.md and ARCHITECTURE.md within their limits and fails on a path ARCHITECTURE.md names that doesn't exist)\n- If docs/project-state.md indicates "Visual design: Pencil-controlled", create an initial .pen file for the project using the Pencil MCP tools (open_document with 'new') so it is ready for the visual_design step in execution iterations\n- Commit a clean, building scaffold that passes lint\n\nIf the project is already scaffolded and no infra work is needed, report that and commit nothing.${featuresContext}\n\nUse the /${devopsRole.skill} skill. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
       }];
       wf.steps.devops_init = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
       state.saveWorkflow(wf);
@@ -6356,9 +6356,16 @@ Fix only the issues raised. Commit your changes.`,
           `Confirm the deployment block is correct or propose corrections. If deploys happen on ` +
           `push (no manual workflow_dispatch), confirm ci_workflow is unset (Deploy button hidden).\n\n` +
           `Produce docs/runbooks/deployment.md summarizing the deploy mechanism.\n\n` +
+          `Onboarding copied scripts/check-docs-budget.mjs into the repo. Run it once ` +
+          `(\`node scripts/check-docs-budget.mjs\`); if it names a missing path in ARCHITECTURE.md, ` +
+          `fix the reference. Then add it to the project's CI workflow as a step right after ` +
+          `dependency install, run from the repo root: ` +
+          `\`node scripts/check-docs-budget.mjs --self-test && node scripts/check-docs-budget.mjs\`. ` +
+          `If project-state.md or ARCHITECTURE.md is already over its limit, don't add the step: ` +
+          `report it as an action item for team_review instead.\n\n` +
           `If you find that .build-studio/config.yaml needs corrections, surface them as structured ` +
           `feedback action items for team_review — do NOT modify config.yaml directly.\n\n` +
-          `Use the /${skill} skill. STAGE the runbook but DO NOT COMMIT.`,
+          `Use the /${skill} skill. STAGE the runbook and the CI change but DO NOT COMMIT.`,
       }];
       wf.steps.devops_detect = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
       state.saveWorkflow(wf);

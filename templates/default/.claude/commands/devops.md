@@ -102,6 +102,7 @@ When the DevOps role takes responsibility for a new project:
 - [ ] Add the audit step to the project's CI pipeline (`.github/workflows/ci.yml` or equivalent) **before** the build step.
 - [ ] Run the audit locally once. If it fails on existing CVEs, fix them in the onboarding PR — don't ship a project where the gate is already red.
 - [ ] For monorepos, repeat per sub-app with its own `working-directory`.
+- [ ] Add the docs budget step after dependency install, run from the repo root (set `working-directory: .` if the job defaults elsewhere): `node scripts/check-docs-budget.mjs --self-test && node scripts/check-docs-budget.mjs`. It fails when `docs/project-state.md` passes 40 KB or `ARCHITECTURE.md` 20 KB, or when `ARCHITECTURE.md` names a path that doesn't exist. Run it locally first.
 - [ ] Record the audit configuration in the project's `docs/project-state.md` Project Conventions section (one line: *"CI security gate: npm audit --omit=dev --audit-level=high on backend, frontend"*).
 - [ ] If skipping the gate per §"What 'applicable' means" above, log the rationale in the same Project Conventions section.
 

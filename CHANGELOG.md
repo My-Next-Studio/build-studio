@@ -23,6 +23,18 @@ that move underneath you without your having edited anything.
 
 ## 2026-10-08 — `project-state.md` stops growing: the decisions log and backlog index get their own files, a size warning, mark-done replaces instead of piling up
 
+### Added
+
+- **New and onboarded projects get a docs-budget check for their CI.**
+  `scripts/check-docs-budget.mjs` comes from the template and fails when
+  `docs/project-state.md` passes 40 KB or `ARCHITECTURE.md` 20 KB (the same
+  limits as the hub's notice), or when `ARCHITECTURE.md` names a path that no
+  longer exists. Nothing runs it until CI does: the DevOps agent adds the step
+  during kickoff (`devops_init`) and onboarding (`devops_detect`). Onboarding
+  never replaces a copy the project already has. New projects also get
+  `docs/adrs/` and `docs/backlog/` from the start, so the template
+  `ARCHITECTURE.md`'s references to them resolve on the first CI run.
+
 ### Changed
 
 - **Drafting a PRD no longer edits `docs/project-state.md`.** The PM role
@@ -120,8 +132,15 @@ git commit -m "docs: move the decisions log and backlog index out of project-sta
 If the Workflow tab still shows the size notice after that, what is left is the
 project's own history. Cut it back by hand or as a backlog item: move old
 Active PRD entries and similar logs to `docs/history/`, rewrite
-`ARCHITECTURE.md` as a map of the code as it is now, and add a check that keeps
-both within the limits. A project's own `AGENTS.md` also keeps its old "update
+`ARCHITECTURE.md` as a map of the code as it is now, and add the check that
+keeps both within the limits: copy it in, run it once, and add it to the
+project's CI as a step after dependency install, run from the repo root:
+
+```bash
+mkdir -p scripts && cp /path/to/build-studio/templates/default/scripts/check-docs-budget.mjs scripts/
+node scripts/check-docs-budget.mjs
+# CI step: node scripts/check-docs-budget.mjs --self-test && node scripts/check-docs-budget.mjs
+``` A project's own `AGENTS.md` also keeps its old "update
 `ARCHITECTURE.md` in the same commit" line, which is what grew the file. Replace
 it with the revise rule from `templates/default/AGENTS.md`:
 

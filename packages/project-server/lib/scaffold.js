@@ -108,8 +108,10 @@ function scaffoldProject(targetPath, options = {}) {
     log('docs/prds/TEMPLATE.md');
   }
 
-  // Empty directories
-  for (const dir of ['docs/inputs', 'docs/prds', 'tmp']) {
+  // Empty directories. docs/adrs and docs/backlog are kept so the stub
+  // ARCHITECTURE.md's references to them resolve for check-docs-budget.mjs
+  // on the very first CI run.
+  for (const dir of ['docs/inputs', 'docs/prds', 'docs/adrs', 'docs/backlog', 'tmp']) {
     fs.mkdirSync(path.join(targetPath, dir), { recursive: true });
     if (dir !== 'tmp') {
       fs.writeFileSync(path.join(targetPath, dir, '.gitkeep'), '');
@@ -153,6 +155,15 @@ function scaffoldProject(targetPath, options = {}) {
   if (fs.existsSync(archSrc) && !fs.existsSync(path.join(targetPath, 'ARCHITECTURE.md'))) {
     fs.copyFileSync(archSrc, path.join(targetPath, 'ARCHITECTURE.md'));
     log('ARCHITECTURE.md (stub)');
+  }
+
+  // scripts/check-docs-budget.mjs — keeps project-state.md and ARCHITECTURE.md
+  // within lib/doc-budget.js's limits. The DevOps agent wires it into CI.
+  const budgetSrc = path.join(templateDir, 'scripts', 'check-docs-budget.mjs');
+  if (fs.existsSync(budgetSrc)) {
+    fs.mkdirSync(path.join(targetPath, 'scripts'), { recursive: true });
+    fs.copyFileSync(budgetSrc, path.join(targetPath, 'scripts', 'check-docs-budget.mjs'));
+    log('scripts/check-docs-budget.mjs');
   }
 
   // git init — force the default branch to `main`. Plain `git init` honors the

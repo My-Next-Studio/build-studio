@@ -28,6 +28,10 @@ It is the map of the code as it is now; a PRD's story belongs in the PRD.
   accounts). References to credentials only — never secret values.
 - `docs/learnings/` — captured lessons, injected into future agent runs.
 
+`node scripts/check-docs-budget.mjs` fails when `docs/project-state.md` passes
+40 KB or `ARCHITECTURE.md` 20 KB, or when `ARCHITECTURE.md` names a path that
+doesn't exist. CI runs it.
+
 ## Project-Specific Notes
 
 <!-- Add project-specific conventions, installed plugins, overrides, etc. below -->
