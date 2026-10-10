@@ -35,6 +35,16 @@ that move underneath you without your having edited anything.
 
 ### Changed
 
+- **A project server runs on its `config.yaml` port, and only there.** Build
+  Studio started each server on the port stored in its own registry
+  (`~/.build-studio/registry.json`) and, if that port was taken, moved up to
+  the next free one. Other apps find a project's server from the `port:` key in
+  its `.build-studio/config.yaml`, so when the two disagreed, or a server had
+  moved, they could not reach it: one project's config said 3000 while its server
+  ran on 3002. Now that key is the port: the hub, the process manager and the
+  server all use it, the registry's port is only the fallback for a project
+  without the key, and a taken port stops the server from starting with a
+  message naming the port and the key, instead of moving it.
 - **The app icon is now a crane** in Build Studio's amber, replacing the robot
   at a laptop. It is one of a family drawn together for the studio apps (Build
   Studio's crane, a rocket for launching, a control room for running), on one
@@ -55,8 +65,24 @@ cp packages/desktop/icon.icns "/Applications/Build Studio.app/Contents/Resources
 touch "/Applications/Build Studio.app"
 ```
 
-**In each managed project**: nothing to do. The backlog API contract below
-changes no behaviour, and the lean read is additive.
+**In each managed project**: check that `.build-studio/config.yaml`'s `port:`
+is the port its server runs on today (the registry's), because that key now
+decides it. This lists any project where they differ; fix the key, or remove it
+to keep the registry's port:
+
+```bash
+node -e "const r=require('./packages/shared/registry');const l=r.load().projects;for(const[n,i]of Object.entries(l)){const c=r.configPort(i.path);if(c!=null&&c!==i.port)console.log(n,'config.yaml',c,'registry',i.port)}"
+```
+
+Two projects with the same `port:` now fail to start side by side instead of
+one silently moving, so the check also catches a collision. The backlog API
+contract below changes no behaviour, and the lean read is additive.
+
+**In Build Studio**, for the port change: `node inject-resources.js --sync-only`
+in `packages/desktop`, then restart the app. The desktop app's own auto-start
+reads the registry file directly until the next full repackage, so keep the
+registry's ports equal to the `config.yaml` ones in the meantime (the command
+above shows any that differ).
 
 **In Build Studio**, for the lean read: it is project-server code, so it reaches
 a running server after `node inject-resources.js --sync-only` in

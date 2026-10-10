@@ -21,15 +21,38 @@ function save(registry) {
   fs.renameSync(tmp, REGISTRY_PATH);
 }
 
+/**
+ * The project's port: the top-level `port:` key in its .build-studio/config.yaml,
+ * or null when the file or the key is missing.
+ *
+ * That key is the one source of a project's port. Other Studio apps find the
+ * project server from it (docs/backlog-api-contract.md §1), so every reader
+ * here returns it over the port stored in the registry, which stays only as
+ * the fallback for a project without the key.
+ */
+function configPort(projectPath) {
+  try {
+    const text = fs.readFileSync(path.join(projectPath, '.build-studio', 'config.yaml'), 'utf8');
+    const m = text.match(/^port:[ \t]*(\d+)[ \t]*(?:#.*)?$/m);
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function entry(name, info) {
+  return { name, ...info, port: configPort(info.path) ?? info.port };
+}
+
 function list() {
   const reg = load();
-  return Object.entries(reg.projects).map(([name, info]) => ({ name, ...info }));
+  return Object.entries(reg.projects).map(([name, info]) => entry(name, info));
 }
 
 function get(name) {
   const reg = load();
   const info = reg.projects[name];
-  return info ? { name, ...info } : null;
+  return info ? entry(name, info) : null;
 }
 
 function add(name, projectPath, port, workspace = null) {
@@ -76,8 +99,7 @@ function remove(name) {
 }
 
 function nextAvailablePort() {
-  const reg = load();
-  const usedPorts = Object.values(reg.projects).map(p => p.port);
+  const usedPorts = list().map(p => p.port);
   let port = DEFAULT_PROJECT_PORT_START;
   while (usedPorts.includes(port)) port++;
   return port;
@@ -90,9 +112,9 @@ function findByPath(projectPath) {
   const reg = load();
   const resolved = path.resolve(projectPath);
   for (const [name, info] of Object.entries(reg.projects)) {
-    if (path.resolve(info.path) === resolved) return { name, ...info };
+    if (path.resolve(info.path) === resolved) return entry(name, info);
   }
   return null;
 }
 
-module.exports = { load, save, list, get, add, remove, nextAvailablePort, findByPath, listByWorkspace, findByName };
+module.exports = { load, save, list, get, add, remove, nextAvailablePort, findByPath, listByWorkspace, findByName, configPort };

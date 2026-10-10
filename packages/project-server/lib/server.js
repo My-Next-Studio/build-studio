@@ -933,10 +933,12 @@ function startServer(projectRoot, opts = {}) {
    }
   }, 30000);
 
-  // Start server, auto-incrementing port if already in use
-  const maxAttempts = 20;
-  let attempt = 0;
-  let currentPort = config.port;
+  // Listen on exactly the configured port. It used to move up to the next free
+  // one on a conflict, which made the port unpredictable for anything outside
+  // Build Studio: Launch Studio finds this server from the `port:` in the
+  // project's .build-studio/config.yaml (docs/backlog-api-contract.md §1). A
+  // taken port now fails the start with a message saying so.
+  const currentPort = config.port;
 
   // Bind to loopback. Omitting the host makes Node listen on 0.0.0.0, which put
   // this API — workflow control, config writes, project file reads, tmux session
@@ -977,22 +979,11 @@ function startServer(projectRoot, opts = {}) {
 
   server.on('error', (e) => {
     if (e.code === 'EADDRINUSE') {
-      attempt++;
-      if (attempt >= maxAttempts) {
-        // Emit structured JSON so process-manager / hub can surface a clear message
-        process.stderr.write(JSON.stringify({
-          event: 'port_conflict',
-          port: currentPort,
-          project: config.name,
-          message: `Could not bind to any port in range ${config.port}–${currentPort}. Another process may be using these ports.`,
-        }) + '\n');
-        console.error(`\nError: Could not find a free port (tried ${config.port}–${currentPort}).`);
-        process.exit(1);
-      }
-      currentPort++;
-      server.close();
-      tryListen();
-      return;
+      // Structured JSON so process-manager / hub can surface a clear message.
+      const message = `Port ${currentPort} is already in use. It is this project's port (the port: key in .build-studio/config.yaml); stop whatever holds it, or change that key.`;
+      process.stderr.write(JSON.stringify({ event: 'port_conflict', port: currentPort, project: config.name, message }) + '\n');
+      console.error(`\nError: ${message}`);
+      process.exit(1);
     }
     throw e;
   });

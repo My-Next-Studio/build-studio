@@ -29,16 +29,13 @@ A consumer reads the top-level `port:` key in the product repo's
 `.build-studio/config.yaml`, then confirms it reached the right project with
 `GET /api/health` (§2).
 
-**Known gap.** The port a server actually listens on is not that key. Build
-Studio starts each server with the port from its own registry
-(`~/.build-studio/registry.json`, `projects.<id>.port`), which overrides
-`config.yaml`, and if that port is taken the server moves up to the next free
-one, up to 20 tries. The two agree for every project today but one: valkomna's
-`config.yaml` says 3000 and its server runs on 3002. The health check keeps a
-consumer from filing into the wrong project, but it can't find the right one.
-Which source should be authoritative is an open owner decision; until it is
-settled, `config.yaml` is the contract and a mismatch is a bug in the project's
-setup.
+That key is the project's one port. Build Studio starts the project server on
+exactly that port (its registry's own port is only the fallback for a project
+without the key), and never moves to another one: if the port is taken, the
+server does not start and says why. A consumer that reads `config.yaml` finds
+the server, or finds nothing listening, never a different project on a moved
+port. The health check still guards against the rare case of something else
+holding the port.
 
 ## 2. `GET /api/health`
 
@@ -152,8 +149,10 @@ the values in §3. Consumers never write `docs/backlog/` or the backlog index;
 Raised with the owner on 2026-10-10. Each changes behaviour that a consumer
 sees, so none is made unilaterally here.
 
-1. **The authoritative port** (§1): `config.yaml`, the registry, or the port
-   advertised somewhere a consumer can read without knowing it.
+1. ~~The authoritative port~~ **Decided 2026-10-10 (owner):** `config.yaml`'s
+   `port:` (§1). Build Studio starts the server on it and no longer falls back
+   to the next free port; valkomna's `config.yaml`, which disagreed, was
+   corrected.
 2. ~~A lean backlog read~~ **Decided 2026-10-10 (owner):** added as
    `GET /api/backlog?fields=status` (§3). Launch Studio switches to it in its own
    backlog item.
