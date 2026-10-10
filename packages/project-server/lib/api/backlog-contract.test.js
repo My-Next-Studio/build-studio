@@ -102,6 +102,16 @@ test('§2 GET /api/health: 200, ok true, and the absolute projectRoot a consumer
   });
 });
 
+test('§2 GET /api/health advertises backlog contract version 1', async () => {
+  // Bumping this is a breaking change for every consumer: do it only together
+  // with the contract doc's Versioning section and a matching consumer item.
+  const root = makeProject();
+  await withServer(root, async (base) => {
+    const r = await call(base, 'GET', '/api/health');
+    assert.deepEqual(r.body.contracts, { backlog: 1 });
+  });
+});
+
 test('§3 GET /api/backlog: groups in index order, and a status for every listed item', async () => {
   const root = makeProject();
   await withServer(root, async (base) => {

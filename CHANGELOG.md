@@ -32,6 +32,11 @@ that move underneath you without your having edited anything.
   so filing from Launch Studio failed for that project. The lean form came to
   16 KB for the same backlog. Any other `fields` value is refused with a 400.
   The full read is unchanged.
+- **`GET /api/health` advertises the contract version:** `"contracts":
+  { "backlog": 1 }`. Another app that files items through the backlog API can
+  check it before calling anything else, and refuse cleanly when a future Build
+  Studio speaks a version it doesn't know. The number goes up only for a
+  breaking change to `docs/backlog-api-contract.md`.
 - **Cancelling a run lists the backlog items filed on its branch.** Filing a
   story, a draft or an item from Launch Studio commits it on whatever branch the
   repo is on, which during a run is the run's branch; it reaches the default

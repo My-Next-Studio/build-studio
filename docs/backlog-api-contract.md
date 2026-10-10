@@ -45,6 +45,7 @@ holding the port.
 |---|---|---|
 | `ok` | `true` | The server is up. |
 | `projectRoot` | string | Absolute path of the project this server serves. A consumer compares it with the repo path it expects, and must not file if they differ. |
+| `contracts` | object | The version of each contract the server speaks: `{ "backlog": 1 }` for this one. See *Versioning*. |
 
 The other fields (`name`, `uptime`, `startedAt`, `bundleVersion`) are internal
 and may change.
@@ -147,10 +148,26 @@ release, created, prd, depends_on, cost_actual_usd`); `status` is relied on, wit
 the values in §3. Consumers never write `docs/backlog/` or the backlog index;
 `POST /api/backlog/items` is the only way in.
 
-## Open decisions
+## Versioning
 
-Raised with the owner on 2026-10-10. Each changes behaviour that a consumer
-sees, so none is made unilaterally here.
+This document is version **1** of the backlog contract, and every server that
+implements it says so in `GET /api/health` as `contracts.backlog: 1`.
+
+- **A breaking change** (a removed or renamed field, a changed meaning or
+  status code, a new required request field, a removed status) raises the
+  number, together with this document and the contract tests, and is agreed with
+  the owner first, with a matching item in each consumer.
+- **An additive change** (a new optional field, a new optional query, a new
+  endpoint) keeps the number.
+- **A consumer** checks the number it receives. A version it does not know is a
+  reason not to call the other endpoints, with a message that Build Studio is
+  newer than the consumer understands. A server without `contracts` predates
+  2026-10-10 and speaks version 1.
+
+## Decisions
+
+Raised with the owner on 2026-10-10 and all decided the same day. Each changed
+behaviour a consumer sees, so none was made unilaterally.
 
 1. ~~The authoritative port~~ **Decided 2026-10-10 (owner):** `config.yaml`'s
    `port:` (§1). Build Studio starts the server on it and no longer falls back
@@ -163,6 +180,5 @@ sees, so none is made unilaterally here.
    current branch, as intended (§4). Committing to the default branch as well
    was ruled out: the run's own status updates to the backlog index would make
    its merge conflict.
-4. **Versioning:** a path version (`/api/v1/…`) or a `contracts: { backlog: 1 }`
-   field in `/api/health`. The second is additive and lets a consumer refuse an
-   incompatible server cleanly.
+4. ~~Versioning~~ **Decided 2026-10-10 (owner):** the `contracts` field in
+   `/api/health` (see *Versioning*), not a versioned path.
