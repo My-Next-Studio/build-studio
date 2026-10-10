@@ -259,3 +259,43 @@ test('force approve still waits for a QA agent that is running', async () => {
     assert.match(forced.body.error, /still running/);
   } finally { await srv.close(); repo.clean(); }
 });
+
+// A QA round that still blocks after a fix round which changed nothing is held
+// for the owner instead of going back to the devs for the same state again.
+const BLOCKING_QA = '**Approved:** no\n**Blocking:** 1  |  **Medium:** 0  |  **Low:** 0\n**Tests passed:** 5655/5685 (carried from round 4)\n\n### Findings\n1. BLOCKING: the go-live gate exits 1.';
+
+async function tickOnce(srv) {
+  await srv.post('/api/workflow/auto-advance', { enabled: true });
+  await new Promise((r) => setTimeout(r, 900)); // the first tick runs after 500 ms
+  await srv.post('/api/workflow/auto-advance', { enabled: false });
+}
+
+test('auto-advance holds a blocking QA round that follows a fix round with no change', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await atQaWithReport(srv, BLOCKING_QA);
+    const wf = srv.state.loadWorkflow();
+    wf.round = 5;
+    wf.qaUnchangedRound = 5;
+    srv.state.saveWorkflow(wf);
+    await tickOnce(srv);
+    const after = srv.state.loadWorkflow();
+    assert.equal(after.currentStep, 'qa_validation');
+    assert.match(after.steps.qa_validation.autoAdvanceError, /changed no code/);
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('auto-advance does not hold a blocking QA round after a fix round that changed code', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await atQaWithReport(srv, BLOCKING_QA);
+    const wf = srv.state.loadWorkflow();
+    wf.round = 5;
+    wf.qaUnchangedRound = 4; // an earlier round was unchanged, this one is not
+    srv.state.saveWorkflow(wf);
+    await tickOnce(srv);
+    assert.equal(srv.state.loadWorkflow().steps.qa_validation.autoAdvanceError, undefined);
+  } finally { await srv.close(); repo.clean(); }
+});

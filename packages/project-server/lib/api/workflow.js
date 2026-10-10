@@ -4947,6 +4947,20 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
         }
       }
 
+      // A QA round that followed a fix round which changed nothing, and still
+      // blocks: the builder has already decided the finding can't be fixed in
+      // code, so another fix round rebuilds the same state. Hold for the owner
+      // (approve, force approve, or send back with notes) instead of looping
+      // (fazon, 2026-10-10: five rounds on an approval-gated finding).
+      if (hasBlocking && wf.currentStep === 'qa_validation' && wf.qaUnchangedRound === wf.round) {
+        if (!step.autoAdvanceError) {
+          step.autoAdvanceError = `QA round ${wf.round} still blocks, and the fix round before it changed no code — another fix round would rebuild the same state. Held for you: approve, force approve, or send back to the devs with notes on what to change.`;
+          state.saveWorkflow(wf);
+          console.warn(`[auto-advance] held on qa_validation round ${wf.round}: blocking findings after a fix round with no change`);
+        }
+        return;
+      }
+
       if (hasBlocking && isReviewStep) {
         action = 'send_to_devs';
       } else if ((hasBlocking || strictEscalate) && isReviewFlowStep) {
@@ -8475,6 +8489,9 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       // records its own commit.
       const qaUnchanged = wf.round > 1 ? qaUnchangedLib.unchangedSinceLastQa(projectRoot, wf.lastQaReport) : null;
       wf.qaTestedHead = qaUnchangedLib.headOf(projectRoot);
+      // Auto-advance holds this round rather than send it back to the devs.
+      if (qaUnchanged) wf.qaUnchangedRound = wf.round;
+      else delete wf.qaUnchangedRound;
       if (wf.round > 1) {
         const prevFix = wf.steps.fix_execution || wf.steps.fix_plan;
         const fixFeedback = prevFix ? (prevFix.agents || []).filter(a => a.feedback).map(a => a.feedback).join('\n') : '';

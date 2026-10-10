@@ -76,6 +76,12 @@ that move underneath you without your having edited anything.
   `**Awaiting owner:**` line any finding that waits on something outside the
   repository. Any change at all, or a run without the record (one that started
   before this update), still gets the full re-validation.
+- **Auto-advance stops when such a round still blocks.** It used to send every
+  blocking QA round back to the devs, with no round limit, so a finding the
+  builder had already judged not fixable in code went round the loop
+  indefinitely. When the fix round before it changed nothing, auto-advance now
+  holds the step and says why in the hub. You approve, force approve, or send
+  it back with notes on what to change.
 
 ### Upgrade steps
 
