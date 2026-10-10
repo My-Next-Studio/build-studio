@@ -135,6 +135,32 @@ test('§3 GET /api/backlog: a project without a backlog index answers 200 with n
   });
 });
 
+test('§3 GET /api/backlog?fields=status: the same groups, and each item reduced to its status', async () => {
+  const root = makeProject();
+  await withServer(root, async (base) => {
+    const full = await call(base, 'GET', '/api/backlog');
+    const lean = await call(base, 'GET', '/api/backlog?fields=status');
+    assert.equal(lean.status, 200);
+    assert.deepEqual(Object.keys(lean.body).sort(), ['groups', 'items']);
+    assert.deepEqual(lean.body.groups, full.body.groups);
+    assert.deepEqual(Object.keys(lean.body.items).sort(), Object.keys(full.body.items).sort());
+    for (const [id, item] of Object.entries(lean.body.items)) {
+      assert.deepEqual(item, { status: full.body.items[id].status }, `${id} carries only its status`);
+    }
+  });
+});
+
+test('§3 GET /api/backlog: any other fields value is 400, never a silently different shape', async () => {
+  const root = makeProject();
+  await withServer(root, async (base) => {
+    for (const q of ['?fields=title', '?fields=status,title', '?fields=']) {
+      const r = await call(base, 'GET', `/api/backlog${q}`);
+      assert.equal(r.status, 400, q);
+      assert.equal(typeof r.body.error, 'string');
+    }
+  });
+});
+
 test('§3 the status vocabulary is the contract\'s: adding or renaming one is a contract change', () => {
   assert.deepEqual(VALID_STATUSES, [
     'Backlog', 'Drafted', 'Reviewed', 'Implemented', 'Done', 'Blocked', 'Fixing', 'Ready', 'In Progress', 'In Review',

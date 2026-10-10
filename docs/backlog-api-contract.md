@@ -78,11 +78,27 @@ and may change.
   `Backlog` to `Drafted`, and the index's `[Type · Status]` suffixes are
   refreshed. Neither changes order or membership.
 
-**Known gap.** The response includes every item's full body. A large backlog
-passes a megabyte: fazon's was 1.98 MB on 2026-10-10, deskrhythm's 0.9 MB.
-Launch Studio caps responses at 1 MB, so its release picker fails for such a
-project. A lean form for consumers that only need the order and statuses is an
-open owner decision (see *Open decisions*).
+### The lean read: `GET /api/backlog?fields=status`
+
+The full response carries every item's body, and a large backlog passes a
+megabyte (fazon's was 1.98 MB on 2026-10-10). A consumer that needs only the
+order and the statuses asks for the lean form:
+
+```json
+{
+  "groups": [{ "release": "Phase 1", "items": ["EX-001", "EX-002"] }],
+  "items": { "EX-001": { "status": "Done" } }
+}
+```
+
+- `groups` is identical to the full read's; `items` has the same ids, each with
+  only `status`. The response has no other top-level keys. fazon's 412 items come
+  to 16 KB.
+- The same side effects as the full read run first, so the statuses match.
+- `fields` accepts only `status`. Any other value, an empty one or a repeated
+  one is **400** with `{ "error": string }`, never a different shape.
+- Consumers that only read the order and statuses should use this form; the
+  full read stays as it is.
 
 ## 4. `POST /api/backlog/items`
 
@@ -138,8 +154,9 @@ sees, so none is made unilaterally here.
 
 1. **The authoritative port** (§1): `config.yaml`, the registry, or the port
    advertised somewhere a consumer can read without knowing it.
-2. **A lean backlog read** (§3): for example `GET /api/backlog?fields=status`
-   returning `groups` and `{ id: { status } }` only. Additive, so not breaking.
+2. ~~A lean backlog read~~ **Decided 2026-10-10 (owner):** added as
+   `GET /api/backlog?fields=status` (§3). Launch Studio switches to it in its own
+   backlog item.
 3. **The branch a filed item lands on** (§4): document "the current branch" as
    intended, or commit to the default branch.
 4. **Versioning:** a path version (`/api/v1/…`) or a `contracts: { backlog: 1 }`

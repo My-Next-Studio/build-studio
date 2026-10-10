@@ -23,6 +23,16 @@ that move underneath you without your having edited anything.
 
 ## 2026-10-10 — A new app icon; the backlog API becomes a declared contract
 
+### Added
+
+- **A lean backlog read for other apps:** `GET /api/backlog?fields=status`
+  returns the backlog's order and each item's status only. The full read
+  carries every item's body and had grown past a megabyte on a large backlog
+  (1.98 MB in one project), over the 1 MB cap Launch Studio puts on responses,
+  so filing from Launch Studio failed for that project. The lean form came to
+  16 KB for the same backlog. Any other `fields` value is refused with a 400.
+  The full read is unchanged.
+
 ### Changed
 
 - **The app icon is now a crane** in Build Studio's amber, replacing the robot
@@ -46,7 +56,11 @@ touch "/Applications/Build Studio.app"
 ```
 
 **In each managed project**: nothing to do. The backlog API contract below
-changes no behaviour.
+changes no behaviour, and the lean read is additive.
+
+**In Build Studio**, for the lean read: it is project-server code, so it reaches
+a running server after `node inject-resources.js --sync-only` in
+`packages/desktop` and that project's server is restarted.
 
 ### Notes for forks
 

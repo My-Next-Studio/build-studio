@@ -2,7 +2,7 @@
  * Backlog API (PRD-004) — read path.
  *
  * Endpoints:
- *   GET  /api/backlog              → { groups, items }
+ *   GET  /api/backlog[?fields=status] → { groups, items }  (lean: items = { id → { status } })
  *                                    `groups` is the canonical order from
  *                                    the backlog index's BACKLOG section.
  *                                    `items` is { id → frontmatter+body }.
@@ -40,7 +40,18 @@ function createBacklogRouter(config) {
     return out;
   }
 
+  // `?fields=status` is the lean read for other Studio apps
+  // (docs/backlog-api-contract.md §3): the order and each item's status only.
+  // The full response carries every item's body and passed a megabyte on a
+  // large backlog, over Launch Studio's response cap. Only `status` is
+  // offered; anything else is refused rather than quietly ignored.
+  const LEAN_FIELDS = ['status'];
+
   router.get('/backlog', (req, res) => {
+    const fields = req.query.fields;
+    if (fields !== undefined && !LEAN_FIELDS.includes(fields)) {
+      return res.status(400).json({ error: `fields must be one of: ${LEAN_FIELDS.join(', ')}` });
+    }
     try {
       // Run the file-presence auto-transition first (Feature + Backlog + PRD
       // file exists → Drafted). If anything moved, re-render the order block
@@ -53,6 +64,11 @@ function createBacklogRouter(config) {
       refreshBacklogIndex(config.projectRoot, docsPath);
 
       const { groups, items } = readBacklog(config.projectRoot, docsPath);
+      if (fields === 'status') {
+        const lean = {};
+        for (const [id, item] of Object.entries(items)) lean[id] = { status: item.status };
+        return res.json({ groups, items: lean });
+      }
       res.json({ groups, items: hydrate(items), autoTransitioned: auto.transitioned });
     } catch (err) {
       res.status(500).json({ error: err.message });
