@@ -282,6 +282,10 @@ escaped defects, by project, from the scorecard rows tagged `full` before this
 date. A quality problem found in a lean run is fixed in the lean prompts or
 gates, and recorded here.
 
+A comparison of runs with and without injected learnings waits on this one,
+so the two effects are not mixed: see
+[learnings-effectiveness-trial.md](learnings-effectiveness-trial.md).
+
 ## Where this stands (2026-10-07)
 
 ### Built
