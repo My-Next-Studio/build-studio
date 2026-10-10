@@ -261,3 +261,33 @@ test('no dialog, no question', () => {
     assert.equal(r && r.reason, 'awaiting_decision', 'a question asked mid-shell is still flagged');
   });
 }
+
+// ── The idle timeout with background work pending ───────────────────────────
+// fazon FAZ-367 (2026-10-10): a lean builder waiting on ci:local's Lighthouse
+// step in a background shell was marked failed at 15 minutes of log silence.
+{
+  const { idleTimeoutVerdict } = require('./agent-stalled');
+  const MIN = 60 * 1000;
+  const base = { shortMs: 15 * MIN, longMs: 60 * MIN, waitingForOwner: false, status: 'running', error: undefined };
+
+  test('idle timeout: silence past the short limit with no background work times out', () => {
+    assert.equal(idleTimeoutVerdict({ ...base, idleMs: 16 * MIN, backgroundWork: false }), 'timeout');
+  });
+
+  test('idle timeout: background work stretches the limit instead of switching it off', () => {
+    assert.equal(idleTimeoutVerdict({ ...base, idleMs: 40 * MIN, backgroundWork: true }), null);
+    assert.equal(idleTimeoutVerdict({ ...base, idleMs: 61 * MIN, backgroundWork: true }), 'timeout',
+      'a server left running after the work finished still surfaces');
+  });
+
+  test('idle timeout: an agent already stamped Stalled but waiting on background work is revived', () => {
+    const stamped = { ...base, status: 'error', error: 'Stalled — no log activity for 15 minutes (total elapsed 136m), but the process is still alive.' };
+    assert.equal(idleTimeoutVerdict({ ...stamped, idleMs: 30 * MIN, backgroundWork: true }), 'revive');
+    assert.equal(idleTimeoutVerdict({ ...stamped, idleMs: 30 * MIN, backgroundWork: false }), 'timeout');
+  });
+
+  test('idle timeout: other errors are never revived, and a decision wait never times out', () => {
+    assert.equal(idleTimeoutVerdict({ ...base, status: 'error', error: 'Process exited 20 minutes ago', idleMs: 30 * MIN, backgroundWork: true }), null);
+    assert.equal(idleTimeoutVerdict({ ...base, waitingForOwner: true, idleMs: 120 * MIN, backgroundWork: false }), null);
+  });
+}

@@ -104,6 +104,27 @@ function hasBackgroundWork(paneText) {
 }
 
 /**
+ * What the idle timeout does with an agent whose log has been silent `idleMs`.
+ *
+ * Background work pending (above) stretches the limit from `shortMs` to
+ * `longMs` instead of switching the timeout off: an agent that finished but
+ * left a dev server running in a background shell must still surface. An
+ * agent waiting on the owner's decision never times out. An agent the short
+ * limit already stamped "Stalled", now seen waiting on its own background work
+ * within the long limit, is revived (fazon FAZ-367, 2026-10-10: a lean builder
+ * waiting on Lighthouse was reported failed after 15 minutes).
+ *
+ * Returns 'timeout', 'revive', or null (leave it alone).
+ */
+function idleTimeoutVerdict({ idleMs, shortMs, longMs, backgroundWork, waitingForOwner, status, error }) {
+  if (waitingForOwner) return null;
+  const limit = backgroundWork ? longMs : shortMs;
+  if (idleMs > limit) return 'timeout';
+  if (backgroundWork && status === 'error' && /^Stalled — no log activity/.test(error || '')) return 'revive';
+  return null;
+}
+
+/**
  * Is the pane sitting at an input prompt rather than working?
  *
  * Deliberately positive-evidence-based: we look for the WORKING marker and
@@ -279,4 +300,4 @@ function classifyStalledAgent({
   };
 }
 
-module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS };
+module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, idleTimeoutVerdict, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS };

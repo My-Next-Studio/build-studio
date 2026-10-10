@@ -99,6 +99,18 @@ above shows any that differ).
 a running server after `node inject-resources.js --sync-only` in
 `packages/desktop` and that project's server is restarted.
 
+### Fixed
+
+- **An agent waiting on a long background command was reported as failed.**
+  Claude Code goes quiet between turns while a background shell runs, for
+  example a full test suite or a Lighthouse pass, and the 15-minute idle
+  timeout then marked the agent "Stalled" and the step as unable to advance,
+  while the agent was healthy and would carry on by itself. When the pane shows
+  background work pending, the limit is now 60 minutes, so an agent that
+  finished and left a server running still surfaces, with a message saying a
+  background shell is what it is waiting on. An agent the short limit already
+  marked stalled goes back to running once it is seen waiting on that work.
+
 ### Notes for forks
 
 - **The backlog API is a contract other apps rely on.** Launch Studio files

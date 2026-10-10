@@ -473,6 +473,13 @@ function startServer(projectRoot, opts = {}) {
   // working" so a long-running QA regression (>30min of streaming output)
   // isn't marked as timed out while it's actively producing logs.
   const AGENT_IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 min of log silence = stalled
+  // While the pane shows background work pending (a background shell, goal
+  // mode), log silence is expected: Claude Code is idle between turns and wakes
+  // when the shell reports. A full test suite or a Lighthouse pass easily runs
+  // past 15 min that way (fazon FAZ-367, 2026-10-10: a lean builder waiting on
+  // ci:local's Lighthouse step was marked failed). The longer limit keeps the
+  // backstop for an agent that finished and left a dev server running.
+  const AGENT_BACKGROUND_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
   const AGENT_MIN_RUNTIME_MS = 5 * 60 * 1000; // don't apply idle check before this
   // Dead-process discrimination + auto-resume (see lib/agent-recovery.js):
   const AGENT_DEAD_CONFIRM_MS = 2 * 60 * 1000;  // shell pane + this much silence = process dead
@@ -870,7 +877,21 @@ function startServer(projectRoot, opts = {}) {
           // "cannot advance — all agents failed" while it waited for an answer
           // (launch-studio LS-167, 2026-09-30).
           const waitingForOwner = !!(agent.stalled && agent.stalled.reason === 'awaiting_decision');
-          if (idleMs > AGENT_IDLE_TIMEOUT_MS && !waitingForOwner) {
+          // Read the pane only once the short limit has passed: before that the
+          // answer changes nothing.
+          const backgroundWork = idleMs > AGENT_IDLE_TIMEOUT_MS && !waitingForOwner
+            && agentStalled.hasBackgroundWork(tmuxOps.capturePane(target, 40));
+          const idleVerdict = agentStalled.idleTimeoutVerdict({
+            idleMs, shortMs: AGENT_IDLE_TIMEOUT_MS, longMs: AGENT_BACKGROUND_IDLE_TIMEOUT_MS,
+            backgroundWork, waitingForOwner, status: agent.status, error: agent.error,
+          });
+          if (idleVerdict === 'revive') {
+            agent.status = 'running';
+            delete agent.error;
+            changed = true;
+            console.log(`[workflow] Agent ${agent.role} is waiting on background work, not stalled — back to running`);
+          }
+          if (idleVerdict === 'timeout') {
             agent.status = 'error';
             // Say which of the two it is. An agent on a CLI with no resumable
             // session (codex, opencode) is downgraded from 'dead' to 'alive'
@@ -907,7 +928,9 @@ function startServer(projectRoot, opts = {}) {
                 + 'Check whether it committed its work before relaunching — if it did, recover that instead of redoing it.'
               : agent.stalled
                 ? `${agent.stalled.title || agent.stalled.reason} — the process is still alive after ${Math.round(elapsed / 60000)}m of work. ${agent.stalled.action || ''} (Relaunching discards its context and any uncommitted work.)`.replace(/\s+/g, ' ').trim()
-                : `Stalled — no log activity for ${Math.round(idleMs / 60000)} minutes (total elapsed ${Math.round(elapsed / 60000)}m), but the process is still alive. Check the pane before relaunching — a relaunch discards its context and any uncommitted work.`;
+                : backgroundWork
+                  ? `Waiting on background work for ${Math.round(idleMs / 60000)} minutes (total elapsed ${Math.round(elapsed / 60000)}m) — the pane still shows a background shell running. It may be a long suite, or a server left running after the work finished. Check the pane before relaunching — a relaunch discards its context and any uncommitted work.`
+                  : `Stalled — no log activity for ${Math.round(idleMs / 60000)} minutes (total elapsed ${Math.round(elapsed / 60000)}m), but the process is still alive. Check the pane before relaunching — a relaunch discards its context and any uncommitted work.`;
             changed = true;
             console.log(`[workflow] Agent ${agent.role} stalled — log idle for ${Math.round(idleMs / 60000)}m in step ${activeWf.currentStep}`);
           }
