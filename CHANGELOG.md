@@ -21,6 +21,34 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-10 — A new app icon
+
+### Changed
+
+- **The app icon is now a crane** in Build Studio's amber, replacing the robot
+  at a laptop. It is one of a family drawn together for the studio apps (Build
+  Studio's crane, a rocket for launching, a control room for running), on one
+  frame and stroke. The sources are SVG files in `packages/desktop/icon/`, with
+  hand-tuned 16, 32 and 64 px drawings, and `packages/desktop/render-icon.sh`
+  builds `icon.icns` from them; `package.json` now names that file instead of
+  relying on electron-builder finding `icon.png`. `generate-icon.py`, which drew
+  the robot, is removed.
+
+### Upgrade steps
+
+**In Build Studio**: the next full build (`npm run build` in `packages/desktop`)
+picks the icon up. To get it without a rebuild, copy it into the installed app;
+the Dock shows it from the next launch:
+
+```bash
+cp packages/desktop/icon.icns "/Applications/Build Studio.app/Contents/Resources/icon.icns"
+touch "/Applications/Build Studio.app"
+```
+
+**In each managed project**: nothing to do.
+
+---
+
 ## 2026-10-08 — Lean execution is the default; `project-state.md` stops growing: the decisions log and backlog index get their own files, a size warning, mark-done replaces instead of piling up
 
 ### Added

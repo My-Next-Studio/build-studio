@@ -26,6 +26,7 @@
     "productName": "Build Studio",
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "icon.icns",
       "target": [
         "dir"
       ],

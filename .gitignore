@@ -5,6 +5,8 @@ dist/
 _standalone/
 _robot_icon/
 *.icns
+# The app icon is a committed build input (packages/desktop/render-icon.sh builds it from icon/*.svg).
+!packages/desktop/icon.icns
 *.tsbuildinfo
 packages/desktop/icon.iconset/
 packages/desktop/user-icon-source.jpg
