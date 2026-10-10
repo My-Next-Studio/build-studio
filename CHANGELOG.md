@@ -64,6 +64,18 @@ that move underneath you without your having edited anything.
   builds `icon.icns` from them; `package.json` now names that file instead of
   relying on electron-builder finding `icon.png`. `generate-icon.py`, which drew
   the robot, is removed.
+- **A QA round after a fix round that changed nothing no longer re-runs
+  everything.** Each re-validation round re-ran the full suite, the build, the
+  gates and the visual smoke. When the builder decides an open finding can't be
+  fixed in code (it waits on an owner approval, say) and commits nothing, every
+  one of those checks gives the same answer again: one run was starting a fifth
+  40-minute suite that way. Build Studio now records the commit each QA round
+  tested, and when the next round finds no commit and no change to a tracked
+  file since, its prompt says so. QA then carries the last round's test counts
+  forward, re-runs only the checks behind the open findings, and names on an
+  `**Awaiting owner:**` line any finding that waits on something outside the
+  repository. Any change at all, or a run without the record (one that started
+  before this update), still gets the full re-validation.
 
 ### Upgrade steps
 
@@ -99,7 +111,20 @@ above shows any that differ).
 a running server after `node inject-resources.js --sync-only` in
 `packages/desktop` and that project's server is restarted.
 
+**In Build Studio**, for the QA changes (force approve, the unchanged round):
+`npx next build` in `packages/hub`, then `node inject-resources.js` in
+`packages/desktop`, then restart the app and the project servers. Nothing to do
+in the managed projects.
+
 ### Fixed
+
+- **Force approve on QA did nothing for an agent marked done by hand.** Marking
+  the QA agent done leaves "Manually marked as done." as its report, which has
+  no test counts. Approve refused it, correctly, and Force approve refused it
+  with the same "does not contain recognizable test results" error, because
+  the override only reached the failing-tests gate. Force approve now passes
+  every QA approval gate, and records on the step which one it bypassed. It
+  still waits for a QA agent that is running.
 
 - **An agent waiting on a long background command was reported as failed.**
   Claude Code goes quiet between turns while a background shell runs, for

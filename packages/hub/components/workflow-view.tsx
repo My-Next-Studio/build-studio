@@ -2572,17 +2572,17 @@ function StepActions({
             <button onClick={() => onAdvance('approve')} disabled={dis} className="wf-btn primary">
               Approve
             </button>
-            {/* Override — bypasses the strict failing-tests gate. Use for known
-                flakes / failures confirmed unrelated to this change. Logged on the step. */}
+            {/* Override — bypasses every QA approval gate: failing tests, and a
+                report with no test counts (an agent marked done by hand). Logged on the step. */}
             <button
               onClick={() => {
-                if (confirm('Force-approve QA despite failing tests?\n\nThe strict gate (zero failing tests on the run branch) will be bypassed. Use only for known flakes or failures you have confirmed are unrelated to this change. The override is recorded on the step.')) {
+                if (confirm('Force-approve QA?\n\nThis bypasses the QA approval gates: failing tests, and a missing or count-less QA report (e.g. an agent you marked done by hand). Use only when you have confirmed the failures are unrelated to this change, or accept them. The override is recorded on the step.')) {
                   onAdvance('approve', { override: true, note: notes.trim() || 'operator force-approve (strict QA gate)' })
                 }
               }}
               disabled={dis}
               className="wf-btn secondary"
-              title="Bypass the strict failing-tests gate (e.g. known flakes)"
+              title="Bypass the QA approval gates (failing tests, or no usable QA report)"
             >
               Force approve (override)
             </button>

@@ -219,3 +219,43 @@ test('GET /workflow exposes the lean sequence for the hub timeline', async () =>
     assert.deepEqual(res.body.projectWorkflowSteps.lean, LEAN_EXECUTION_STEPS);
   } finally { await srv.close(); repo.clean(); }
 });
+
+// A QA agent marked done by hand has a report with no test counts. Approve
+// refuses it; force approve used to refuse it too, because the override only
+// reached the strict failing-tests gate (fazon, 2026-10-10).
+async function atQaWithReport(srv, feedback, status = 'done') {
+  await srv.post('/api/workflow/start', { type: 'execution', input: 'LS-002', preset: 'lean' });
+  const wf = srv.state.loadWorkflow();
+  wf.currentStep = 'qa_validation';
+  wf.steps.qa_validation = { status: 'running', agents: [{ role: 'QA', window: 'qa-validate-r5', status, feedback }] };
+  srv.state.saveWorkflow(wf);
+}
+
+test('force approve passes a QA agent marked done by hand, and records it', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await atQaWithReport(srv, 'Manually marked as done.');
+    const plain = await srv.post('/api/workflow/advance', { action: 'approve' });
+    assert.equal(plain.status, 400);
+    assert.match(plain.body.error, /recognizable test results/);
+
+    const forced = await srv.post('/api/workflow/advance', { action: 'approve', override: true, note: 'owner accepts' });
+    assert.equal(forced.status, 200, JSON.stringify(forced.body));
+    const wf = srv.state.loadWorkflow();
+    assert.equal(wf.steps.qa_validation.status, 'completed');
+    assert.notEqual(wf.currentStep, 'qa_validation');
+    assert.match(wf.steps.qa_validation.overrides.at(-1).reason, /owner accepts \(bypassed: QA report gates\)/);
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('force approve still waits for a QA agent that is running', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await atQaWithReport(srv, '', 'running');
+    const forced = await srv.post('/api/workflow/advance', { action: 'approve', override: true });
+    assert.equal(forced.status, 400);
+    assert.match(forced.body.error, /still running/);
+  } finally { await srv.close(); repo.clean(); }
+});

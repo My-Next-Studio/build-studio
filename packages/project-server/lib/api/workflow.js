@@ -34,6 +34,7 @@ const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
 const lean = require('../lean-execution');
 const { itemsFiledOnBranch } = require('../filed-on-branch');
+const qaUnchangedLib = require('../qa-unchanged');
 const docBudget = require('../doc-budget');
 const { subagentUsage, withSubagents } = require('../subagent-usage');
 
@@ -1796,6 +1797,11 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   function launchFixPlan(wf, sourceStep, feedback, notes, prdId) {
     wf.steps[sourceStep].status = 'completed';
     wf.fixSource = sourceStep; // track where the fix originated
+    // What this QA round tested and found, for the next round: if the fix
+    // changes nothing, that round carries this forward (lib/qa-unchanged.js).
+    if (sourceStep === 'qa_validation') {
+      wf.lastQaReport = { round: wf.round || 1, head: wf.qaTestedHead || null, feedback: String(feedback || '') };
+    }
     if (lean.isLean(wf)) return launchLeanFix(wf, feedback, notes);
     wf.currentStep = 'fix_plan';
 
@@ -8464,10 +8470,18 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
         : '';
 
       let qaRoundContext2 = '';
+      // A round after a fix that changed nothing re-runs only the checks behind
+      // the open findings (lib/qa-unchanged.js). Checked before this round
+      // records its own commit.
+      const qaUnchanged = wf.round > 1 ? qaUnchangedLib.unchangedSinceLastQa(projectRoot, wf.lastQaReport) : null;
+      wf.qaTestedHead = qaUnchangedLib.headOf(projectRoot);
       if (wf.round > 1) {
         const prevFix = wf.steps.fix_execution || wf.steps.fix_plan;
         const fixFeedback = prevFix ? (prevFix.agents || []).filter(a => a.feedback).map(a => a.feedback).join('\n') : '';
-        if (fixFeedback) qaRoundContext2 = `\n\n## THIS IS RE-VALIDATION (Round ${wf.round}) — RE-RUN, DO NOT RE-ANALYSE\n\n**You MUST re-execute the full test suite from scratch.** Do not cite round-${wf.round - 1} test results, do not "verify the fix reports against the spec", do not produce a methodology review. The fix-execution step claims the failures are resolved; your job is to PROVE that by re-running the tests and capturing fresh \`N passed / N failed\` output, plus re-doing the visual smoke and confirming the round-${wf.round - 1} runtime warnings (e.g. \`[Invalid Configuration]\`) are GONE on this round's launch.\n\nThe approval gate will reject feedback without fresh test-count output. The visual smoke from round ${wf.round - 1} is invalid — capture new screenshots and inspect for the same issues you flagged before.\n\n### Round ${wf.round - 1} fix reports (context only — do NOT trust them; verify by running tests):\n${fixFeedback}`;
+        if (qaUnchanged) {
+          console.log(`[workflow] qa_validation round ${wf.round}: no change since round ${qaUnchanged.round} (${String(qaUnchanged.head).slice(0, 8)}) — targeted re-check, not the full suite`);
+          qaRoundContext2 = qaUnchangedLib.unchangedRoundSection({ round: wf.round, last: qaUnchanged, fixFeedback });
+        } else if (fixFeedback) qaRoundContext2 =`\n\n## THIS IS RE-VALIDATION (Round ${wf.round}) — RE-RUN, DO NOT RE-ANALYSE\n\n**You MUST re-execute the full test suite from scratch.** Do not cite round-${wf.round - 1} test results, do not "verify the fix reports against the spec", do not produce a methodology review. The fix-execution step claims the failures are resolved; your job is to PROVE that by re-running the tests and capturing fresh \`N passed / N failed\` output, plus re-doing the visual smoke and confirming the round-${wf.round - 1} runtime warnings (e.g. \`[Invalid Configuration]\`) are GONE on this round's launch.\n\nThe approval gate will reject feedback without fresh test-count output. The visual smoke from round ${wf.round - 1} is invalid — capture new screenshots and inspect for the same issues you flagged before.\n\n### Round ${wf.round - 1} fix reports (context only — do NOT trust them; verify by running tests):\n${fixFeedback}`;
         // In a lean run the same agent also re-reviews the fix; this section is
         // only about the test run, and Part 2 says how to review.
         if (fixFeedback && lean.isLean(wf)) qaRoundContext2 += '\n\n(This section covers the test run. Reviewing the fixes themselves is Part 2, at the end of this prompt.)';
@@ -8720,7 +8734,7 @@ xcodebuild test \\\\
 You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**`;
       const qaAgent = [{
         role: 'QA', window: 'qa-validate', status: 'pending', reportFeedback: true,
-        instruction: `${qaHeader}\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. ${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
+        instruction: `${qaHeader}\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** ${qaUnchanged ? 'This round re-runs only the checks behind the open findings (see RE-VALIDATION above); run those, and carry the rest forward as that section says.' : 'If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.'}\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. ${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
       }];
 
       // Launch the agent with the suite result appended. Shared by the direct
@@ -8950,6 +8964,20 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
       const qaStrict = (config.qa_validation && config.qa_validation.strict) !== false; // default true
       const operatorOverride = body.override === true;
 
+      // Force approve is the owner's call, so it passes the report gates below
+      // as well as the strict one. It used to bypass only the strict gate: a
+      // QA agent marked done by hand ("Manually marked as done.") has a report
+      // with no test counts, so the force-approve button answered with the
+      // no-test-output refusal and there was no way past it (fazon, 2026-10-10).
+      // A QA agent still running is refused either way.
+      if (operatorOverride && !agentsStillRunning) {
+        const bypassed = !qaFeedback.trim() ? 'no QA report' : 'QA report gates';
+        const overrideEntry = { at: new Date().toISOString(), step: 'qa_validation', round: wf.round || 1, reason: `${body.note || 'operator force-approve'} (bypassed: ${bypassed})` };
+        wf.steps.qa_validation.overrides = (wf.steps.qa_validation.overrides || []).concat(overrideEntry);
+        console.log(`[workflow] qa_validation operator override: round=${wf.round}, reason="${overrideEntry.reason}"`);
+        return completeQaValidation();
+      }
+
       if (!qaFeedback.trim()) {
         return res.status(400).json({
           error: agentsStillRunning
@@ -9005,22 +9033,20 @@ You are QA. **Your job is to RUN the test suite and report test outcomes — not
           reason: `honor_clean_approval: QA certified Approved:yes + Blocking:0 (${gate.failingCount} failing test(s) triaged non-blocking)`,
         });
       }
-      if (qaStrict && operatorOverride) {
-        const overrideEntry = { at: new Date().toISOString(), step: 'qa_validation', round: wf.round || 1, reason: body.note || 'operator override of strict QA gate' };
-        wf.steps.qa_validation.overrides = (wf.steps.qa_validation.overrides || []).concat(overrideEntry);
-        console.log(`[workflow] qa_validation operator override: round=${wf.round}, reason="${overrideEntry.reason}"`);
-      }
+      return completeQaValidation();
 
-      wf.steps.qa_validation.status = 'completed';
-      // Compute the next step from the workflow's ACTIVE sequence (same pattern as
-      // ac_verification/security_audit below) — the solo preset goes straight from
-      // QA to the merge gate; classic presets continue to ac_verification (also the
-      // fallback for legacy configs); a bugfix run continues to code_review.
-      const qvNext = nextStepInSequence(wf, config, 'qa_validation') || 'ac_verification';
-      wf.steps[qvNext] = { ...(wf.steps[qvNext] || {}), status: 'pending', agents: [] }; // reset for re-run on round > 1
-      wf.currentStep = qvNext;
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, needsAdvance: true });
+      function completeQaValidation() {
+        wf.steps.qa_validation.status = 'completed';
+        // Compute the next step from the workflow's ACTIVE sequence (same pattern as
+        // ac_verification/security_audit below) — the solo preset goes straight from
+        // QA to the merge gate; classic presets continue to ac_verification (also the
+        // fallback for legacy configs); a bugfix run continues to code_review.
+        const qvNext = nextStepInSequence(wf, config, 'qa_validation') || 'ac_verification';
+        wf.steps[qvNext] = { ...(wf.steps[qvNext] || {}), status: 'pending', agents: [] }; // reset for re-run on round > 1
+        wf.currentStep = qvNext;
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf, needsAdvance: true });
+      }
     }
 
     // AC Verification — verify each PRD acceptance criterion is met
