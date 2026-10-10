@@ -439,7 +439,7 @@ which entry doc applies:
   hard rules), `project/colors_and_type.css` (token source),
   `project/ui_kits/<name>/index.html` (pixel-fidelity prototypes),
   `project/assets/`.
-- **Flat bundle** (e.g. launch-studio, finance-studio): `NOTES.md` (the entry
+- **Flat bundle** (e.g. launch-studio, run-studio): `NOTES.md` (the entry
   doc — file list, implemented interaction patterns, flagged conflicts),
   `tokens.css` (the canonical token contract the brand guidelines pin),
   `components.css` (components with states), and one `<Screen>.dc.html`
