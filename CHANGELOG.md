@@ -32,6 +32,12 @@ that move underneath you without your having edited anything.
   so filing from Launch Studio failed for that project. The lean form came to
   16 KB for the same backlog. Any other `fields` value is refused with a 400.
   The full read is unchanged.
+- **Cancelling a run lists the backlog items filed on its branch.** Filing a
+  story, a draft or an item from Launch Studio commits it on whatever branch the
+  repo is on, which during a run is the run's branch; it reaches the default
+  branch when the run merges. Cancelling switches back to the default branch,
+  where such items don't exist yet, so the cancel dialog now names them before
+  you confirm, and says they stay on the run's branch unless you delete it.
 
 ### Changed
 

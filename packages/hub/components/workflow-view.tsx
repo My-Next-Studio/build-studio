@@ -678,6 +678,9 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
 
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
   const [cancelDeleteWorktrees, setCancelDeleteWorktrees] = useState(false)
+  // Backlog items filed while the repo was on the run's branch: cancelling
+  // returns the checkout to the default branch, where they don't exist yet.
+  const [cancelImpact, setCancelImpact] = useState<{ branch: string | null; defaultBranch: string; filedItems: Array<{ id: string; title: string }> } | null>(null)
 
   async function confirmCancel() {
     await api.post('/workflow/cancel', { deleteWorktrees: cancelDeleteWorktrees })
@@ -687,6 +690,11 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   }
 
   function cancelWorkflow() {
+    setCancelImpact(null)
+    api.get('/workflow/cancel-impact').then((r: unknown) => {
+      const v = r as { filedItems?: unknown } | null
+      if (v && Array.isArray(v.filedItems)) setCancelImpact(r as { branch: string | null; defaultBranch: string; filedItems: Array<{ id: string; title: string }> })
+    }).catch(() => {})
     setCancelDialogOpen(true)
   }
 
@@ -1593,6 +1601,19 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5 }}>
               Running agents will be stopped. Branches are preserved by default so work is not lost.
             </div>
+            {cancelImpact && cancelImpact.filedItems.length > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--orange)', background: 'rgba(255,170,60,0.08)', borderRadius: 4, padding: '8px 10px', lineHeight: 1.5 }}>
+                {cancelImpact.filedItems.length === 1 ? 'A backlog item was' : `${cancelImpact.filedItems.length} backlog items were`} filed
+                while the repo was on <code>{cancelImpact.branch}</code>. Cancelling switches back
+                to <code>{cancelImpact.defaultBranch}</code>, where {cancelImpact.filedItems.length === 1 ? 'it isn\u2019t' : 'they aren\u2019t'} yet.
+                {' '}{cancelImpact.filedItems.length === 1 ? 'It stays' : 'They stay'} on the run branch unless you delete it below.
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {cancelImpact.filedItems.map(i => (
+                    <li key={i.id}><b>{i.id}</b>{i.title ? ` — ${i.title}` : ''}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}>
               <input
                 type="checkbox"

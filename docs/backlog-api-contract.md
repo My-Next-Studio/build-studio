@@ -132,9 +132,12 @@ second item. A consumer that loses the response cannot tell whether the item was
 created, and should treat that as uncertain rather than retry.
 
 **Which branch.** The commit lands on whatever branch the project's checkout
-is on, the same way drafting a PRD does. An item filed while the repo is on a
-feature branch lands on that branch. Whether that is intended is an open owner
-decision.
+is on, the same way drafting a PRD does, and that is intended. An item filed
+during a run lands on the run's branch, is visible in the checkout at once, and
+reaches the default branch when the run merges. If the run is cancelled instead,
+the checkout returns to the default branch, where the item isn't yet; Build
+Studio's cancel dialog lists such items first (`GET /api/workflow/cancel-impact`,
+internal), and they stay on the run's branch unless it is deleted.
 
 ## 5. `docs/backlog/<id>.md`
 
@@ -156,8 +159,10 @@ sees, so none is made unilaterally here.
 2. ~~A lean backlog read~~ **Decided 2026-10-10 (owner):** added as
    `GET /api/backlog?fields=status` (§3). Launch Studio switches to it in its own
    backlog item.
-3. **The branch a filed item lands on** (§4): document "the current branch" as
-   intended, or commit to the default branch.
+3. ~~The branch a filed item lands on~~ **Decided 2026-10-10 (owner):** the
+   current branch, as intended (§4). Committing to the default branch as well
+   was ruled out: the run's own status updates to the backlog index would make
+   its merge conflict.
 4. **Versioning:** a path version (`/api/v1/…`) or a `contracts: { backlog: 1 }`
    field in `/api/health`. The second is additive and lets a consumer refuse an
    incompatible server cleanly.

@@ -33,6 +33,7 @@ const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS 
 const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
 const lean = require('../lean-execution');
+const { itemsFiledOnBranch } = require('../filed-on-branch');
 const docBudget = require('../doc-budget');
 const { subagentUsage, withSubagents } = require('../subagent-usage');
 
@@ -4268,10 +4269,29 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     res.json({ ok: true });
   });
 
+  // What a cancel would leave behind: backlog items filed while the repo was on
+  // the run's branch (filed-on-branch.js). Cancelling returns the checkout to
+  // the default branch, where they don't exist yet; the cancel dialog lists them.
+  function cancelImpact(wf) {
+    const defaultBranch = wf.defaultBranch || 'main';
+    return {
+      branch: wf.branch || null,
+      defaultBranch,
+      filedItems: itemsFiledOnBranch(projectRoot, config.docs_path || './docs', wf.branch, defaultBranch),
+    };
+  }
+
+  router.get('/workflow/cancel-impact', (req, res) => {
+    const wf = state.loadWorkflow();
+    if (!wf) return res.status(404).json({ error: 'no active workflow' });
+    res.json(cancelImpact(wf));
+  });
+
   router.post('/workflow/cancel', (req, res) => {
     const wf = state.loadWorkflow();
     if (!wf) return res.status(404).json({ error: 'no active workflow' });
     const deleteWorktrees = req.body?.deleteWorktrees === true;
+    const { filedItems } = cancelImpact(wf);
     // Cancelling a bugfix run releases the bug back to Backlog so it can be
     // re-run later. Do this BEFORE stopWorkflow: if the Fixing flip was still
     // uncommitted, reverting it makes the tree clean again so stopWorkflow can
@@ -4288,7 +4308,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       try { cleanupBranches(wf); } catch (e) { console.error('[workflow] cancel cleanup error:', e.message); }
     }
     broadcast('worktrees-updated', {});
-    res.json({ ok: true, deletedBranches: deleteWorktrees });
+    res.json({ ok: true, deletedBranches: deleteWorktrees, filedItems });
   });
 
   router.post('/workflow/open', (req, res) => {
