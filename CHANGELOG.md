@@ -21,7 +21,7 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-10 — A new app icon
+## 2026-10-10 — A new app icon; the backlog API becomes a declared contract
 
 ### Changed
 
@@ -45,7 +45,19 @@ cp packages/desktop/icon.icns "/Applications/Build Studio.app/Contents/Resources
 touch "/Applications/Build Studio.app"
 ```
 
-**In each managed project**: nothing to do.
+**In each managed project**: nothing to do. The backlog API contract below
+changes no behaviour.
+
+### Notes for forks
+
+- **The backlog API is a contract other apps rely on.** Launch Studio files
+  backlog items into a managed project from its launch plan, through the project
+  server's `GET /api/health` (`projectRoot`), `GET /api/backlog` (`groups`,
+  `items[id].status`), `POST /api/backlog/items` (201 with `id`, `release`,
+  `commit`), and the `status` in `docs/backlog/<id>.md`.
+  `docs/backlog-api-contract.md` states the shapes, status codes and two known
+  gaps, and `lib/api/backlog-contract.test.js` pins them. Keep both if you fork:
+  a change there breaks a consumer you can't see from this repo.
 
 ---
 

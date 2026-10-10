@@ -25,6 +25,7 @@ const { createRunbooksRouter } = require('./api/runbooks');
 const { createOpsUITestsRouter } = require('./api/ops-uitests');
 const { createDemoSetupRouter } = require('./api/demo-setup');
 const { createBacklogRouter } = require('./api/backlog');
+const { createHealthHandler } = require('./api/health');
 const { createLocalCiRouter } = require('./api/local-ci');
 const { createSupportRouter } = require('./api/support');
 const { createCliConfigRouter } = require('./api/cli-config');
@@ -81,14 +82,7 @@ function startServer(projectRoot, opts = {}) {
     bundleVersion = fs.readFileSync(path.join(__dirname, '.bundle-version'), 'utf8').trim() || null;
   } catch {}
 
-  app.get('/api/health', (req, res) => res.json({
-    ok: true,
-    name: config.name,
-    projectRoot: config.projectRoot,
-    uptime: process.uptime(),
-    startedAt,
-    bundleVersion,
-  }));
+  app.get('/api/health', createHealthHandler(config, { startedAt, bundleVersion }));
 
   // SSE
   const sseClients = new Set();

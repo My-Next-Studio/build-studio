@@ -40,6 +40,21 @@ historical — the role command files are plain markdown that any agent CLI read
 when a prompt points at them (Claude Code also mounts them as slash commands);
 OpenCode additionally picks up `.claude/skills` natively.
 
+## Contracts other Studio apps rely on
+
+Two surfaces of a managed project are depended on by apps outside Build Studio,
+and change only by agreement with their consumers:
+
+- **The knowledge manifest** (`docs/knowledge.yaml`):
+  [`knowledge-manifest.md`](knowledge-manifest.md).
+- **The backlog API** (the project server's health, backlog read and item
+  filing, and the `docs/backlog/<id>.md` front matter), which Launch Studio uses
+  to file items from its launch plan:
+  [`backlog-api-contract.md`](backlog-api-contract.md).
+
+An agent changing either one in Build Studio updates the contract doc and its
+contract tests in the same commit, and flags the change to the owner.
+
 ## Directory Conventions (ENFORCED)
 
 These paths are authoritative. All roles must use them. Do not create parallel
