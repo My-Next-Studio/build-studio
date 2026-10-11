@@ -21,6 +21,32 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-11 — A finding only the owner can close stops the fix loop
+
+### Changed
+
+- **Findings that wait on the owner no longer go to the developers.** A review
+  counted an unmet acceptance criterion as blocking even when only the owner
+  could close it, for example study queries to approve before a paid run, or
+  a legal notice to sign off. Each one bought a fix round that changed
+  nothing, until the round cap stopped the run: one run went five rounds on
+  two such findings. QA now reports each one on an `**Awaiting owner:**` line
+  and leaves it out of the blocking count. When a report's only open findings
+  wait on the owner, auto-advance holds the step and says what it waits on in
+  the hub, instead of approving on `Blocking: 0` or starting a fix round.
+  Sending it back to the devs is refused unless you add notes saying what to
+  do next (you have acted) or an override. When a report has code defects as
+  well, those go to the devs, who are told the owner items are not tasks. The
+  lean review's "an unmet AC is BLOCKING" rule now makes the same exception.
+
+### Upgrade steps
+
+**In Build Studio**: `node inject-resources.js --sync-only` in
+`packages/desktop`, then restart the project servers (or the app). Nothing to
+do in the managed projects.
+
+---
+
 ## 2026-10-10 — A new app icon; the backlog API becomes a declared contract
 
 ### Added

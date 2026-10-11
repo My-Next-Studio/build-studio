@@ -299,3 +299,36 @@ test('auto-advance does not hold a blocking QA round after a fix round that chan
     assert.equal(srv.state.loadWorkflow().steps.qa_validation.autoAdvanceError, undefined);
   } finally { await srv.close(); repo.clean(); }
 });
+
+// Findings only the owner can close (lib/awaiting-owner.js): auto-advance
+// holds instead of approving on Blocking: 0 or starting a fix round, and send
+// to devs refuses unless the owner directs it.
+const OWNER_ONLY_QA = '**Approved:** no\n**Blocking:** 0  |  **Medium:** 0  |  **Low:** 0\n**Tests passed:** 120/120\n\n**Awaiting owner:** approve the study queries (AC-1)';
+
+test('auto-advance holds a QA round whose only open findings wait on the owner', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await atQaWithReport(srv, OWNER_ONLY_QA);
+    await tickOnce(srv);
+    const after = srv.state.loadWorkflow();
+    assert.equal(after.currentStep, 'qa_validation');
+    assert.notEqual(after.steps.qa_validation.status, 'completed');
+    assert.match(after.steps.qa_validation.autoAdvanceError, /waiting on you, not on a developer: approve the study queries/);
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('send to devs refuses owner-only findings, and accepts them with the owner’s notes', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await atQaWithReport(srv, OWNER_ONLY_QA);
+    const refused = await srv.post('/api/workflow/advance', { action: 'send_to_devs' });
+    assert.equal(refused.status, 400);
+    assert.deepEqual(refused.body.awaitingOwner, ['approve the study queries (AC-1)']);
+
+    const directed = await srv.post('/api/workflow/advance', { action: 'send_to_devs', notes: 'Queries approved; run the study.' });
+    assert.equal(directed.status, 200, JSON.stringify(directed.body));
+    assert.equal(srv.state.loadWorkflow().steps.qa_validation.status, 'completed');
+  } finally { await srv.close(); repo.clean(); }
+});

@@ -60,7 +60,7 @@ Round ${prev}'s fix made no change to the code: \`git diff ${short} HEAD\` is em
 1. **Confirm it yourself:** \`git diff --stat ${last.head} HEAD\` and \`git status --short --untracked-files=no\` both print nothing. If either prints anything, ignore this section and re-validate in full, as the steps below describe.
 2. **Carry round ${prev}'s test counts forward.** Copy its \`**Tests passed:**\` line (or the runner's \`N passed\` / \`N failed\` lines) into your report, marked \`(carried from round ${prev} at ${short}; no code change since)\`. The approval gate reads them.
 3. **Re-run only the checks behind round ${prev}'s open findings** — the command each finding cites — and report their fresh output. Nothing else.
-4. **Re-state each finding that is still open.** If one cannot be closed by a code change (it waits on an owner approval, a sign-off, a deploy, or anything else outside the repository), say so on an \`**Awaiting owner:**\` line naming what it waits on, and recommend parking the run instead of another fix round.
+4. **Re-state each finding that is still open.** If one cannot be closed by a code change (it waits on an owner approval, a sign-off, a deploy, or anything else outside the repository), put it on an \`**Awaiting owner:**\` line naming what it waits on, and do not count it in \`**Blocking:**\`: the run then waits for the owner instead of starting another fix round.
 
 ### Round ${prev}'s QA report (tested at ${short}):
 ${report}${fixFeedback ? `\n\n### Round ${prev} fix report (context only):\n${fixFeedback}` : ''}`;

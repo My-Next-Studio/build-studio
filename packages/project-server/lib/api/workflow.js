@@ -35,6 +35,7 @@ const { commitScorecard } = require('../scorecard-commit');
 const lean = require('../lean-execution');
 const { itemsFiledOnBranch } = require('../filed-on-branch');
 const qaUnchangedLib = require('../qa-unchanged');
+const awaitingOwner = require('../awaiting-owner');
 const docBudget = require('../doc-budget');
 const { subagentUsage, withSubagents } = require('../subagent-usage');
 
@@ -4881,6 +4882,20 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
         const qaFb = agents.map(a => a.feedback || '').join('\n\n');
         if (gateBlocked.waitsForOwner(qaFb)) return;
       }
+      // A review whose open findings all wait on the owner (lib/awaiting-owner.js):
+      // nothing for a developer, and not approved. Hold rather than approve on
+      // `Blocking: 0`, or loop fix rounds that change nothing.
+      if (reviewSteps.includes(wf.currentStep)) {
+        const ownerItems = awaitingOwner.holdsForOwner(agents.map(a => a.feedback || '').join('\n\n'), gateBlocked.blockingCount);
+        if (ownerItems) {
+          if (!step.autoAdvanceError) {
+            step.autoAdvanceError = `${wf.currentStep} is waiting on you, not on a developer: ${ownerItems.join('; ')}. Held: once you have acted, send it back to the devs with notes, relaunch the step, or approve.`;
+            state.saveWorkflow(wf);
+            console.warn(`[auto-advance] held on ${wf.currentStep}: ${ownerItems.length} finding(s) awaiting the owner`);
+          }
+          return;
+        }
+      }
       // Detect verdict from agent feedback (server-side detectVerdict)
       const qaStrict = (config.qa_validation && config.qa_validation.strict) !== false;
       const hasBlocking = wf.currentStep === 'qa_tests' ? false : agents.some(a => {
@@ -8751,7 +8766,7 @@ xcodebuild test \\\\
 You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**`;
       const qaAgent = [{
         role: 'QA', window: 'qa-validate', status: 'pending', reportFeedback: true,
-        instruction: `${qaHeader}\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** ${qaUnchanged ? 'This round re-runs only the checks behind the open findings (see RE-VALIDATION above); run those, and carry the rest forward as that section says.' : 'If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.'}\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. ${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
+        instruction: `${qaHeader}\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** ${qaUnchanged ? 'This round re-runs only the checks behind the open findings (see RE-VALIDATION above); run those, and carry the rest forward as that section says.' : 'If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.'}\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${awaitingOwner.AWAITING_OWNER_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. ${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
       }];
 
       // Launch the agent with the suite result appended. Shared by the direct
@@ -9958,10 +9973,26 @@ Before adding new entries, scan existing files in docs/learnings/:
       // the project. Stop here instead and name what needs fixing.
       // Unless QA also reported blocking defects from checks that DID run: those
       // go to the devs, and the planner is told the blocked check is not a task.
+      // Findings only the owner can close (lib/awaiting-owner.js) are not fix
+      // work either. With no code defect beside them, a fix round changes
+      // nothing, so refuse unless the owner sends it on purpose: with notes
+      // (they have acted and say what to do next) or an override. With code
+      // defects, the devs get those, told the owner items are not tasks.
+      const ownerItems = awaitingOwner.parseAwaitingOwner(qaFeedback);
+      const ownerDirects = body.override === true || (typeof notes === 'string' && notes.trim());
+      if (ownerItems.length && gateBlocked.blockingCount(qaFeedback) === 0 && !ownerDirects) {
+        return res.status(400).json({
+          error: `Cannot send to devs: every open finding waits on you, not on a developer — ${ownerItems.join('; ')}. `
+            + 'A fix round would change nothing. Act on them, then send it back with notes saying what to do next, or relaunch qa_validation. '
+            + 'To approve as it stands, use {"action":"approve","override":true}.',
+          awaitingOwner: ownerItems,
+        });
+      }
+      const ownerNote = ownerItems.length && !ownerDirects ? awaitingOwner.fixNoteForOwnerItems(ownerItems) : '';
       const qaBlocked = gateBlocked.parseGateBlocked(qaFeedback);
       const defectsToo = qaBlocked && gateBlocked.blockingCount(qaFeedback) > 0;
       if (defectsToo) {
-        launchFixPlan(wf, 'qa_validation', qaFeedback + gateBlocked.plannerNoteForBlockedGate(qaBlocked.reason), notes, prdId);
+        launchFixPlan(wf, 'qa_validation', qaFeedback + gateBlocked.plannerNoteForBlockedGate(qaBlocked.reason) + ownerNote, notes, prdId);
         return res.json({ workflow: wf });
       }
       if (qaBlocked && body.override !== true) {
@@ -9973,7 +10004,7 @@ Before adding new entries, scan existing files in docs/learnings/:
           gateBlocked: qaBlocked,
         });
       }
-      launchFixPlan(wf, 'qa_validation', qaFeedback, notes, prdId);
+      launchFixPlan(wf, 'qa_validation', qaFeedback + ownerNote, notes, prdId);
       return res.json({ workflow: wf });
     }
 

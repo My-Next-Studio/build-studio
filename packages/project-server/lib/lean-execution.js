@@ -223,7 +223,7 @@ Review ONLY what the fix round changed: \`git diff ${fixBase}..HEAD\`. Do not re
 
 The test run in Part 1 is still the full suite: a fix can break something outside its own diff, and the suite is what sees that.
 
-Severity: BLOCKING for a defect or an unmet AC, MEDIUM for a real problem that should be fixed before merge, LOW for the rest. Be conservative with BLOCKING. Approve when the findings are resolved and the suite is green.`;
+Severity: BLOCKING for a defect or an unmet AC (an AC only the owner can close goes on an \`**Awaiting owner:**\` line instead, as Part 1 says, and is not counted as BLOCKING), MEDIUM for a real problem that should be fixed before merge, LOW for the rest. Be conservative with BLOCKING. Approve when the findings are resolved and the suite is green.`;
   }
   return `
 
@@ -238,7 +238,7 @@ Review the change in this branch: \`git diff ${base}...HEAD\`, against the PRD a
 - **Security.** Secrets or tokens in code, logs or tests; injection; missing authorisation on a new surface; tests that would call a real paid API.
 - **Hygiene.** Test scaffolding in production code (environment failure hooks, ungated test seams); a third copy of logic that will drift; dead error paths.${design}
 
-Severity: BLOCKING for a defect or an unmet AC, MEDIUM for a real problem that should be fixed before merge, LOW for the rest. Be conservative with BLOCKING and do not invent concerns. If the change is correct and tested, approve.`;
+Severity: BLOCKING for a defect or an unmet AC (an AC only the owner can close goes on an \`**Awaiting owner:**\` line instead, as Part 1 says, and is not counted as BLOCKING), MEDIUM for a real problem that should be fixed before merge, LOW for the rest. Be conservative with BLOCKING and do not invent concerns. If the change is correct and tested, approve.`;
 }
 
 module.exports = {
