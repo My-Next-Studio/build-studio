@@ -5,7 +5,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseAwaitingOwner, holdsForOwner, fixNoteForOwnerItems, AWAITING_OWNER_INSTRUCTIONS } = require('./awaiting-owner');
+const { parseAwaitingOwner, holdsForOwner, parseOwnerChecks, mergeOwnerChecks, fixNoteForOwnerItems, AWAITING_OWNER_INSTRUCTIONS } = require('./awaiting-owner');
 const { blockingCount } = require('./gate-blocked');
 
 const OWNER_ONLY = [
@@ -53,7 +53,21 @@ test('the fix note lists the items and says they are not tasks', () => {
   assert.match(note, /- approve the queries/);
 });
 
-test('the instructions name the exact marker and keep it out of the blocking count', () => {
+test('the instructions: owner checks never block, and the hold is for an open product decision only', () => {
+  assert.match(AWAITING_OWNER_INSTRUCTIONS, /### Owner checks/);
+  assert.match(AWAITING_OWNER_INSTRUCTIONS, /never blocking/);
+  assert.match(AWAITING_OWNER_INSTRUCTIONS, /no proof is ever required/);
   assert.match(AWAITING_OWNER_INSTRUCTIONS, /\*\*Awaiting owner:\*\* </);
-  assert.match(AWAITING_OWNER_INSTRUCTIONS, /Do NOT count it in `\*\*Blocking:\*\*`/);
+  assert.match(AWAITING_OWNER_INSTRUCTIONS, /Never use it for anything the owner would only check or sign off/);
+});
+
+test('owner checks: bullets under the heading (or the older Owner action items), deduped across reports', () => {
+  const qa = '**Approved:** yes\n\n### Owner checks\n- Look at every view at 1024 × 720\n- [ ] AC-4: the fatal error screen\n\n### AC Coverage\n- not a check';
+  const ac = '### Owner action items\n- AC-4: the fatal error screen\n* AC-7: launch from the Dock\n';
+  assert.deepEqual(parseOwnerChecks(qa), ['Look at every view at 1024 × 720', 'AC-4: the fatal error screen']);
+  let list = mergeOwnerChecks(undefined, parseOwnerChecks(qa), 'qa_validation');
+  list = mergeOwnerChecks(list, parseOwnerChecks(ac), 'ac_verification');
+  assert.deepEqual(list.map((c) => c.text), ['Look at every view at 1024 × 720', 'AC-4: the fatal error screen', 'AC-7: launch from the Dock']);
+  assert.equal(list[2].step, 'ac_verification');
+  assert.deepEqual(parseOwnerChecks('### Owner checks\n- None'), []);
 });

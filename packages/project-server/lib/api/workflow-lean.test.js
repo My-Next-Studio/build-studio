@@ -370,3 +370,65 @@ test('readiness refuses exactly as the start does', async () => {
     assert.equal(busy.json.error, 'workflow already active');
   } finally { await srv.close(); repo.clean(); }
 });
+
+// The run's last step, owner_checks (owner, 2026-10-11): the manual checks the
+// run recommended. With checks it waits for the owner's Done, which asks for
+// no proof; with none the run completes. Ticks never complete it.
+async function atCaptureLearnings(srv, ownerChecks) {
+  await srv.post('/api/workflow/start', { type: 'execution', input: 'LS-002', preset: 'lean' });
+  const wf = srv.state.loadWorkflow();
+  wf.currentStep = 'capture_learnings';
+  wf.steps.capture_learnings = { status: 'pending', agents: [] };
+  if (ownerChecks) wf.ownerChecks = ownerChecks;
+  srv.state.saveWorkflow(wf);
+}
+
+test('owner checks: with checks the run stops there, a tick leaves it, and Done completes it', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await atCaptureLearnings(srv, [{ text: 'Look at every view at 1024 × 720', step: 'qa_validation' }]);
+    await srv.post('/api/workflow/advance', {}); // a clean run skips capture, then reaches owner_checks
+    let wf = srv.state.loadWorkflow();
+    assert.equal(wf.currentStep, 'owner_checks');
+    assert.deepEqual(wf.steps.owner_checks.checks.map((c) => c.text), ['Look at every view at 1024 × 720']);
+    assert.equal(wf.steps.owner_checks.status, 'pending');
+
+    await tickOnce(srv);
+    await srv.post('/api/workflow/advance', {});
+    assert.equal(srv.state.loadWorkflow().currentStep, 'owner_checks', 'nothing but Done completes it');
+
+    const done = await srv.post('/api/workflow/advance', { action: 'approve' });
+    assert.equal(done.status, 200);
+    wf = srv.state.loadWorkflow();
+    assert.equal(wf.currentStep, 'completed');
+    assert.equal(wf.steps.owner_checks.status, 'completed');
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('owner checks: with none, the run completes by itself', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await atCaptureLearnings(srv, null);
+    await srv.post('/api/workflow/advance', {});
+    const wf = srv.state.loadWorkflow();
+    assert.equal(wf.currentStep, 'completed');
+    assert.equal(wf.steps.owner_checks.status, 'completed');
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('owner checks are gathered from every report as it arrives', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    await srv.post('/api/workflow/start', { type: 'execution', input: 'LS-002', preset: 'lean' });
+    const wf = srv.state.loadWorkflow();
+    wf.currentStep = 'qa_validation';
+    wf.steps.qa_validation = { status: 'running', agents: [{ role: 'QA', status: 'running', window: 'qa-validate' }] };
+    srv.state.saveWorkflow(wf);
+    const r = await srv.post('/api/workflow/feedback', { role: 'QA', step: 'qa_validation', feedback: '**Approved:** yes\n**Blocking:** 0\n**Tests passed:** 10/10\n\n### Owner checks\n- Inspect the fatal error screen\n' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(srv.state.loadWorkflow().ownerChecks, [{ text: 'Inspect the fatal error screen', step: 'qa_validation' }]);
+  } finally { await srv.close(); repo.clean(); }
+});

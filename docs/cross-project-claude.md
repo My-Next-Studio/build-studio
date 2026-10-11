@@ -95,6 +95,29 @@ structures or use skill-default paths.
 - **Transient artifacts go in `tmp/`** — never commit review drafts, logs, or
   intermediate outputs to the repo
 
+## Owner checks never block (ENFORCED)
+
+The owner gives guidance and approves what matters for the product. The
+owner does not prove manual checks, and does not review agent output line by
+line.
+
+- **A check only the owner can do** (look at screens or a visual rendering,
+  try the packaged app or a device, run a manual script, read generated text)
+  is an **owner check**: optional, never blocking, no evidence. A spec lists
+  these under its test plan as "Owner checks (optional)". Never write one as
+  a "gate", "sign-off", or a requirement to attach a log, a screenshot or a
+  file list.
+- **A reviewer** lists such checks under `### Owner checks` in its report and
+  judges everything else as usual; they never make a change unapproved. The
+  workflow collects them and shows them in its last step, **Owner checks**,
+  where the owner runs them or not and clicks Done.
+- **Holding a run for the owner** is only for a product decision the spec left
+  open and the build cannot go on without (which option, whether to spend
+  money). Put that decision in the PRD's open questions, to be settled at
+  review, not discovered mid-build.
+- **What an agent can verify, it verifies:** capturing screenshots, running a
+  script, reproducing a result are agent work, not owner checks.
+
 ## Standard Workflow (ENFORCED)
 
 Each iteration is a small, focused PRD — scoped to days, not weeks — that delivers

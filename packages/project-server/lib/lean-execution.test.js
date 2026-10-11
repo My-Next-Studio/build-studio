@@ -22,7 +22,7 @@ test('the lean sequence drops qa_tests and the separate review steps, and keeps 
     assert.ok(!seq.includes(dropped), `${dropped} must not run in a lean run`);
   }
   // The merge gates and the bookkeeping stay, in order.
-  assert.deepEqual(seq.slice(-3), ['qa_validation', 'merge_to_main', 'capture_learnings']);
+  assert.deepEqual(seq.slice(-4), ['qa_validation', 'merge_to_main', 'capture_learnings', 'owner_checks']);
   assert.ok(seq.indexOf('merge_for_review') < seq.indexOf('qa_validation'));
 });
 

@@ -31,6 +31,7 @@ const STATE_LABEL: Record<string, { label: string; color: string }> = {
   running: { label: 'Running', color: 'var(--accent)' },
   waiting_for_owner: { label: 'Waiting for you', color: 'var(--orange)' },
   ready_to_merge: { label: 'Ready to merge', color: 'var(--green)' },
+  owner_checks: { label: 'Merged; owner checks', color: 'var(--orange)' },
   finished: { label: 'Finished', color: 'var(--green)' },
   stopped: { label: 'Stopped', color: 'var(--red)' },
 }

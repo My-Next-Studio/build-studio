@@ -213,6 +213,7 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
     { key: 'demo_review', name: 'Demo Review' },
     { key: 'merge_to_main', name: 'Merge to Main' },
     { key: 'capture_learnings', name: 'Capture Learnings' },
+    { key: 'owner_checks', name: 'Owner Checks' },
   ],
   kickoff: [
     { key: 'ceo_synthesis', name: 'CEO Synthesis' },
@@ -233,6 +234,7 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
     { key: 'code_review', name: 'Code Review' },
     { key: 'merge_to_main', name: 'Merge to Main' },
     { key: 'capture_learnings', name: 'Capture Learnings' },
+    { key: 'owner_checks', name: 'Owner Checks' },
   ],
   // PRD-001 v1: onboarding workflow for existing projects.
   onboarding: [
@@ -500,7 +502,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     // owner_consultations: kickoff manual gate between pm_scoping and team_review.
     // demo_review is manual UNLESS Skip Demo Review is checked with Auto-advance.
     const skipDemo = !!(wf.autoAdvanceSkipDemoReview ?? skipDemoReviewLocal)
-    const alwaysManual = ['device_testing', 'owner_signoff', 'owner_consultations', 'owner_interview']
+    // owner_checks: the run's recommended manual checks wait for the owner's Done.
+    const alwaysManual = ['device_testing', 'owner_signoff', 'owner_consultations', 'owner_interview', 'owner_checks']
     if (!skipDemo) alwaysManual.push('demo_review')
     if (alwaysManual.includes(wf.currentStep)) return
     if (wf.type === 'onboarding' && wf.currentStep === 'team_review') return
@@ -1928,6 +1931,31 @@ function StepDetail({
               : undefined
             return <AgentFeedbackCard key={i} agent={a} taskLabel={taskLabel} onViewLog={onViewLog} onMarkDone={onMarkDone} onRelaunchTask={(idx) => onAdvance('relaunch_task', { taskIndex: idx })} />
           })}
+        </div>
+      )}
+
+      {/* Owner checks — the manual checks the run recommends. Optional: run
+          them or not, then Done. No proof is asked for. */}
+      {activeKey === 'owner_checks' && (
+        <div style={{ marginBottom: 16, border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)', padding: '12px 14px' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 8 }}>
+            Recommended manual checks
+          </div>
+          {((step as { checks?: { text: string; step?: string }[] }).checks || []).length === 0 ? (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)' }}>None for this run.</div>
+          ) : (
+            <ul style={{ margin: 0, paddingLeft: 18, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', lineHeight: 1.6 }}>
+              {((step as { checks?: { text: string; step?: string }[] }).checks || []).map((c, i) => (
+                <li key={i}>{c.text}{c.step ? <span style={{ color: 'var(--muted)' }}> · from {c.step}</span> : null}</li>
+              ))}
+            </ul>
+          )}
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', margin: '10px 0' }}>
+            The change is merged. Run any of these you want; nothing needs to be attached or signed off.
+          </div>
+          {step.status !== 'completed' && (
+            <button className="wf-btn primary" disabled={!!advancing} onClick={() => onAdvance('approve')}>Done</button>
+          )}
         </div>
       )}
 

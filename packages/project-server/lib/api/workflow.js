@@ -276,9 +276,19 @@ Report with the FIX-REPORT format; include the regression test path.`;
 }
 
 // The active step sequence for a bugfix run (config override or the default).
+// The last step of every execution and bugfix run (owner, 2026-10-11): the
+// manual checks recommended during the run, listed for the owner to run or
+// not. It completes the moment it is reached and never holds the run.
+const OWNER_CHECKS_STEP = 'owner_checks';
+function withOwnerChecks(seq) {
+  const list = (seq || []).slice();
+  if (!list.length || list.includes(OWNER_CHECKS_STEP) || !list.includes('merge_to_main')) return list;
+  return [...list, OWNER_CHECKS_STEP];
+}
+
 function bugfixSequence(config) {
   const configured = config && config.workflow && config.workflow.bugfix;
-  return (Array.isArray(configured) && configured.length) ? configured.slice() : DEFAULT_BUGFIX_STEPS.slice();
+  return withOwnerChecks((Array.isArray(configured) && configured.length) ? configured.slice() : DEFAULT_BUGFIX_STEPS.slice());
 }
 
 // The active step sequence for a workflow — bugfix uses its own list, everything
@@ -293,7 +303,7 @@ function stepSequence(wf, config) {
   if (wf && wf.type === 'onboarding') return (config && config.workflow && config.workflow.onboarding) || [];
   // A lean run has its own fixed sequence, whatever the project's preset says.
   if (lean.isLean(wf)) return lean.LEAN_EXECUTION_STEPS.slice();
-  return (config && config.workflow && config.workflow.execution) || [];
+  return withOwnerChecks((config && config.workflow && config.workflow.execution) || []);
 }
 
 /**
@@ -3390,7 +3400,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     const projectWorkflowSteps = config.workflow ? {
       kickoff: config.workflow.kickoff || [],
       review: config.workflow.review || [],
-      execution: config.workflow.execution || [],
+      execution: withOwnerChecks(config.workflow.execution || []),
       onboarding: config.workflow.onboarding || [],
       // Resolved server-side (config.workflow.bugfix override or DEFAULT_BUGFIX_STEPS)
       // so the hub can render the bugfix timeline the same way it does the others.
@@ -3993,11 +4003,11 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
           task_execution: { completedTasks: [] },
         };
         const MANUAL_GATES = new Set(['merge_for_review', 'demo_review', 'merge_to_main']);
-        const executionSequence = runPreset === lean.LEAN_PRESET ? lean.LEAN_EXECUTION_STEPS : (config.workflow && config.workflow.execution) || [
+        const executionSequence = runPreset === lean.LEAN_PRESET ? lean.LEAN_EXECUTION_STEPS : withOwnerChecks((config.workflow && config.workflow.execution) || [
           'qa_tests', 'planning', 'task_execution', 'merge_for_review',
           'coverage_matrix', 'qa_validation', 'ac_verification', 'security_audit',
           'final_review', 'demo_review', 'merge_to_main', 'capture_learnings',
-        ];
+        ]);
         steps = {};
         for (const stepKey of executionSequence) {
           const base = MANUAL_GATES.has(stepKey) ? { status: 'pending' } : { status: 'pending', agents: [] };
@@ -4240,6 +4250,9 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     agent.feedback = feedback;
     agent.status = 'done';
     agent.completedAt = new Date().toISOString();
+    // Manual checks the report leaves for the owner, kept for the run's
+    // owner_checks step (lib/awaiting-owner.js). Never blocking.
+    wf.ownerChecks = awaitingOwner.mergeOwnerChecks(wf.ownerChecks, awaitingOwner.parseOwnerChecks(feedback), wf.currentStep);
     // Shadow only: asks the decision layer the gate-blocked question and logs
     // it beside the regex's answer. Not awaited, never acted on, and a no-op
     // unless decisions are configured (decide.js).
@@ -4865,7 +4878,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     // demo_review and device_testing need a human in front of the device
     // UNLESS the owner opted into Skip Demo Review (auto-advance then skips
     // demo_review with action=skip).
-    const alwaysManual = ['device_testing', 'owner_consultations', 'owner_interview'];
+    const alwaysManual = ['device_testing', 'owner_consultations', 'owner_interview', OWNER_CHECKS_STEP];
     if (!wf.autoAdvanceSkipDemoReview) alwaysManual.push('demo_review');
     if (alwaysManual.includes(wf.currentStep)) return;
 
@@ -5698,6 +5711,7 @@ Fix only the issues raised. Commit your changes.`,
       agent.feedback = feedback;
       agent.status = 'done';
       agent.completedAt = new Date().toISOString();
+      wf.ownerChecks = awaitingOwner.mergeOwnerChecks(wf.ownerChecks, awaitingOwner.parseOwnerChecks(feedback), 'task_execution');
       // Clear any stale watchdog error — delivered feedback proves the agent lived.
       agent.error = undefined;
       if (agent.startedAt && agent.agentCwd) {
@@ -5977,10 +5991,38 @@ Fix only the issues raised. Commit your changes.`,
    * `fallback` is that old chain's next step, used only when the sequence does
    * not list `current` (a custom config), so such configs behave as before.
    */
+  // Ends an execution or bugfix run through its owner_checks step (owner,
+  // 2026-10-11): the manual checks the run recommended. With checks, the run
+  // stops there so the owner sees them, and one click (Done) completes it: the
+  // owner runs them or not, and no proof is asked for. With none, it completes.
+  function completeWithOwnerChecks(wf) {
+    const checks = wf.ownerChecks || [];
+    if ((wf.type === 'execution' || wf.type === 'bugfix') && checks.length) {
+      wf.steps[OWNER_CHECKS_STEP] = { status: 'pending', agents: [], checks, reachedAt: new Date().toISOString() };
+      wf.currentStep = OWNER_CHECKS_STEP;
+      return;
+    }
+    if (wf.type === 'execution' || wf.type === 'bugfix') {
+      wf.steps[OWNER_CHECKS_STEP] = { status: 'completed', agents: [], checks, completedAt: new Date().toISOString() };
+    }
+    wf.currentStep = 'completed';
+  }
+
+  // Done at owner_checks: complete the run. No evidence, no condition.
+  function finishOwnerChecks(wf) {
+    wf.steps[OWNER_CHECKS_STEP] = { ...(wf.steps[OWNER_CHECKS_STEP] || {}), status: 'completed', completedAt: new Date().toISOString() };
+    wf.currentStep = 'completed';
+  }
+
   function advanceBySequence(wf, res, current, fallback) {
-    const next = sequenceNextStep(stepSequence(wf, config), current, fallback);
+    let next = sequenceNextStep(stepSequence(wf, config), current, fallback);
+    if (next === OWNER_CHECKS_STEP) next = 'completed';
     if (next === 'completed') {
-      wf.currentStep = 'completed';
+      completeWithOwnerChecks(wf);
+      if (wf.currentStep === OWNER_CHECKS_STEP) {
+        state.saveWorkflow(wf);
+        return res.json({ workflow: wf });
+      }
       writeWorklog(wf);
       state.saveWorkflow(wf);
       return res.json({ workflow: wf, completed: true });
@@ -8446,6 +8488,16 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       return res.json({ workflow: wf });
     }
 
+    // owner_checks: the owner's Done (approve or skip) completes the run.
+    // Anything else leaves it showing the list.
+    if (wf.currentStep === OWNER_CHECKS_STEP) {
+      if (action !== 'approve' && action !== 'skip') return res.json({ workflow: wf });
+      finishOwnerChecks(wf);
+      writeWorklog(wf);
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf, completed: true });
+    }
+
     if (wf.currentStep === 'coverage_matrix' && action === 'approve') {
       wf.steps.coverage_matrix.status = 'completed';
       wf.currentStep = 'qa_validation';
@@ -9732,12 +9784,12 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
         wf.steps.capture_learnings.skipReason = captureMode === 'failures' && cleanRun
           ? 'clean run (no fix rounds, overrides, or gate trips) — nothing signal-bearing to capture'
           : 'learnings capture disabled by config';
-        wf.currentStep = 'completed';
+        completeWithOwnerChecks(wf);
         writeWorklog(wf);
         // Still run the expiry sweep — stats accumulated during this run.
         archiveStaleLearnings();
         state.saveWorkflow(wf);
-        return res.json({ workflow: wf, completed: true });
+        return res.json({ workflow: wf, completed: wf.currentStep === 'completed' });
       }
       // Promotion candidates: entries agents keep self-reporting as applied are
       // candidates to graduate into a durable home (AGENTS.md / ARCHITECTURE.md /
@@ -9959,10 +10011,10 @@ Before adding new entries, scan existing files in docs/learnings/:
       // self-reported "applied" move to _archive (see archiveStaleLearnings).
       archiveStaleLearnings();
 
-      wf.currentStep = 'completed';
+      completeWithOwnerChecks(wf);
       writeWorklog(wf);
       state.saveWorkflow(wf);
-      return res.json({ workflow: wf, completed: true });
+      return res.json({ workflow: wf, completed: wf.currentStep === 'completed' });
     }
 
     if (wf.currentStep === 'qa_validation' && action === 'send_to_devs') {

@@ -18,7 +18,7 @@ export interface OverviewBlock {
 }
 
 const QUEUE_STATE: Record<string, string> = {
-  running: 'running', waiting_for_owner: 'waiting for you', ready_to_merge: 'ready to merge', finished: 'finished', stopped: 'stopped',
+  running: 'running', waiting_for_owner: 'waiting for you', ready_to_merge: 'ready to merge', owner_checks: 'merged, owner checks', finished: 'finished', stopped: 'stopped',
 }
 
 /** What runs, what needs the owner, and the queue's next job: one line each, only when there is something. */

@@ -114,7 +114,7 @@ function phaseFinished(action, item) {
  * `{ session, agentRunning }`, `item` the entry's backlog item as stored.
  *
  * @returns {{ state: string, detail?: string, step?: string }}
- *   state: running | waiting_for_owner | ready_to_merge | finished | stopped
+ *   state: running | waiting_for_owner | ready_to_merge | owner_checks | finished | stopped
  */
 function currentState(current, { wf, draft, item, needsAttention }) {
   if (!current || !current.run) return null;
@@ -123,6 +123,10 @@ function currentState(current, { wf, draft, item, needsAttention }) {
     if (wf && wf.id === run.id) {
       if (wf.currentStep === 'completed') return { state: 'finished', detail: 'the workflow completed; close it to free the slot' };
       if (wf.currentStep === 'merge_to_main') return { state: 'ready_to_merge', step: wf.currentStep };
+      if (wf.currentStep === 'owner_checks') {
+        const n = ((wf.steps && wf.steps.owner_checks && wf.steps.owner_checks.checks) || []).length;
+        return { state: 'owner_checks', step: wf.currentStep, detail: `merged; ${n} manual check${n === 1 ? '' : 's'} recommended, then Done` };
+      }
       if (needsAttention) return { state: 'waiting_for_owner', step: wf.currentStep, detail: needsAttention.title };
       return { state: 'running', step: wf.currentStep };
     }

@@ -17,6 +17,15 @@
  * each such finding INSTEAD of counting it as blocking, which the engine routes
  * to the owner rather than to a developer. Code defects in the same report
  * still go to the fix loop.
+ *
+ * Narrowed the same day (owner, 2026-10-11): the hold is for a DECISION only
+ * the owner can make and the build cannot go on without (which option, whether
+ * to spend money). Anything the owner could only VERIFY (look at screens,
+ * attach a log, sign off rendering, read and approve generated text) never
+ * holds a run and needs no proof: it goes under `### Owner checks`, collected
+ * across the run and listed at its end as remaining manual checks, which the
+ * owner runs or not. A run had held on exactly that: "attach the screenshot
+ * run log and sign off AC-6's visual rendering".
  */
 
 /** The exact marker reviewers are told to emit, one line per finding. */
@@ -65,6 +74,39 @@ function holdsForOwner(feedback, blockingCount) {
   return items;
 }
 
+// `### Owner checks` (or the AC verifier's older `### Owner action items`):
+// bullets until the next heading.
+const CHECKS_HEADING = /^#{2,4}\s+Owner (?:checks|action items)[ \t]*$/i;
+
+/**
+ * The manual checks a report leaves for the owner: optional, never blocking,
+ * listed at the end of the run.
+ *
+ * @param {string} feedback
+ * @returns {string[]}
+ */
+function parseOwnerChecks(feedback) {
+  const lines = String(feedback || '').split('\n');
+  const out = [];
+  let inSection = false;
+  for (const line of lines) {
+    if (/^#{1,6}\s/.test(line)) { inSection = CHECKS_HEADING.test(line.trim()); continue; }
+    if (!inSection) continue;
+    const m = line.match(/^\s*[-*]\s+(?:\[[ x]\]\s+)?(.+?)\s*$/i);
+    if (m && !isNegative(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
+/** Add `checks` from `step` to the run's list, once each. */
+function mergeOwnerChecks(existing, checks, step) {
+  const list = Array.isArray(existing) ? [...existing] : [];
+  for (const text of checks) {
+    if (!list.some((c) => c.text === text)) list.push({ text, step });
+  }
+  return list;
+}
+
 /** Appended to a fix round's input when the report also carries code defects. */
 function fixNoteForOwnerItems(items) {
   return '\n\n## Waiting on the owner — these are not tasks\n\n'
@@ -74,29 +116,33 @@ function fixNoteForOwnerItems(items) {
     + 'fake the approval they wait on. Fix only the blocking findings above.';
 }
 
-/** The instruction block telling a reviewer when to use the marker. */
+/** The instruction block: owner checks (never blocking) and the narrow hold. */
 const AWAITING_OWNER_INSTRUCTIONS = `
 
-## IF A FINDING CAN ONLY BE CLOSED BY THE OWNER — USE THIS, NOT A BLOCKING FINDING
+## WHAT ONLY THE OWNER CAN DO — LIST IT, DON'T BLOCK ON IT
 
-Some unmet acceptance criteria are not code: they wait on the owner to approve,
-sign off or decide something (study queries to approve, a legal notice to sign
-off, a paid run only the owner may start, a choice between options). A developer
-cannot close them, so counting them as blocking sends a fix round that changes
-nothing, and the next round finds the same thing.
+**Owner checks — never blocking.** Something only the owner can verify (look
+at screens or a visual rendering, try it on a device or in the packaged app,
+run a manual script, read or approve generated text, attach a log or a
+screenshot, sign off a criterion) is NOT a finding and does NOT make the
+change unapproved. List each one under a \`### Owner checks\` section, one
+bullet per check, saying what to look at. The workflow shows them to the owner
+at the end of the run as remaining manual checks; the owner runs them or not,
+and no proof is ever required. A spec that calls such a check a "gate" or asks
+for evidence does not change this: list it, and judge the rest.
 
-For each such finding, write a line, exactly:
+**Awaiting owner — rare.** Only when the change cannot be built at all until
+the owner makes a product decision the spec left open (which of two options,
+whether to spend money on a paid service), write:
 
-\`**Awaiting owner:** <what the owner has to do, and the AC or finding it closes>\`
+\`**Awaiting owner:** <the decision, and what it unblocks>\`
 
-Do NOT count it in \`**Blocking:**\`, which counts only defects a developer can
-fix. If the change cannot be accepted until the owner acts, keep
-\`**Approved:** no\`: the run then stops and waits for the owner instead of
-looping.
+Do not count it in \`**Blocking:**\`, which counts only defects a developer can
+fix, and keep \`**Approved:** no\`: the run then stops and waits for the
+owner. Never use it for anything the owner would only check or sign off.
 
-**This is not a way to defer work.** If an agent could do it (run a check,
-reproduce a result, write the missing code or document), it is a blocking
-finding. Use the line only for what genuinely needs the owner's decision or
-authority. If nothing waits on the owner, OMIT THE LINE ENTIRELY.`;
+If an agent could do it (run a check, reproduce a result, capture a
+screenshot, write the missing code or document), it is neither: do it, or
+report it as a blocking finding. If nothing is left for the owner, OMIT both.`;
 
-module.exports = { parseAwaitingOwner, holdsForOwner, fixNoteForOwnerItems, AWAITING_OWNER_INSTRUCTIONS, MARKER };
+module.exports = { parseAwaitingOwner, holdsForOwner, parseOwnerChecks, mergeOwnerChecks, fixNoteForOwnerItems, AWAITING_OWNER_INSTRUCTIONS, MARKER };

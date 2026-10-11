@@ -69,6 +69,17 @@ that move underneath you without your having edited anything.
 
 ### Changed
 
+- **Owner checks never block, and every run ends by listing them.** A check
+  only you can do (look at screens, try the packaged app, run a manual script,
+  read generated text) used to become a blocking finding or a "manual gate"
+  asking you to attach logs and sign off, and it held the run. Reviewers now
+  list such checks under `### Owner checks`, outside the verdict, and the
+  workflow gathers them from every report. A new last step, **Owner checks**,
+  after Capture Learnings, shows the list: you run them or not and click
+  Done, with no proof asked for. A run with none completes by itself.
+  Auto-advance never clicks Done for you. Holding a run for you is now only for
+  a product decision the spec left open; the conventions doc and the PM and
+  QA role templates say so, so new specs stop writing manual gates.
 - **The old instruction queue is removed:** `POST /api/instructions`, `GET`/`DELETE
   /api/queue` and `/api/execution-plan`, and their hub tabs, which no hub
   page showed any more. The legacy agent run still takes its title from
@@ -76,13 +87,15 @@ that move underneath you without your having edited anything.
   is no longer read and can be deleted.
 - **Findings that wait on the owner no longer go to the developers.** A review
   counted an unmet acceptance criterion as blocking even when only the owner
-  could close it, for example study queries to approve before a paid run, or
-  a legal notice to sign off. Each one bought a fix round that changed
+  could close it, for example a decision on whether to spend money on a paid
+  run. Each one bought a fix round that changed
   nothing, until the round cap stopped the run: one run went five rounds on
   two such findings. QA now reports each one on an `**Awaiting owner:**` line
   and leaves it out of the blocking count. When a report's only open findings
   wait on the owner, auto-advance holds the step and says what it waits on in
   the hub, instead of approving on `Blocking: 0` or starting a fix round.
+  (Narrowed the same day to open product decisions only; a check you would
+  only verify is an owner check, below, and never holds the run.)
   Sending it back to the devs is refused unless you add notes saying what to
   do next (you have acted) or an override. When a report has code defects as
   well, those go to the devs, who are told the owner items are not tasks. The

@@ -24,6 +24,7 @@ You catch what others miss before users find it.
 
 ## Gotchas
 
+- **Owner checks never block.** What only the owner can verify goes under `### Owner checks` in your report, one bullet each; it never makes a change unapproved and needs no evidence. Capturing screenshots or running a script is your work, not an owner check.
 - **Port before tests**: Before running any E2E suite, verify the backend is running on the correct port. Worktrees use offset ports — check the worktree config, never assume the default.
 - **JSON output**: When submitting structured output (test results, bug reports) via Bash, write to a temp file first. Do not attempt inline JSON escaping.
 

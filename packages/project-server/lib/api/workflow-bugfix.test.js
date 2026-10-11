@@ -127,11 +127,13 @@ test('bugfixDisciplineBlock: substitutes the id and stays verbatim otherwise', (
 });
 
 test('bugfixSequence: default sequence, config override', () => {
-  assert.deepEqual(bugfixSequence({}), DEFAULT_BUGFIX_STEPS);
-  assert.deepEqual(bugfixSequence({ workflow: {} }), DEFAULT_BUGFIX_STEPS);
+  // Every run that merges ends with owner_checks (the recommended manual checks).
+  const WITH_CHECKS = [...DEFAULT_BUGFIX_STEPS, 'owner_checks'];
+  assert.deepEqual(bugfixSequence({}), WITH_CHECKS);
+  assert.deepEqual(bugfixSequence({ workflow: {} }), WITH_CHECKS);
   assert.deepEqual(
     bugfixSequence({ workflow: { bugfix: ['task_execution', 'merge_to_main'] } }),
-    ['task_execution', 'merge_to_main']
+    ['task_execution', 'merge_to_main', 'owner_checks']
   );
   // Default sequence is the one the design specifies.
   assert.deepEqual(DEFAULT_BUGFIX_STEPS,
@@ -142,12 +144,13 @@ test('stepSequence / nextStepInSequence: bugfix advances by its own dict order',
   const wf = { type: 'bugfix' };
   const config = { workflow: { execution: ['qa_tests', 'planning', 'task_execution'] } };
   // bugfix ignores config.workflow.execution
-  assert.deepEqual(stepSequence(wf, config), DEFAULT_BUGFIX_STEPS);
+  assert.deepEqual(stepSequence(wf, config), [...DEFAULT_BUGFIX_STEPS, 'owner_checks']);
   assert.equal(nextStepInSequence(wf, config, 'task_execution'), 'qa_validation');
   assert.equal(nextStepInSequence(wf, config, 'qa_validation'), 'code_review');
   assert.equal(nextStepInSequence(wf, config, 'code_review'), 'merge_to_main');
   assert.equal(nextStepInSequence(wf, config, 'merge_to_main'), 'capture_learnings');
-  assert.equal(nextStepInSequence(wf, config, 'capture_learnings'), null);
+  assert.equal(nextStepInSequence(wf, config, 'capture_learnings'), 'owner_checks');
+  assert.equal(nextStepInSequence(wf, config, 'owner_checks'), null);
   // Execution still uses the execution list — behavior unchanged.
   assert.deepEqual(stepSequence({ type: 'execution' }, config), ['qa_tests', 'planning', 'task_execution']);
   assert.equal(nextStepInSequence({ type: 'execution' }, config, 'qa_tests'), 'planning');
@@ -192,7 +195,7 @@ test('start bugfix: flips Fixing, creates fix/<id>, builds steps + single-task p
 
     // Steps dict = default bugfix sequence; entry step is task_execution
     const wf = srv.state.loadWorkflow();
-    assert.deepEqual(Object.keys(wf.steps), DEFAULT_BUGFIX_STEPS);
+    assert.deepEqual(Object.keys(wf.steps), [...DEFAULT_BUGFIX_STEPS, 'owner_checks']);
     assert.equal(wf.currentStep, 'task_execution');
     assert.equal(wf.type, 'bugfix');
     assert.equal(wf.itemId, 'LS-001');
@@ -275,7 +278,7 @@ test('GET /workflow exposes the resolved bugfix sequence for the hub timeline', 
   try {
     const res = await srv.get('/api/workflow');
     assert.equal(res.status, 200, JSON.stringify(res.body));
-    assert.deepEqual(res.body.projectWorkflowSteps.bugfix, DEFAULT_BUGFIX_STEPS);
+    assert.deepEqual(res.body.projectWorkflowSteps.bugfix, [...DEFAULT_BUGFIX_STEPS, 'owner_checks']);
     // The other flows are still exposed unchanged.
     assert.ok(Array.isArray(res.body.projectWorkflowSteps.execution));
   } finally {
