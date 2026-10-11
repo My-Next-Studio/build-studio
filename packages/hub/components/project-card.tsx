@@ -4,7 +4,55 @@ import { ProjectWithStatus } from '@/lib/types'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 
-export function ProjectCard({ project }: { project: ProjectWithStatus }) {
+/** This project's block of GET /api/overview (only what the card shows). */
+export interface OverviewBlock {
+  name: string
+  source: 'live' | 'persisted' | 'unavailable'
+  work?: { kind: string; item: string | null; type?: string; step?: string; agents?: unknown[]; fromQueue?: boolean } | null
+  needsOwner?: { title: string } | null
+  queue?: {
+    current?: { item: string; status?: { state: string } | null } | null
+    next?: { item: string; action: string | null; ready: boolean | null; reason?: string } | null
+    pendingCount?: number
+  } | null
+}
+
+const QUEUE_STATE: Record<string, string> = {
+  running: 'running', waiting_for_owner: 'waiting for you', ready_to_merge: 'ready to merge', finished: 'finished', stopped: 'stopped',
+}
+
+/** What runs, what needs the owner, and the queue's next job: one line each, only when there is something. */
+function WorkSummary({ o }: { o: OverviewBlock }) {
+  const line: React.CSSProperties = { fontFamily: 'var(--mono)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+  const agents = o.work?.agents?.length || 0
+  const current = o.queue?.current
+  const next = o.queue?.next
+  if (!o.work && !o.needsOwner && !current && !next && o.source === 'live') return null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 12 }}>
+      {o.source !== 'live' && (
+        <div style={{ ...line, color: 'var(--muted)' }}>{o.source === 'persisted' ? 'Server down: last recorded state' : 'Server down: status unknown'}</div>
+      )}
+      {o.work && (
+        <div style={{ ...line, color: 'var(--text-dim)' }}>
+          ▸ {o.work.item || o.work.kind} · {o.work.type || o.work.kind}{o.work.step ? ` · ${o.work.step}` : ''}{agents ? ` · ${agents} agent${agents === 1 ? '' : 's'}` : ''}
+        </div>
+      )}
+      {!o.work && current?.status && (
+        <div style={{ ...line, color: 'var(--text-dim)' }}>▸ {current.item} · {QUEUE_STATE[current.status.state] || current.status.state}</div>
+      )}
+      {o.needsOwner && <div style={{ ...line, color: 'var(--orange)' }} title={o.needsOwner.title}>⚠ {o.needsOwner.title}</div>}
+      {next && (
+        <div style={{ ...line, color: next.ready ? 'var(--green)' : 'var(--muted)' }} title={next.reason || ''}>
+          Next: {next.item}{next.action ? ` (${next.action})` : ''} · {next.ready === null ? 'readiness unknown' : next.ready ? 'ready' : 'not ready'}
+          {(o.queue?.pendingCount || 0) > 1 ? ` · +${(o.queue?.pendingCount || 0) - 1} more` : ''}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function ProjectCard({ project, overview }: { project: ProjectWithStatus; overview?: OverviewBlock }) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [optimisticRunning, setOptimisticRunning] = useState<boolean | null>(null)
@@ -118,6 +166,8 @@ export function ProjectCard({ project }: { project: ProjectWithStatus }) {
       }}>
         {project.path}
       </div>
+
+      {overview && <WorkSummary o={overview} />}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         {uptimeStr && (

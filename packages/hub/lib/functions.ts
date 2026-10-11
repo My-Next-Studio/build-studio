@@ -21,7 +21,7 @@ export const BUILTIN_FUNCTIONS: FunctionDefinition[] = [
     label: 'Project',
     views: ['overview', 'workflow'],
     workflowTypes: ['kickoff', 'onboarding'],
-    tabs: ['spec', 'status', 'backlog', 'agents', 'model'],
+    tabs: ['spec', 'status', 'backlog', 'queue', 'agents', 'model'],
     enabledByDefault: true,
   },
   {

@@ -1,6 +1,6 @@
 # Plan: a work queue, and an overview a remote assistant can read
 
-> **Status: proposed 2026-10-11.**
+> **Status: implemented 2026-10-11 (first version: planning, visibility, readiness, explicit starts).** The assistant's guide is [`docs/remote-assistant.md`](../remote-assistant.md).
 >
 > Owner request: plan the work at the desk as an ordered list of jobs per
 > project ("review this story, then build that one, then fix this bug"), and

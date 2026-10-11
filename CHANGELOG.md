@@ -56,6 +56,16 @@ that move underneath you without your having edited anything.
   `GET /api/overview` on its server. A project whose server does not answer
   is read from its state files and marked `persisted`, or `unavailable` with
   no files, and never shown as idle.
+- **The queue in the hub:** a Queue tab under Project (the current entry
+  and its state, the next entry with Start, or its reason when not ready and
+  Start anyway when the reason can be overridden, and the list with move,
+  phase, start and remove), a "+" on every backlog row to queue it, and a
+  line on each home-page project card with what runs, what needs you and the
+  queue's next job.
+- **A guide for a remote assistant:** `docs/remote-assistant.md` tells an
+  assistant on this computer (Codex, Claude Code) which call answers which
+  question, what each state means, and which calls change something and need
+  the owner's say-so.
 
 ### Changed
 

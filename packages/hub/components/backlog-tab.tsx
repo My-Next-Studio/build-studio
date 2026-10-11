@@ -12,6 +12,7 @@ import {
   SortableContext, useSortable, verticalListSortingStrategy, arrayMove,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { AddToQueueButton } from './queue-tab'
 
 // ─── Types ────────────────────────────────────────────────────────────────
 interface Item {
@@ -936,6 +937,7 @@ export function BacklogTab({
               busy={starting === id}
               onStart={(run) => startRun(id, run)}
             />
+            <AddToQueueButton id={id} />
           </div>
         </div>
         {startError && startError.id === id && (

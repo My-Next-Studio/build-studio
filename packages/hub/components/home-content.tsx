@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ProjectWithStatus } from '@/lib/types'
 import { useHomeStatus } from '@/lib/use-home-status'
-import { ProjectCard } from './project-card'
+import { ProjectCard, type OverviewBlock } from './project-card'
 import { NewProjectDialog } from './new-project-dialog'
 import { OnboardProjectDialog } from './onboard-project-dialog'
 
@@ -18,6 +18,18 @@ export function HomeContent({
   const [showOnboard, setShowOnboard] = useState(false)
   const [showWelcome, setShowWelcome] = useState(showOnboarding && projects.length === 0)
   const liveStatuses = useHomeStatus(projects)
+  // The cross-project overview (what runs, what needs you, the queue's next
+  // job), the same one a remote assistant reads.
+  const [overview, setOverview] = useState<Record<string, OverviewBlock>>({})
+  useEffect(() => {
+    let alive = true
+    const load = () => fetch('/api/overview').then(r => r.json()).then((d: { projects?: OverviewBlock[] }) => {
+      if (alive) setOverview(Object.fromEntries((d.projects || []).map(b => [b.name, b])))
+    }).catch(() => {})
+    load()
+    const t = setInterval(load, 30000)
+    return () => { alive = false; clearInterval(t) }
+  }, [])
 
   return (
     <>
@@ -88,7 +100,7 @@ export function HomeContent({
             gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
           }}>
             {projects.map(p => (
-              <ProjectCard key={p.name} project={{ ...p, status: liveStatuses[p.name] ?? p.status }} />
+              <ProjectCard key={p.name} project={{ ...p, status: liveStatuses[p.name] ?? p.status }} overview={overview[p.name]} />
             ))}
           </div>
         )}
