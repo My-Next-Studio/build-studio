@@ -32,9 +32,29 @@ that move underneath you without your having edited anything.
   `fields=status`. The default read is unchanged. First step of the work queue
   (`docs/plans/work-queue-and-remote-overview.md`), whose overview reads
   through it.
+- **A work queue per project (API; the hub UI comes later).** Queue backlog
+  items in the order you want them done, mixing stories in any status and
+  bugs; each entry takes its item one phase further when you start it (no PRD
+  → draft, Drafted → review, Reviewed → execute, a bug → bugfix, or the phase
+  you name). `GET /api/work-queue` returns the current entry with what its run
+  is doing (running, waiting for you, ready to merge, finished, stopped), the
+  pending entries, and whether the next one would start, with the start's own
+  reason when not. `POST /api/work-queue` adds, `PATCH /api/work-queue/:id`
+  moves or edits, `DELETE` removes (never cancelling work), and
+  `POST /api/work-queue/:id/start` starts through the normal start, so every
+  check runs again; a repeated start returns the run already made. A run
+  started anywhere else for a queued item takes its entry. Nothing starts the
+  next entry by itself. The queue is local state in
+  `.build-studio/work-queue.json`; its ignore rule is added and committed on
+  first use.
 
 ### Changed
 
+- **The old instruction queue is removed:** `POST /api/instructions`, `GET`/`DELETE
+  /api/queue` and `/api/execution-plan`, and their hub tabs, which no hub
+  page showed any more. The legacy agent run still takes its title from
+  `docs/execution-plan.md`. A project's leftover `docs/instructions-queue.md`
+  is no longer read and can be deleted.
 - **Findings that wait on the owner no longer go to the developers.** A review
   counted an unmet acceptance criterion as blocking even when only the owner
   could close it, for example study queries to approve before a paid run, or

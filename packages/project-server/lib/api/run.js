@@ -5,7 +5,15 @@ const path = require('path');
 // Opus/Sonnet 4.6, two generations behind the workflow launch path.
 const { MODEL_IDS } = require('@build-studio/shared/cli');
 
-function createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecutionPlan) {
+// The run's title: the first heading of docs/execution-plan.md, when one exists.
+function executionPlanTitle(docsPath) {
+  try {
+    const line = fs.readFileSync(path.join(docsPath, 'execution-plan.md'), 'utf8').split('\n').find((l) => l.startsWith('#')) || '';
+    return line.replace(/^#+\s*/, '');
+  } catch (_) { return ''; }
+}
+
+function createRunRouter(config, state, gitOps, tmuxOps, broadcast) {
   const router = express.Router();
   const { projectRoot, worktreesPath, logsPath } = config;
 
@@ -142,12 +150,10 @@ function createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecuti
       workers.push({ branch, role: task.role, skill, window: windowName, logFile, status: 'running', startedAt: new Date().toISOString() });
     }
 
-    const plan = parseExecutionPlan();
-    const titleLine = (plan.content || '').split('\n').find(l => l.startsWith('#')) || '';
     const run = {
       id: new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19),
       sessionName,
-      title: titleLine.replace(/^#+\s*/, '') || 'Agent Run',
+      title: executionPlanTitle(config.docsPath) || 'Agent Run',
       state: 'executing',
       allowAll,
       startedAt: new Date().toISOString(),

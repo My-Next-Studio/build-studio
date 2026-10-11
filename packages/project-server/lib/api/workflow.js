@@ -36,6 +36,7 @@ const lean = require('../lean-execution');
 const { itemsFiledOnBranch } = require('../filed-on-branch');
 const qaUnchangedLib = require('../qa-unchanged');
 const awaitingOwner = require('../awaiting-owner');
+const workQueue = require('../work-queue');
 const docBudget = require('../doc-budget');
 const { subagentUsage, withSubagents } = require('../subagent-usage');
 
@@ -4134,6 +4135,18 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     // its specs carry — including AC-5's owner decision, which the run then
     // headed straight for (2026-08-09).
     //
+    // A run for a queued item takes that queue entry, wherever it was started
+    // from: the queue's own start names its entry, any other start links the
+    // first pending entry for the item (lib/work-queue.js).
+    if (itemId && workQueue.WORKFLOW_ACTION[type]) {
+      try {
+        workQueue.linkStartedRun(config.statePath, {
+          itemId, entryId: body && body.queueEntryId, action: workQueue.WORKFLOW_ACTION[type],
+          run: { kind: 'workflow', id: wf.id, type },
+        });
+      } catch (e) { console.warn(`[work-queue] could not link ${itemId}: ${e.message}`); }
+    }
+
     return reply(200, { workflow: wf });
   }
 

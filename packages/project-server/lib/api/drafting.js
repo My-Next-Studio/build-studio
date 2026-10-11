@@ -12,6 +12,7 @@ const {
 } = require('../drafting');
 const { resolveTemplateDir } = require('../agents-md');
 const { scopedCommit } = require('../scoped-commit');
+const workQueue = require('../work-queue');
 const {
   resolveStepLaunchSettings, canPinSession, canResumeSession, sessionPinFlag, sessionResumeFlag,
 } = require('@build-studio/shared/cli');
@@ -263,6 +264,7 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
     return launchInSession(res, {
       itemId,
       wantFresh,
+      queueEntryId: (req.body && req.body.queueEntryId) || null,
       freshPrompt: () => draftPrompt({ itemId, title: item && item.title }),
       resumePrompt: (prior) => continuePrompt({ itemId, title: item && item.title, sameItem: prior.lastItemId === itemId }),
     });
@@ -294,7 +296,7 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
    * Start, continue, or resume the drafting session with a given opening
    * request — a draft of `itemId`, or (itemId null) a new story.
    */
-  async function launchInSession(res, { itemId, wantFresh, freshPrompt, resumePrompt }) {
+  async function launchInSession(res, { itemId, wantFresh, freshPrompt, resumePrompt, queueEntryId = null }) {
     // Every drafting session gets the create_story skill, not only one opened
     // by Create story: while a draft runs, the owner asks for a story in the
     // terminal, and that must reach the skill too. Projects onboarded before it
@@ -445,11 +447,20 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
       resumable: canResumeSession(cli),
     };
     saveDraftState(config.statePath, { ...state, sessionName, session });
+    // A draft of a queued item takes that queue entry, wherever it was started
+    // from (lib/work-queue.js). Create story (itemId null) links nothing.
+    if (itemId) {
+      try {
+        workQueue.linkStartedRun(config.statePath, { itemId, entryId: queueEntryId, action: 'draft', run: { kind: 'draft', itemId } });
+      } catch (e) { console.warn(`[work-queue] could not link ${itemId}: ${e.message}`); }
+    }
     res.json({ ok: true, sessionName, mode: resuming ? 'resumed' : 'fresh', deltaLines: delta ? delta.split('\n').filter((l) => l.startsWith('- ')).length : 0, ...session });
   }
 
   // For the work queue: Draft's own checks, without starting anything.
   router.draftReadiness = draftReadiness;
+  // ...and what the drafting session is doing, for the queue's current entry.
+  router.draftSession = () => ({ session: loadDraftState(config.statePath).session || null, agentRunning: Boolean(runningDraft()) });
 
   return router;
 }

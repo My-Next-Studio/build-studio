@@ -11,11 +11,11 @@ const { createStateManager } = require('./state');
 const { createGitOps } = require('./git');
 const { createTmuxOps } = require('./tmux');
 const { createFilesRouter } = require('./api/files');
-const { createQueueRouter } = require('./api/queue');
 const { createStatusRouter } = require('./api/status');
 const { createTerminalRouter } = require('./api/terminal');
 const { createDraftingRouter } = require('./api/drafting');
 const { createWorkflowRouter } = require('./api/workflow');
+const { createWorkQueueRouter } = require('./api/work-queue');
 const { createRunRouter } = require('./api/run');
 const { createDeploymentRouter } = require('./api/deployment');
 const { createMonitorRouter } = require('./api/monitor');
@@ -162,12 +162,12 @@ function startServer(projectRoot, opts = {}) {
 
   // API routers
   const { router: filesRouter } = createFilesRouter(config, broadcast);
-  const { router: queueRouter, parseExecutionPlan } = createQueueRouter(config, broadcast);
   const statusRouter = createStatusRouter(config, gitOps, state);
   const terminalRouter = createTerminalRouter(config, state, tmuxOps);
   const draftingRouter = createDraftingRouter(config, state, tmuxOps);
   const workflowRouter = createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast);
-  const runRouter = createRunRouter(config, state, gitOps, tmuxOps, broadcast, parseExecutionPlan);
+  const workQueueRouter = createWorkQueueRouter(config, { state, workflowRouter, draftingRouter, broadcast });
+  const runRouter = createRunRouter(config, state, gitOps, tmuxOps, broadcast);
   // One monitor per project-server, shared by the CI/CD tab and the Monitor
   // tab so a single cached `gh run list` answers both.
   // Content publishing — off unless the project enables it. Built before the
@@ -186,11 +186,11 @@ function startServer(projectRoot, opts = {}) {
   const cliConfigRouter = createCliConfigRouter(config);
 
   app.use('/api', filesRouter);
-  app.use('/api', queueRouter);
   app.use('/api', statusRouter);
   app.use('/api/terminal', terminalRouter);
   app.use('/api', draftingRouter);
   app.use('/api', workflowRouter);
+  app.use('/api', workQueueRouter);
   app.use('/api', runRouter);
   app.use('/api', deploymentRouter);
   app.use('/api', localCiRouter);
