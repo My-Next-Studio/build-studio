@@ -75,6 +75,9 @@ and may change.
 - Reading has side effects: a Feature whose PRD file exists moves from
   `Backlog` to `Drafted`, and the index's `[Type · Status]` suffixes are
   refreshed. Neither changes order or membership.
+- `?readonly=true` (added 2026-10-11) skips both, so the read writes no file
+  and each status is as its item file has it. It combines with
+  `fields=status`. For monitors that must not change what they look at.
 
 ### The lean read: `GET /api/backlog?fields=status`
 

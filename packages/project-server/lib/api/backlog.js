@@ -52,16 +52,24 @@ function createBacklogRouter(config) {
     if (fields !== undefined && !LEAN_FIELDS.includes(fields)) {
       return res.status(400).json({ error: `fields must be one of: ${LEAN_FIELDS.join(', ')}` });
     }
+    // `?readonly=true` is for monitors (the work queue's overview, a remote
+    // assistant): it writes nothing, so a status is as the item file has it.
+    // A normal read also applies the automatic transitions and refreshes the
+    // index, which writes files: wrong for something that only looks.
+    const readonly = req.query.readonly === 'true';
     try {
-      // Run the file-presence auto-transition first (Feature + Backlog + PRD
-      // file exists → Drafted). If anything moved, re-render the order block
-      // so the display lines pick up the new statuses immediately.
-      const auto = applyAutoTransitionsForFeatures(config.projectRoot, docsPath);
-      // Re-render the index on every read, not only after an auto-transition:
-      // agents set status in the item file and no longer touch the index
-      // line, so a stale [Type · Status] suffix is refreshed here. Order is
-      // unchanged, and an up-to-date section is not rewritten.
-      refreshBacklogIndex(config.projectRoot, docsPath);
+      let auto = { transitioned: [] };
+      if (!readonly) {
+        // Run the file-presence auto-transition first (Feature + Backlog + PRD
+        // file exists → Drafted). If anything moved, re-render the order block
+        // so the display lines pick up the new statuses immediately.
+        auto = applyAutoTransitionsForFeatures(config.projectRoot, docsPath);
+        // Re-render the index on every read, not only after an auto-transition:
+        // agents set status in the item file and no longer touch the index
+        // line, so a stale [Type · Status] suffix is refreshed here. Order is
+        // unchanged, and an up-to-date section is not rewritten.
+        refreshBacklogIndex(config.projectRoot, docsPath);
+      }
 
       const { groups, items } = readBacklog(config.projectRoot, docsPath);
       if (fields === 'status') {

@@ -412,3 +412,39 @@ test('End draft also commits the vision when the draft changed it', async () => 
   assert.deepEqual(files, ['docs/backlog/EX-010.md', 'docs/prds/PRD-010-plan.md', 'docs/project-state.md', 'docs/vision.md']);
   assert.match(git(root, 'status', '--porcelain'), /notes\.txt/, 'unrelated edits still stay out');
 });
+
+// The work queue asks whether Draft would start (router.draftReadiness): the
+// start route's own checks, with nothing launched, installed or committed.
+function readinessRouter(root, tmux) {
+  const config = {
+    projectRoot: root, docsPath: path.join(root, 'docs'), docs_path: 'docs', name: 'proj',
+    statePath: path.join(root, '.build-studio'), logsPath: path.join(root, 'tmp', '.logs'),
+    cli: { default: 'claude', groups: {} }, step_groups: null,
+  };
+  return createDraftingRouter(config, {}, tmux);
+}
+
+test('draft readiness: ready for a story with no PRD, refused for a bug, a PRD, or a running draft', () => {
+  const root = makeProject({
+    'EX-030': { type: 'Feature', status: 'Backlog', title: 'Ready' },
+    'EX-031': { type: 'Bug', status: 'Backlog', title: 'A bug' },
+    'EX-032': { type: 'Feature', status: 'Drafted', title: 'Has one', prd: 'docs/prds/PRD-032.md' },
+  });
+  try {
+    const idle = fakeTmux();
+    const router = readinessRouter(root, idle);
+    assert.deepEqual(router.draftReadiness('EX-030'), { status: 200, json: { ready: true, type: 'draft', itemId: 'EX-030' } });
+    assert.equal(router.draftReadiness('EX-031').json.isBug, true);
+    assert.equal(router.draftReadiness('EX-032').json.hasPrd, true);
+    assert.equal(router.draftReadiness('').status, 400);
+    assert.deepEqual(idle.calls, [], 'a readiness check launches nothing');
+
+    priorSession(root, { cli: 'claude', lastItemId: 'EX-029' });
+    const busy = readinessRouter(root, fakeTmux({ livePid: 42, agentRunning: true }));
+    const r = busy.draftReadiness('EX-030');
+    assert.equal(r.status, 409);
+    assert.equal(r.json.sessionRunning, true);
+    assert.equal(r.json.lastItemId, 'EX-029');
+    assert.equal(fs.existsSync(path.join(root, '.gitignore')), false, 'nothing installed or committed');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

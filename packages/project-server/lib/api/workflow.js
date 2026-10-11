@@ -3623,13 +3623,17 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     return (stop > 0 ? after.slice(0, stop) : after.slice(0, 500)).trim();
   }
 
-  router.post('/workflow/start', (req, res) => {
-    const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, builderRole: startBuilderRole, override: startOverride, preset: startPreset } = req.body;
-    if (!type) return res.status(400).json({ error: 'type required' });
-    if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return res.status(400).json({ error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
+  // One start path, two callers: the route, and a readiness check (dryRun)
+  // that the work queue uses to say whether its next entry would start.
+  function reply(status, json) { return { status, json }; }
+
+  function startWorkflow(body, { dryRun = false } = {}) {
+    const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, builderRole: startBuilderRole, override: startOverride, preset: startPreset } = body || {};
+    if (!type) return reply(400, { error: 'type required' });
+    if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return reply(400, { error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
     // Which execution chain: lean (the default, or asked for) or full. See lean-execution.js.
     const presetCheck = lean.validatePreset(type, startPreset);
-    if (presetCheck.error) return res.status(400).json({ error: presetCheck.error });
+    if (presetCheck.error) return reply(400, { error: presetCheck.error });
     let leanRefusal = null;
     if (presetCheck.preset === lean.LEAN_PRESET) {
       // Resolved the way the launcher will resolve it, including a legacy
@@ -3638,17 +3642,17 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       leanRefusal = lean.leanStartRefusal((step) => resolveStepLaunchSettings(step, probe, config.cli, config.step_groups).cli);
     }
     const presetResolution = lean.resolveStartPreset(presetCheck, leanRefusal);
-    if (presetResolution.refusal) return res.status(400).json({ error: presetResolution.refusal, leanRefused: true });
+    if (presetResolution.refusal) return reply(400, { error: presetResolution.refusal, leanRefused: true });
     const runPreset = presetResolution.preset;
-    if (presetResolution.fallback) console.log(`[workflow] Lean default not available, starting the full chain: ${presetResolution.fallback}`);
+    if (presetResolution.fallback && !dryRun) console.log(`[workflow] Lean default not available, starting the full chain: ${presetResolution.fallback}`);
     if (startDeveloperCli && !VALID_CLIS.includes(startDeveloperCli)) {
-      return res.status(400).json({ error: `developerCli must be one of ${VALID_CLIS.join(', ')}` });
+      return reply(400, { error: `developerCli must be one of ${VALID_CLIS.join(', ')}` });
     }
     // reviewerCli additionally accepts 'auto' — resolved server-side (below)
     // to a CLI different from the developer's, so the cross-model diversity
     // property holds for ALL callers, not just hub-originated starts.
     if (startReviewerCli && startReviewerCli !== 'auto' && !VALID_CLIS.includes(startReviewerCli)) {
-      return res.status(400).json({ error: `reviewerCli must be 'auto' or one of ${VALID_CLIS.join(', ')}` });
+      return reply(400, { error: `reviewerCli must be 'auto' or one of ${VALID_CLIS.join(', ')}` });
     }
     // A CLI disabled installation-wide can't be requested — enabled_clis comes
     // from ~/.build-studio/config.json when present, else binary auto-detection.
@@ -3657,7 +3661,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     const enabledClis = resolveEnabledClis();
     for (const requested of [startDeveloperCli, startReviewerCli]) {
       if (requested && requested !== 'auto' && !enabledClis.includes(requested)) {
-        return res.status(400).json({ error: `CLI '${requested}' is not enabled on this installation (enabled: ${enabledClis.join(', ')}). Adjust enabled_clis in ~/.build-studio/config.json.` });
+        return reply(400, { error: `CLI '${requested}' is not enabled on this installation (enabled: ${enabledClis.join(', ')}). Adjust enabled_clis in ~/.build-studio/config.json.` });
       }
     }
     // Which role builds this run. Rejected rather than defaulted: see
@@ -3667,20 +3671,20 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     let builderRoleSource = null;
     if (startBuilderRole) {
       const picked = validateBuilderRole(config, startBuilderRole);
-      if (picked.error) return res.status(400).json({ error: picked.error });
+      if (picked.error) return reply(400, { error: picked.error });
       resolvedBuilderRole = picked.role.role;
       builderRoleSource = 'picker';
     }
     // PRD-001: onboarding needs no input (the project itself is the input).
     // kickoff/review/execution still require input as today.
-    if (type !== 'onboarding' && !input) return res.status(400).json({ error: 'input required' });
+    if (type !== 'onboarding' && !input) return reply(400, { error: 'input required' });
 
     const existing = state.loadWorkflow();
-    if (existing) return res.status(409).json({ error: 'workflow already active', workflow: existing });
+    if (existing) return reply(409, { error: 'workflow already active', workflow: existing });
 
     const activeRun = state.loadRun();
     if (activeRun && activeRun.state === 'executing') {
-      return res.status(409).json({ error: 'execution tab has an active run — cancel it first' });
+      return reply(409, { error: 'execution tab has an active run — cancel it first' });
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -3713,10 +3717,10 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       const inventoryPath = path.join(projectRoot, 'docs', 'onboarding', 'inventory.json');
       const visionPath = path.join(docsPath, 'vision.md');
       if (!fs.existsSync(inventoryPath)) {
-        return res.status(400).json({ error: 'No docs/onboarding/inventory.json — run Onboard project from the home screen first.' });
+        return reply(400, { error: 'No docs/onboarding/inventory.json — run Onboard project from the home screen first.' });
       }
       if (fs.existsSync(visionPath)) {
-        return res.status(400).json({ error: 'docs/vision.md already exists — onboarding has already run for this project.' });
+        return reply(400, { error: 'docs/vision.md already exists — onboarding has already run for this project.' });
       }
       steps = {
         discovery:           { status: 'pending', agents: [] },
@@ -3741,20 +3745,20 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       const relDocsPath = config.docs_path || './docs';
       const bugId = input.trim().toUpperCase().replace(/\s+/g, '-');
       if (!isValidId(bugId)) {
-        return res.status(400).json({ error: `bugfix input must be a backlog item id (e.g. LS-029), got "${input}".` });
+        return reply(400, { error: `bugfix input must be a backlog item id (e.g. LS-029), got "${input}".` });
       }
       let bug = null;
       try {
         bug = readItem(projectRoot, relDocsPath, bugId);
       } catch (e) {
-        return res.status(400).json({ error: `Could not read backlog item ${bugId}: ${e.message}` });
+        return reply(400, { error: `Could not read backlog item ${bugId}: ${e.message}` });
       }
       const invalid = validateBugfixStart(bug, bugId);
-      if (invalid) return res.status(invalid.status).json({ error: invalid.error });
+      if (invalid) return reply(invalid.status, { error: invalid.error });
 
       const builderRole = resolveBuilderRole(config, bug);
       if (!builderRole) {
-        return res.status(400).json({ error: `No execution role configured to build the fix for ${bugId}. Add at least one role under roles.execution in .build-studio/config.yaml.` });
+        return reply(400, { error: `No execution role configured to build the fix for ${bugId}. Add at least one role under roles.execution in .build-studio/config.yaml.` });
       }
 
       itemId = bugId;
@@ -3787,7 +3791,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
         try {
           story = readItem(projectRoot, relDocsPath, storyId);
         } catch (e) {
-          return res.status(400).json({ error: `Could not read backlog item ${storyId}: ${e.message}` });
+          return reply(400, { error: `Could not read backlog item ${storyId}: ${e.message}` });
         }
       }
 
@@ -3795,17 +3799,17 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
         // Gate 1 — the story/task must reference a PRD.
         const prdRef = typeof story.prd === 'string' ? story.prd.trim() : '';
         if (!prdRef) {
-          return res.status(400).json({ error: `${story.type || 'Item'} ${storyId} has no PRD. Add a "prd:" field linking it to its PRD before running a ${type} workflow.` });
+          return reply(400, { error: `${story.type || 'Item'} ${storyId} has no PRD. Add a "prd:" field linking it to its PRD before running a ${type} workflow.` });
         }
         // readItem normalises `prd:` to a repo-relative docs/prds/<file>.md path
         // when it can resolve it; an unresolved ref stays verbatim and won't exist.
         if (!fs.existsSync(path.join(projectRoot, prdRef))) {
-          return res.status(404).json({ error: `${storyId} references a PRD ("${story.prd}") that does not exist on disk.` });
+          return reply(404, { error: `${storyId} references a PRD ("${story.prd}") that does not exist on disk.` });
         }
         // Gate 2 — status must match the stage this workflow operates on.
         const requiredStatus = type === 'review' ? 'Drafted' : 'Reviewed';
         if (story.status !== requiredStatus) {
-          return res.status(409).json({ error: `${storyId} is "${story.status || 'unset'}", but a ${type} run requires status "${requiredStatus}". Move the item to ${requiredStatus} first.` });
+          return reply(409, { error: `${storyId} is "${story.status || 'unset'}", but a ${type} run requires status "${requiredStatus}". Move the item to ${requiredStatus} first.` });
         }
         // Gate 3 — what it depends on must be built. Overridable: the owner
         // may know a dependency is only nominal, or be building both at once.
@@ -3813,7 +3817,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
           const unbuilt = require('../backlog').unbuiltDependencies(projectRoot, relDocsPath, story);
           if (unbuilt.length > 0) {
             const lines = unbuilt.map((d) => `  - ${d.id}${d.title ? ` — ${d.title}` : ''}: ${d.status ? `"${d.status}"` : 'no backlog item found'}`);
-            return res.status(409).json({
+            return reply(409, {
               error: `Cannot start execution: ${storyId} depends on ${unbuilt.length === 1 ? 'an item that is' : 'items that are'} not built yet:\n\n${lines.join('\n')}\n\n`
                 + `Build ${unbuilt.length === 1 ? 'it' : 'them'} first (status Implemented or Done), or retry with {"override": true} to build ${storyId} anyway.`,
               unbuiltDependencies: unbuilt,
@@ -3829,7 +3833,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
           const match = fs.readdirSync(prdsDir).find(f => f.toUpperCase().includes(input.toUpperCase().replace(/\s+/g, '-')));
           if (match) prdPath = `docs/prds/${match}`;
         }
-        if (!prdPath) return res.status(404).json({ error: `PRD not found matching "${input}"` });
+        if (!prdPath) return reply(404, { error: `PRD not found matching "${input}"` });
       }
 
       const prdExists = fs.existsSync(path.join(projectRoot, prdPath));
@@ -3853,7 +3857,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
         if (hint) {
           const picked = validateBuilderRole(config, hint.value);
           if (picked.error) {
-            return res.status(400).json({
+            return reply(400, {
               error: `The ${hint.source === 'prd' ? 'PRD' : 'backlog item'} names builder role "${hint.value}", which this project does not have. ${picked.error}`,
             });
           }
@@ -3881,7 +3885,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
               cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'],
             });
           } catch (_) {
-            return res.status(400).json({
+            return reply(400, {
               error: `PRD exists on disk but is not tracked in git: ${prdPath}. Execution agents run in isolated worktrees that only contain committed content, so an untracked PRD is invisible to them. Commit the PRD first:\n\n  git add ${prdPath} && git commit -m "docs: add ${path.basename(prdPath, '.md')}"\n\nThen re-start the execution workflow.`,
               prdUntracked: true,
               prdPath,
@@ -3921,7 +3925,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
               && execRoleNames.length > 1
               && !resolvedBuilderRole) {
             const roleList = execRoleNames;
-            return res.status(400).json({
+            return reply(400, {
               error: `Cannot start execution: ${prdPath} does not name the role that should build it, and this project requires it (execution.require_builder_role).\n\n`
                 + `Add a header line to the PRD, above the first "##" section:\n\n    **Role:** ${roleList[0] || '<execution role>'}\n\n`
                 + `Available: ${roleList.join(', ') || '(none configured)'}. `
@@ -3954,7 +3958,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
               simCheck = { ok: true, action: 'check-failed' };
             }
             if (!simCheck.ok) {
-              return res.status(400).json({
+              return reply(400, {
                 error: `Cannot start execution: ${simCheck.reason}.\n\n`
                   + `Pinned in .build-studio/config.yaml as:\n    ${config.simulator.destination}\n\n`
                   + 'List what this machine actually has, then update the id:\n'
@@ -3970,7 +3974,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
             const prdContent = fs.readFileSync(path.join(projectRoot, prdPath), 'utf8');
             const incomplete = findIncompleteRequiredSpecs(prdContent);
             if (incomplete.length > 0) {
-              return res.status(400).json({
+              return reply(400, {
                 error: `Cannot start execution: ${incomplete.length} Required companion spec(s) in ${prdPath}'s Companion Specs table are not Done yet. Deliver them (or correct the table if they're actually complete), then retry. To bypass, retry with {"override": true}.\n\nIncomplete:\n${incomplete.map(s => `  - ${s.spec}: ${s.status}`).join('\n')}`,
                 incompleteSpecs: incomplete,
                 canOverride: true,
@@ -4024,7 +4028,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       let curBranch = '';
       try { curBranch = g(['branch', '--show-current']); } catch {}
       if (curBranch !== runDefaultBranch) {
-        return res.status(409).json({ error: `Cannot start a ${type} run: the working tree is on "${curBranch || '(detached HEAD)'}", not ${runDefaultBranch}. Finish, merge, or abort that branch first so the run starts from a clean ${runDefaultBranch}.`, currentBranch: curBranch });
+        return reply(409, { error: `Cannot start a ${type} run: the working tree is on "${curBranch || '(detached HEAD)'}", not ${runDefaultBranch}. Finish, merge, or abort that branch first so the run starts from a clean ${runDefaultBranch}.`, currentBranch: curBranch });
       }
       // Dirty-tree check applies to branch-creating runs (execution + bugfix):
       // both do `checkout -b <run>/<id>`, which carries uncommitted changes onto
@@ -4036,7 +4040,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
         let dirty = '';
         try { dirty = g(['status', '--porcelain']); } catch {}
         if (dirty) {
-          return res.status(409).json({ error: `Cannot start a ${type} run: ${runDefaultBranch} has uncommitted changes — they'd be carried onto the run branch and block the final merge. Commit, stash, or discard them first.` });
+          return reply(409, { error: `Cannot start a ${type} run: ${runDefaultBranch} has uncommitted changes — they'd be carried onto the run branch and block the final merge. Commit, stash, or discard them first.` });
         }
       }
       // Branch CREATION is scoped to execution + bugfix (the runs whose code lands
@@ -4045,12 +4049,24 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       // for now it commits to the (guardrail-clean) default branch directly.
       if (type === 'execution' || type === 'bugfix') {
         runBranch = type === 'bugfix' ? `fix/${itemId.toLowerCase()}` : `exec/${input.replace(/\s+/g, '-')}`;
-        try { g(['rev-parse', '--verify', runBranch]); return res.status(409).json({ error: `Branch ${runBranch} already exists from a previous run. Merge or delete it first.` }); } catch (_) { /* good — does not exist */ }
-        try {
-          g(['checkout', '-b', runBranch, runDefaultBranch]);
-        } catch (e) {
-          return res.status(500).json({ error: `Failed to create run branch ${runBranch}: ${e.message}` });
-        }
+        try { g(['rev-parse', '--verify', runBranch]); return reply(409, { error: `Branch ${runBranch} already exists from a previous run. Merge or delete it first.` }); } catch (_) { /* good — does not exist */ }
+      }
+    }
+
+    // Every check has passed. A readiness check stops here, before the first
+    // side effect (the run branch), so it asks exactly what a start asks.
+    if (dryRun) {
+      return reply(200, { ready: true, type, prdPath, itemId, branch: runBranch, defaultBranch: runDefaultBranch,
+        ...(resolvedBuilderRole ? { builderRole: resolvedBuilderRole, builderRoleSource } : {}),
+        ...(runPreset ? { preset: runPreset } : {}) });
+    }
+
+    if (runBranch) {
+      const { execFileSync } = require('child_process');
+      try {
+        execFileSync('git', ['checkout', '-b', runBranch, runDefaultBranch], { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+      } catch (e) {
+        return reply(500, { error: `Failed to create run branch ${runBranch}: ${e.message}` });
       }
     }
 
@@ -4118,7 +4134,12 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     // its specs carry — including AC-5's owner decision, which the run then
     // headed straight for (2026-08-09).
     //
-    res.json({ workflow: wf });
+    return reply(200, { workflow: wf });
+  }
+
+  router.post('/workflow/start', (req, res) => {
+    const r = startWorkflow(req.body);
+    res.status(r.status).json(r.json);
   });
 
   router.post('/workflow/feedback', (req, res) => {
@@ -10546,6 +10567,11 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
 
     return res.status(400).json({ error: `no valid transition for step=${wf.currentStep} action=${action}` });
   }
+
+  // For the work queue (lib/api/work-queue.js): the same start, and the same
+  // checks without starting, as POST /workflow/start.
+  router.startWorkflow = startWorkflow;
+  router.workflowReadiness = (body) => startWorkflow(body, { dryRun: true });
 
   return router;
 }

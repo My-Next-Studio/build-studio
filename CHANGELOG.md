@@ -23,6 +23,16 @@ that move underneath you without your having edited anything.
 
 ## 2026-10-11 — A finding only the owner can close stops the fix loop
 
+### Added
+
+- **A backlog read that writes nothing:** `GET /api/backlog?readonly=true`.
+  A normal read moves a Feature whose PRD exists from Backlog to Drafted and
+  refreshes the index, both of which write files; that is wrong for a monitor
+  that only looks. The read-only form skips both, and combines with the lean
+  `fields=status`. The default read is unchanged. First step of the work queue
+  (`docs/plans/work-queue-and-remote-overview.md`), whose overview reads
+  through it.
+
 ### Changed
 
 - **Findings that wait on the owner no longer go to the developers.** A review

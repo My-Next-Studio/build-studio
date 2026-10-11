@@ -75,7 +75,8 @@ async function mountRouter(root, configure) {
   const tmuxOps = { killSessionAndDevPorts: () => {}, killWindowAndChildren: () => {} };
   const app = express();
   app.use(express.json());
-  app.use('/api', createWorkflowRouter(config, state, gitOps, tmuxOps, () => {}));
+  const router = createWorkflowRouter(config, state, gitOps, tmuxOps, () => {});
+  app.use('/api', router);
   const server = http.createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
@@ -101,7 +102,7 @@ async function mountRouter(root, configure) {
   return {
     post: (urlPath, body) => send('POST', urlPath, body || {}),
     get: (urlPath) => send('GET', urlPath),
-    state, config, close: () => new Promise((r) => server.close(r)),
+    state, config, router, close: () => new Promise((r) => server.close(r)),
   };
 }
 
@@ -330,5 +331,42 @@ test('send to devs refuses owner-only findings, and accepts them with the ownerâ
     const directed = await srv.post('/api/workflow/advance', { action: 'send_to_devs', notes: 'Queries approved; run the study.' });
     assert.equal(directed.status, 200, JSON.stringify(directed.body));
     assert.equal(srv.state.loadWorkflow().steps.qa_validation.status, 'completed');
+  } finally { await srv.close(); repo.clean(); }
+});
+
+// The work queue asks "would this start?" with the start's own checks
+// (startWorkflow's dryRun): the same refusals, and nothing created.
+test('readiness: a startable run is ready, and nothing is created', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    const r = srv.router.workflowReadiness({ type: 'execution', input: 'LS-002' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(r.json.ready, true);
+    assert.equal(r.json.branch, 'exec/LS-002');
+    assert.equal(r.json.preset, 'lean');
+    assert.equal(srv.state.loadWorkflow(), null);
+    const branches = execFileSync('git', ['branch', '--list', 'exec/*'], { cwd: repo.root, encoding: 'utf8' });
+    assert.equal(branches.trim(), '');
+    assert.equal(execFileSync('git', ['branch', '--show-current'], { cwd: repo.root, encoding: 'utf8' }).trim(), 'main');
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('readiness refuses exactly as the start does', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mountRouter(repo.root);
+  try {
+    // LS-002 is Reviewed, so a review run is refused with the start's own reason.
+    const body = { type: 'review', input: 'LS-002' };
+    const ready = srv.router.workflowReadiness(body);
+    const start = await srv.post('/api/workflow/start', body);
+    assert.equal(ready.status, 409);
+    assert.deepEqual({ status: ready.status, json: ready.json }, { status: start.status, json: start.body });
+
+    // With a workflow active, every readiness check says so.
+    await srv.post('/api/workflow/start', { type: 'execution', input: 'LS-002' });
+    const busy = srv.router.workflowReadiness({ type: 'execution', input: 'LS-002' });
+    assert.equal(busy.status, 409);
+    assert.equal(busy.json.error, 'workflow already active');
   } finally { await srv.close(); repo.clean(); }
 });

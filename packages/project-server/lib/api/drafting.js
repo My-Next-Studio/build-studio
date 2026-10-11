@@ -200,26 +200,65 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
    *             stopped rather than starting over.
    *   fresh     no session, or the caller asked for one.
    */
+  /** Why this item cannot be drafted, as { status, json }, or null when it can. */
+  function draftItemRefusal(itemId, item) {
+    if (!itemId) return { status: 400, json: { error: 'itemId is required' } };
+    if (item && item.type === 'Bug') {
+      return { status: 409, json: {
+        error: `${itemId} is a Bug. Bugs go straight to a bugfix run and carry no PRD, so there is nothing to draft.`,
+        isBug: true,
+      } };
+    }
+    if (item && item.prd) {
+      return { status: 409, json: {
+        error: `${itemId} already has a PRD (${item.prd}). Re-drafting over a reviewed document is not supported yet.`,
+        hasPrd: true,
+      } };
+    }
+    return null;
+  }
+
+  /** The drafting session's agent when one is running, else null. One draft at a time. */
+  function runningDraft() {
+    const target = `${draftSessionName(projectName)}:${draftWindowName()}`;
+    const prior = loadDraftState(config.statePath).session || null;
+    const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
+    const agentRunning = pid && tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false;
+    return prior && pid && agentRunning ? prior : null;
+  }
+
+  function runningDraftRefusal(prior) {
+    return { status: 409, json: {
+      error: `A drafting session is already running${prior.lastItemId ? ` for ${prior.lastItemId}` : ''}.`
+        + ' Finish it and click End draft before drafting another item.',
+      sessionRunning: true,
+      lastItemId: prior.lastItemId || null,
+      window: draftWindowName(),
+    } };
+  }
+
+  /**
+   * Would Draft start for this item right now? The start route's own checks,
+   * with nothing launched, installed or committed. For the work queue.
+   */
+  function draftReadiness(itemId) {
+    let item = null;
+    try { item = readItem(projectRoot, docsRel, itemId); } catch (_) { /* advisory */ }
+    const refusal = draftItemRefusal(itemId, item);
+    if (refusal) return refusal;
+    const busy = runningDraft();
+    if (busy) return runningDraftRefusal(busy);
+    return { status: 200, json: { ready: true, type: 'draft', itemId } };
+  }
+
   router.post('/draft/start', async (req, res) => {
     const itemId = String((req.body && req.body.itemId) || '').trim();
     const wantFresh = (req.body && req.body.fresh) === true;
-    if (!itemId) return res.status(400).json({ error: 'itemId is required' });
 
     let item = null;
-    try { item = readItem(projectRoot, docsRel, itemId); } catch (_) { /* advisory */ }
-
-    if (item && item.type === 'Bug') {
-      return res.status(409).json({
-        error: `${itemId} is a Bug. Bugs go straight to a bugfix run and carry no PRD, so there is nothing to draft.`,
-        isBug: true,
-      });
-    }
-    if (item && item.prd) {
-      return res.status(409).json({
-        error: `${itemId} already has a PRD (${item.prd}). Re-drafting over a reviewed document is not supported yet.`,
-        hasPrd: true,
-      });
-    }
+    try { item = itemId ? readItem(projectRoot, docsRel, itemId) : null; } catch (_) { /* advisory */ }
+    const refusal = draftItemRefusal(itemId, item);
+    if (refusal) return res.status(refusal.status).json(refusal.json);
 
     return launchInSession(res, {
       itemId,
@@ -311,13 +350,8 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
     // Continuity is unaffected: once the agent finishes, the next Draft resumes
     // this same conversation through the path below.
     if (prior && windowLive && agentRunning && !wantFresh) {
-      return res.status(409).json({
-        error: `A drafting session is already running${prior.lastItemId ? ` for ${prior.lastItemId}` : ''}.`
-          + ' Finish it and click End draft before drafting another item.',
-        sessionRunning: true,
-        lastItemId: prior.lastItemId || null,
-        window: windowName,
-      });
+      const r = runningDraftRefusal(prior);
+      return res.status(r.status).json(r.json);
     }
 
     // An agent that exited on its own skipped End draft, and with it the commit.
@@ -413,6 +447,9 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
     saveDraftState(config.statePath, { ...state, sessionName, session });
     res.json({ ok: true, sessionName, mode: resuming ? 'resumed' : 'fresh', deltaLines: delta ? delta.split('\n').filter((l) => l.startsWith('- ')).length : 0, ...session });
   }
+
+  // For the work queue: Draft's own checks, without starting anything.
+  router.draftReadiness = draftReadiness;
 
   return router;
 }
