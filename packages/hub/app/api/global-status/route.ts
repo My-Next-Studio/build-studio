@@ -102,7 +102,7 @@ export async function GET() {
       const alerts = monitor?.counts ?? null
 
       try {
-        const wfData = await httpGetJson(`http://localhost:${status.port}/api/workflow`, 2000) as { workflow?: Record<string, unknown> }
+        const wfData = await httpGetJson(`http://localhost:${status.port}/api/workflow`, 2000) as { workflow?: Record<string, unknown>; needsAttention?: unknown }
         const wf = wfData?.workflow as Record<string, unknown> | undefined
         if (!wf) {
           return { name: p.name, port: status.port, running: true, workflow: null, ci, alerts }
@@ -112,7 +112,15 @@ export async function GET() {
         const steps = (wf.steps || {}) as Record<string, { agents?: { status: string }[]; status?: string }>
         const currentStep = wf.currentStep as string
         const currentStepData = steps[currentStep]
-        const agents = currentStepData?.agents || []
+        // During task execution the step's agent list is a mirror that is
+        // routinely empty; the task agents live under taskExecution.taskStates
+        // (the same fallback as the server's needs-attention agentsOfStep).
+        // Reading only the mirror showed a busy run as 0/0 and "waiting".
+        const taskStates = ((wf.taskExecution || {}) as { taskStates?: Record<string, { agents?: { status: string }[] }> }).taskStates || {}
+        const mirrored = currentStepData?.agents || []
+        const agents = mirrored.length > 0 || currentStep !== 'task_execution'
+          ? mirrored
+          : Object.values(taskStates).flatMap(ts => ts?.agents || [])
         const done = agents.filter((a: { status: string }) => a.status === 'done' || a.status === 'error').length
         const total = agents.length
 
@@ -120,7 +128,9 @@ export async function GET() {
         const allDone = total > 0 && done === total
         const isPending = currentStepData?.status === 'pending' && total === 0
         const isErrorOrBlocked = currentStepData?.status === 'error' || currentStepData?.status === 'blocked'
-        const waitingForInput = allDone || isPending || isErrorOrBlocked || currentStep === 'completed'
+        // The server's own reasons a run needs the owner (held for an owner
+        // finding, a check that could not run, a stalled agent) count too.
+        const waitingForInput = allDone || isPending || isErrorOrBlocked || currentStep === 'completed' || Boolean(wfData?.needsAttention)
 
         return {
           name: p.name,

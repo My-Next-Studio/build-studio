@@ -47,6 +47,15 @@ that move underneath you without your having edited anything.
   next entry by itself. The queue is local state in
   `.build-studio/work-queue.json`; its ignore rule is added and committed on
   first use.
+- **One overview across projects, for a remote assistant:** the hub's
+  `GET /api/overview`. For each project it gives what is running (item,
+  phase, current task and its agents), evidence of recent progress (last
+  activity, last commit), what needs you (the same reasons the workflow view
+  uses), and the queue's current entry, the next one with whether it would
+  start, and the few after it. It only reads. Each project's own block is
+  `GET /api/overview` on its server. A project whose server does not answer
+  is read from its state files and marked `persisted`, or `unavailable` with
+  no files, and never shown as idle.
 
 ### Changed
 
@@ -69,11 +78,21 @@ that move underneath you without your having edited anything.
   well, those go to the devs, who are told the owner items are not tasks. The
   lean review's "an unmet AC is BLOCKING" rule now makes the same exception.
 
+### Fixed
+
+- **The status bar showed a busy run as idle.** During task execution it
+  counted the step's own agent list, which stays empty while the task agents
+  work, so a run with a builder at work read as 0 of 0 agents and "waiting".
+  It now counts the task agents, and also shows a run as waiting when the
+  workflow's own needs-attention check says so (held for you, a check that
+  could not run, a stalled agent).
+
 ### Upgrade steps
 
-**In Build Studio**: `node inject-resources.js --sync-only` in
-`packages/desktop`, then restart the project servers (or the app). Nothing to
-do in the managed projects.
+**In Build Studio**: `npx next build` in `packages/hub`, then
+`node inject-resources.js` in `packages/desktop`, then restart the app and the
+project servers. Nothing to do in the managed projects: the work queue adds
+its own ignore rule on first use.
 
 ---
 

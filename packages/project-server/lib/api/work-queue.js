@@ -9,6 +9,8 @@ const { deriveNeedsAttention } = require('../needs-attention');
 const { ensureIgnoreRule } = require('../ignore-rule');
 const { scopedCommit } = require('../scoped-commit');
 const wq = require('../work-queue');
+const { projectOverview } = require('../project-overview');
+const { execFileSync } = require('child_process');
 
 /**
  * The work queue's routes (lib/work-queue.js holds the model; the plan is
@@ -67,7 +69,7 @@ function createWorkQueueRouter(config, { state, workflowRouter, draftingRouter, 
       current,
       outsideQueue: outside,
       pending,
-      next: pending[0] ? { entryId: pending[0].id, ...readiness(pending[0]) } : null,
+      next: pending[0] ? { entryId: pending[0].id, item: pending[0].item, title: pending[0].itemInfo ? pending[0].itemInfo.title : null, ...readiness(pending[0]) } : null,
     };
   }
 
@@ -90,6 +92,20 @@ function createWorkQueueRouter(config, { state, workflowRouter, draftingRouter, 
   };
 
   router.get('/work-queue', (req, res) => res.json(view()));
+
+  // This project's block of the cross-project overview (the hub's
+  // GET /api/overview gathers them). Read-only: state files and git log.
+  function lastCommit() {
+    try {
+      const [sha, at, ...subject] = execFileSync('git', ['log', '-1', '--format=%h%x09%cI%x09%s'], { cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\t');
+      return sha ? { sha, at, subject: subject.join('\t') } : null;
+    } catch (_) { return null; }
+  }
+  router.get('/overview', (req, res) => {
+    res.json(projectOverview({
+      name: config.name, wf: state.loadWorkflow(), queue: view(), draft: draftingRouter.draftSession(), lastCommit: lastCommit(),
+    }));
+  });
 
   router.post('/work-queue', async (req, res) => {
     const id = String((req.body && req.body.item) || '').trim().toUpperCase();

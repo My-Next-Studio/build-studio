@@ -243,4 +243,4 @@ function deriveNeedsAttention(wf) {
   return null;
 }
 
-module.exports = { deriveNeedsAttention, HUMAN_GATES };
+module.exports = { deriveNeedsAttention, agentsOfStep, HUMAN_GATES };

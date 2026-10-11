@@ -185,3 +185,22 @@ test('adding refuses an unknown item or action', async () => {
     assert.equal((await srv.call('POST', '/api/work-queue', { item: 'LS-002', action: 'deploy' })).status, 400);
   } finally { await srv.close(); repo.clean(); }
 });
+
+test('GET /api/overview describes the project: its queued run, the next entry and the last commit', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mount(repo.root);
+  try {
+    const entry = (await srv.call('POST', '/api/work-queue', { item: 'LS-002' })).body.added;
+    await srv.call('POST', '/api/work-queue', { item: 'LS-004' });
+    await srv.call('POST', `/api/work-queue/${entry.id}/start`, {});
+    const o = (await srv.call('GET', '/api/overview')).body;
+    assert.equal(o.source, 'live');
+    assert.equal(o.work.item, 'LS-002');
+    assert.equal(o.work.fromQueue, true);
+    assert.equal(o.queue.current.id, entry.id);
+    assert.equal(o.queue.next.item, 'LS-004');
+    assert.equal(o.queue.next.ready, false);
+    assert.equal(o.queue.pendingCount, 1);
+    assert.match(o.progress.lastCommit.subject, /gitignore the work queue|init/);
+  } finally { await srv.close(); repo.clean(); }
+});
