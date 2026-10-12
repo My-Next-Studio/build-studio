@@ -98,6 +98,21 @@ const BACKGROUND_WORK_MARKERS = [
   /\/goal\s+active\b/i,
 ];
 
+/**
+ * A pane this short cannot show a dialog's footer, so reading it proves
+ * nothing either way. The hub's live terminal sizes the agent's window
+ * (tmux window-size latest), and a viewer squeezed under a tall banner once
+ * left a waiting agent's pane one row tall: the screen showed only the
+ * highlighted option, the "Enter to select" footer was gone, and the question
+ * vanished from the banner while the agent still waited (fazon FAZ-414,
+ * 2026-10-12). Below this height the last reading stands.
+ */
+const MIN_READABLE_PANE_ROWS = 8;
+
+function paneTooShortToRead(rows) {
+  return Number.isFinite(rows) && rows < MIN_READABLE_PANE_ROWS;
+}
+
 function hasBackgroundWork(paneText) {
   const t = String(paneText || '');
   return BACKGROUND_WORK_MARKERS.some((re) => re.test(t));
@@ -300,4 +315,4 @@ function classifyStalledAgent({
   };
 }
 
-module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, idleTimeoutVerdict, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS };
+module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, idleTimeoutVerdict, paneTooShortToRead, MIN_READABLE_PANE_ROWS, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS };

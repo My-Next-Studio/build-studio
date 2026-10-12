@@ -316,6 +316,9 @@ function startServer(projectRoot, opts = {}) {
   // screen until the next byte of output.
   const agentPtys = new Map();
   const AGENT_BUFFER_LIMIT = 50000;
+  // The size a viewer pty opens at, and returns to when its last viewer leaves.
+  const AGENT_PTY_COLS = 220;
+  const AGENT_PTY_ROWS = 50;
 
   function reapAgentPty(agentWindow) {
     const entry = agentPtys.get(agentWindow);
@@ -347,7 +350,7 @@ function startServer(projectRoot, opts = {}) {
         // so xterm.js has no scrollback of its own to offer).
         'set-option', 'mouse', 'on', ';',
         'select-window', '-t', `${viewSession}:=${target.window}`,
-      ], { name: 'xterm-256color', cols: 220, rows: 50, cwd: config.projectRoot, env });
+      ], { name: 'xterm-256color', cols: AGENT_PTY_COLS, rows: AGENT_PTY_ROWS, cwd: config.projectRoot, env });
     } catch (e) {
       return { error: e.message };
     }
@@ -418,7 +421,17 @@ function startServer(projectRoot, opts = {}) {
       } catch (_) {}
     });
     // The viewer leaves; the pty stays. That is the point — see the note above.
-    ws.on('close', () => { entry.clients.delete(ws); });
+    // But the pty stays attached as a tmux client, and tmux sizes the agent's
+    // window to it (window-size latest), so it would keep the last viewer's
+    // size for the rest of the run. A viewer closed while squeezed left a
+    // waiting agent one row tall, its question unreadable (fazon FAZ-414,
+    // 2026-10-12). With nobody watching, go back to the size it opened at.
+    ws.on('close', () => {
+      entry.clients.delete(ws);
+      if (entry.clients.size === 0) {
+        try { entry.pty.resize(AGENT_PTY_COLS, AGENT_PTY_ROWS); } catch (_) {}
+      }
+    });
   }
 
   wss.on('connection', (ws, req) => {
@@ -823,7 +836,12 @@ function startServer(projectRoot, opts = {}) {
           // its main case (fazon FAZ-261, 2026-08-18).
           //
           // Derived onto the agent, never a halt — the owner decides.
-          if (!agent.feedback) {
+          //
+          // A pane squeezed too short to show a dialog is skipped, so the last
+          // reading stands: re-reading it would drop a pending question (see
+          // MIN_READABLE_PANE_ROWS).
+          const paneRows = typeof tmuxOps.paneHeight === 'function' ? tmuxOps.paneHeight(target) : null;
+          if (!agent.feedback && !agentStalled.paneTooShortToRead(paneRows)) {
             try {
               // A codex agent's truest sign of life is its rollout, which moves
               // as the model streams; the pane log only moves when a command

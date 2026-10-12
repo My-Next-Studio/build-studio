@@ -281,6 +281,19 @@ function createTmuxOps(config) {
     } catch (_) { return null; }
   }
 
+  // Visible rows of this pane. A hub viewer sizes the agent's window (window-size
+  // latest), so a squeezed viewer can leave a pane one row tall, too short to
+  // show a dialog. Returns null when the pane cannot be found.
+  function paneHeight(target) {
+    try {
+      const out = execFileSync('tmux', ['display-message', '-p', '-t', target, '#{pane_height}'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).toString().trim();
+      const rows = parseInt(out, 10);
+      return Number.isFinite(rows) ? rows : null;
+    } catch (_) { return null; }
+  }
+
   // True if `pid` has any live direct child process. A pane that fell back to
   // a bare login shell after a genuine crash has none — nothing left to run.
   // A pane legitimately mid-build (xcodebuild, npm test, gradlew, ...) still
@@ -346,6 +359,7 @@ function createTmuxOps(config) {
     capturePane,
     paneCommand,
     panePid,
+    paneHeight,
     hasLiveDescendant,
     sendMessage,
     clearHistory,

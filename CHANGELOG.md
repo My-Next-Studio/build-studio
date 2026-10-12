@@ -21,6 +21,32 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-12 — An agent's question no longer disappears when you open its terminal
+
+### Fixed
+
+- **Opening an agent's live terminal could hide the question it was asking.**
+  The "waiting for your decision" banner shows the whole question and stayed
+  above the terminal, which got only what was left: two rows on a normal
+  window. tmux sizes the agent's window to the viewer, so the agent's screen
+  shrank to one line. Its question then fell off its own screen, and the
+  banner lost it on the next check. Closing the terminal did not help,
+  because the viewer stays attached and kept the agent at that size. Now, with
+  a log or terminal open, the banners take at most a third of the column and
+  scroll themselves. The viewer goes back to its full size when the last
+  viewer closes. A pane too short to show a dialog is no longer read, so the
+  last reading (and the question) stays.
+- **No scrollbar in the workflow view after opening an agent's log or
+  terminal.** The same tall banner pushed content past the bottom of a column
+  that does not scroll while a log is open; leaving the page and coming back
+  was the only way out. Covered by the banner cap above.
+
+### Upgrade steps
+
+**In Build Studio:** rebuild the hub, run the full inject, restart the app.
+
+**In each managed project:** nothing to do.
+
 ## 2026-10-11 — A finding only the owner can close stops the fix loop
 
 ### Added

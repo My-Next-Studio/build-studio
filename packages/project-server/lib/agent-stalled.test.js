@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { classifyStalledAgent, isAwaitingInput, extractQuestion } = require('./agent-stalled');
+const { classifyStalledAgent, isAwaitingInput, extractQuestion, paneTooShortToRead, MIN_READABLE_PANE_ROWS } = require('./agent-stalled');
 
 // Real pane tails, trimmed. The discriminator is what the pane ENDS with.
 const WORKING = '✻ Whirlpooling… (1m 6s · ↓ 4.0k tokens)\n⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents';
@@ -291,3 +291,13 @@ test('no dialog, no question', () => {
     assert.equal(idleTimeoutVerdict({ ...base, waitingForOwner: true, idleMs: 120 * MIN, backgroundWork: false }), null);
   });
 }
+
+test('a pane squeezed too short to show a dialog is not read; an unknown height is', () => {
+  // fazon FAZ-414: a viewer under a tall banner left the pane one row tall,
+  // showing only "❯ 1. Keep ADR…" with no footer, so the question vanished.
+  assert.equal(paneTooShortToRead(1), true);
+  assert.equal(paneTooShortToRead(MIN_READABLE_PANE_ROWS - 1), true);
+  assert.equal(paneTooShortToRead(MIN_READABLE_PANE_ROWS), false);
+  assert.equal(paneTooShortToRead(50), false);
+  assert.equal(paneTooShortToRead(null), false);
+});

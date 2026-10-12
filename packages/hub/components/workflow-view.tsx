@@ -1426,6 +1426,13 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
         overflow: 'auto', padding: 24, minWidth: 0,
         ...(viewingLog ? { display: 'flex', flexDirection: 'column' as const, overflow: 'hidden' } : {}),
       }}>
+        {/* With a log or terminal open the banners get at most a third of the
+            column and scroll themselves. Uncapped, an "is waiting for your
+            decision" banner carrying the whole question left the terminal two
+            rows tall; tmux shrinks the agent's window to its viewer, so the
+            agent's own question then fell off its screen, and in the hidden-
+            overflow column nothing could be scrolled (fazon FAZ-414, 2026-10-12). */}
+        <div style={viewingLog ? { flexShrink: 0, maxHeight: '33%', overflowY: 'auto' } : undefined}>
         {advanceError && (
           <div style={{
             marginBottom: 12, padding: '10px 14px', borderRadius: 4,
@@ -1567,6 +1574,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
         {wf && (wf.type === 'execution' || wf.type === 'bugfix') && wf.currentStep !== 'completed' && wf.overseer && wf.overseer.status !== 'idle' && (
           <OverseerCard overseer={wf.overseer} onDismiss={dismissOverseerEscalation} onNudgeAgent={nudgeAgent} />
         )}
+        </div>
         {viewingLog ? (
           <AgentLog logText={logText} onClose={() => { setViewingLog(null); setLogText('') }} windowName={viewingLog} />
         ) : (
