@@ -32,8 +32,9 @@ that move underneath you without your having edited anything.
   QA runs the test files the branch adds or modifies, plus
   `vitest related --run` (or `jest --findRelatedTests`) on the source files it
   changes. A change to the package manifest, the lockfile, the test or bundler
-  config, or a tsconfig still runs that package's suite in full. The builder
-  agent follows the same scope. Typecheck, lint, build and gates are
+  config, or a tsconfig still runs that package's suite in full. It applies
+  to execution and bugfix runs alike, including fix-round re-checks and the
+  older QA prompt non-lean runs use. The builder agent follows the same scope. Typecheck, lint, build and gates are
   unchanged. Off by default; mirrors `qa_validation.scope: new-uitests` for
   XCUITests.
 

@@ -3325,8 +3325,17 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
         const qaTestFeedback = (wf.steps.qa_tests?.agents || []).map(a => a.feedback || '').join('\n');
         const testFileMatches = qaTestFeedback.match(/`([^`]+\.test\.[^`]+)`/g) || [];
         const testFiles = testFileMatches.map(m => m.replace(/`/g, ''));
+        // Same JS scope as the main QA launch (lib/js-test-scope.js).
+        let inlineJsChanged = null;
+        if (config.qa_validation && config.qa_validation.js_scope === 'changed') {
+          try {
+            inlineJsChanged = execFileSync('git', ['diff', '--name-only', '--diff-filter=AM', `${wf.defaultBranch || 'main'}...${reviewBranch}`], { cwd: reviewWtPath, encoding: 'utf8' })
+              .split('\n').map((l) => l.trim()).filter(Boolean);
+          } catch (_) { inlineJsChanged = null; }
+        }
+        const inlineJsScope = jsTestScope.jsScopeSection(config, { projectRoot: reviewWtPath, changedFiles: inlineJsChanged, baseBranch: wf.defaultBranch || 'main' });
         const testFileList = testFiles.length > 0
-          ? `\n\n## TEST FILES TO RUN\nThese unit test files were written by the QA step for this PRD:\n${testFiles.map(f => `- ${f}`).join('\n')}\n\nRun these FIRST. If they all pass, run the broader unit test suite (vitest/jest) to check for regressions. Then run any E2E/Playwright .spec.* files written for this PRD.`
+          ? `\n\n## TEST FILES TO RUN\nThese unit test files were written by the QA step for this PRD:\n${testFiles.map(f => `- ${f}`).join('\n')}\n\nRun these FIRST. ${inlineJsScope ? 'Then run the scoped JS tests in QA SCOPE — CHANGED JS TESTS ONLY below, not the whole suite.' : 'If they all pass, run the broader unit test suite (vitest/jest) to check for regressions.'} Then run any E2E/Playwright .spec.* files written for this PRD.`
           : '';
 
         let qaRoundContext = '';
@@ -3352,7 +3361,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
 
         const qaAgent = [{
           role: 'QA', window: 'qa-validate', status: 'pending', reportFeedback: true,
-          instruction: `You are QA. Validate that the implementation passes all tests.\n\nPRD path: ${wf.prdPath}\nUse the /qa_review skill.${browserSkillRef}${testFileList}${qaRoundContext}\n\n## VALIDATION STEPS\n\n1. Run the PRD-specific unit tests listed above\n2. If they pass, run the full unit test suite (e.g. \`npx vitest run\`) to check for regressions\n3. Run any E2E/Playwright .spec.* files written for this PRD\n4. Report results using the structured QA feedback format\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection}`,
+          instruction: `You are QA. Validate that the implementation passes all tests.\n\nPRD path: ${wf.prdPath}\nUse the /qa_review skill.${browserSkillRef}${testFileList}${qaRoundContext}${inlineJsScope}\n\n## VALIDATION STEPS\n\n1. Run the PRD-specific unit tests listed above\n2. ${inlineJsScope ? 'Run the scoped JS tests in QA SCOPE — CHANGED JS TESTS ONLY above (NOT the full suite)' : 'If they pass, run the full unit test suite (e.g. `npx vitest run`) to check for regressions'}\n3. Run any E2E/Playwright .spec.* files written for this PRD\n4. Report results using the structured QA feedback format\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection}`,
         }];
         wf.steps.qa_validation = { status: 'running', agents: launchWorkflowAgents(wf, qaAgent, { useWorktrees: false, cwd: projectRoot }) };
       } else if (nextStep === 'security_audit') {
