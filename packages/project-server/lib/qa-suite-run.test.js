@@ -1,6 +1,6 @@
 'use strict';
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
@@ -14,6 +14,17 @@ const {
   resolveStallMs,
   resolveLogCapBytes,
 } = require('./qa-suite-run');
+
+// Every temp folder this file makes is removed when it finishes. They were
+// left behind, one of them holding a 140 MB log, so each full test run leaked
+// about a gigabyte into the system temp directory (2026-10-12).
+const madeDirs = [];
+function tempDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  madeDirs.push(dir);
+  return dir;
+}
+after(() => { for (const d of madeDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 // ── argv construction ────────────────────────────────────────────────────────
 
@@ -172,7 +183,7 @@ test('when the server could not run it, the agent is told to run it itself', () 
 // ── spawning ─────────────────────────────────────────────────────────────────
 
 test('a spawn failure rejects instead of hanging the step', async () => {
-  const logPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'qa-suite-')), 'run.log');
+  const logPath = path.join(tempDir('qa-suite-'), 'run.log');
   const run = startSuiteRun({ cwd: os.tmpdir(), args: ['test'], logPath, timeoutMs: 5000, env: { PATH: '/nonexistent' } });
   await assert.rejects(run.promise);
 });
@@ -184,7 +195,7 @@ test('a spawn failure rejects instead of hanging the step', async () => {
 // would be miscounted, and only a real stream can show that).
 
 function stubDir(script) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-stub-'));
+  const dir = tempDir('qa-stub-');
   const bin = path.join(dir, 'xcodebuild');
   fs.writeFileSync(bin, script, { mode: 0o755 });
   return dir;
@@ -249,7 +260,7 @@ test('cancel() stops a run in flight', async () => {
 const { discoverProjectAndScheme } = require('./qa-suite-run');
 
 function projectTree(names, dir = 'ios') {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-proj-'));
+  const root = tempDir('qa-proj-');
   fs.mkdirSync(path.join(root, dir), { recursive: true });
   for (const n of names) fs.mkdirSync(path.join(root, dir, n));
   return root;
@@ -266,7 +277,7 @@ test('configured scheme and project are used verbatim, with no lookup', () => {
 });
 
 test('a project with no .xcodeproj declines rather than guessing', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-proj-'));
+  const root = tempDir('qa-proj-');
   assert.match(discoverProjectAndScheme({ projectRoot: root, simulator: {} }).error, /no \.xcodeproj found/);
 });
 
