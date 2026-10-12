@@ -222,7 +222,7 @@ function leanReviewSection({ prdPath, defaultBranch, round, fixBase, designFiles
 
 Review ONLY what the fix round changed: \`git diff ${fixBase}..HEAD\`. Do not re-audit code that an earlier round already reviewed. For each finding from the previous round, confirm it is resolved and say how. New findings can only come from the fix diff itself; anything else is out of scope this round.
 
-The test run in Part 1 is still the full suite: a fix can break something outside its own diff, and the suite is what sees that.
+The test run in Part 1 still covers the whole branch, not just the fix diff (the full suite, or this project's configured QA scope): a fix can break something outside its own diff, and that run is what sees it.
 
 Severity: BLOCKING for a defect or an unmet AC (an AC only the owner can verify, such as a visual check, goes under \`### Owner checks\` instead and never blocks; only an open product decision goes on an \`**Awaiting owner:**\` line; see Part 1), MEDIUM for a real problem that should be fixed before merge, LOW for the rest. Be conservative with BLOCKING. Approve when the findings are resolved and the suite is green.`;
   }

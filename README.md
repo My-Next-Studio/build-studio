@@ -308,6 +308,7 @@ Key fields in `.build-studio/config.yaml` (not exhaustive — presets set sensib
 | `simulator.destination` | No | — | (iOS) stable simulator destination/UDID for `xcodebuild` |
 | `simulator.parallel_testing` | No | `true` | (iOS) `false` = serial, number = capped worker count |
 | `qa_validation.scope` | No | `full` | `new-uitests` runs only this branch's new/changed XCUITest classes |
+| `qa_validation.js_scope` | No | `full` | `changed` runs only the JS/TS test files the branch adds or modifies plus the tests related to its changed sources (`vitest related` / `jest --findRelatedTests`); a manifest, lockfile or test-config change still runs the suite in full. Use when CI runs the full suite |
 | `qa_validation.unit_test_target` | No | `<Scheme>Tests` | (iOS) unit-test target for scoped QA runs |
 | `qa_validation.honor_clean_approval` | No | `false` | Strict gate accepts the QA agent's certified-clean verdict |
 

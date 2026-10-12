@@ -23,6 +23,20 @@ that move underneath you without your having edited anything.
 
 ## 2026-10-12 — An agent's question no longer disappears when you open its terminal
 
+### Added
+
+- **QA can run only the JS tests a branch can affect:**
+  `qa_validation.js_scope: changed`. QA used to run a project's whole JS suite
+  (`npm test`) on every story, so a one-file web change could sit in QA for 40
+  minutes repeating what CI runs on the pull request anyway. With the setting,
+  QA runs the test files the branch adds or modifies, plus
+  `vitest related --run` (or `jest --findRelatedTests`) on the source files it
+  changes. A change to the package manifest, the lockfile, the test or bundler
+  config, or a tsconfig still runs that package's suite in full. The builder
+  agent follows the same scope. Typecheck, lint, build and gates are
+  unchanged. Off by default; mirrors `qa_validation.scope: new-uitests` for
+  XCUITests.
+
 ### Fixed
 
 - **Opening an agent's live terminal could hide the question it was asking.**
@@ -45,7 +59,13 @@ that move underneath you without your having edited anything.
 
 **In Build Studio:** rebuild the hub, run the full inject, restart the app.
 
-**In each managed project:** nothing to do.
+**In each managed project:** nothing required. To scope QA's JS tests in a
+project whose CI runs the full suite, add under `qa_validation:` in
+`.build-studio/config.yaml`:
+
+```yaml
+  js_scope: changed
+```
 
 ## 2026-10-11 — A finding only the owner can close stops the fix loop
 

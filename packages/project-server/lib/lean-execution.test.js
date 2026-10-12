@@ -110,11 +110,11 @@ test('a design check appears only when the PRD lists an approved design', () => 
   assert.match(s, /Design conformance.*design\/home\.pen/);
 });
 
-test('a re-review reads only the fix diff, and still says the suite runs in full', () => {
+test('a re-review reads only the fix diff, and still says the test run covers the whole branch', () => {
   const s = lean.leanReviewSection({ prdPath: 'p', defaultBranch: 'main', round: 2, fixBase: 'abc1234' });
   assert.match(s, /git diff abc1234\.\.HEAD/);
   assert.doesNotMatch(s, /main\.\.\.HEAD/);
-  assert.match(s, /still the full suite/);
+  assert.match(s, /still covers the whole branch, not just the fix diff/);
 });
 
 test('a re-review with no recorded fix base falls back to the whole branch', () => {
