@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
+const { BUILD_STUDIO_DIR } = require('@build-studio/shared/constants');
 const yaml = require('js-yaml');
 
 /**
@@ -348,7 +348,7 @@ const PRESETS = {
 
 const PRESET_LOOKUP_DIRS = (projectRoot) => [
   projectRoot && path.join(projectRoot, '.build-studio', 'presets'),
-  path.join(os.homedir(), '.build-studio', 'presets'),
+  path.join(BUILD_STUDIO_DIR, 'presets'),
 ].filter(Boolean);
 
 /**

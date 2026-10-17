@@ -1,8 +1,8 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { CLAUDE_CONFIG_PATH } = require('@build-studio/shared/constants');
 
 /**
  * Seed Claude Code's per-folder trust for a project path.
@@ -26,7 +26,7 @@ const path = require('path');
  * @returns {boolean} true when the trust entry is present after the call
  */
 function seedClaudeFolderTrust(projectPath, opts = {}) {
-  const configPath = opts.configPath || path.join(os.homedir(), '.claude.json');
+  const configPath = opts.configPath || CLAUDE_CONFIG_PATH;
   let config = {};
   try {
     if (fs.existsSync(configPath)) {

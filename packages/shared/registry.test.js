@@ -3,8 +3,8 @@
 // A project's port is the `port:` key in its .build-studio/config.yaml; the
 // port stored in the registry is only the fallback (docs/backlog-api-contract.md
 // §1). The registry resolves its path from the home directory when it loads,
-// so each case runs in a child process with HOME pointed at a scratch dir and
-// never touches the real ~/.build-studio.
+// so each case runs in a child process with BUILD_STUDIO_HOME pointed at a
+// scratch dir and never touches the real ~/.build-studio.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -31,7 +31,7 @@ function scratch(projects) {
 
 function inChild(home, expr) {
   const out = execFileSync(process.execPath, ['-e', `const r = require(${JSON.stringify(REGISTRY)}); process.stdout.write(JSON.stringify(${expr}))`], {
-    env: { ...process.env, HOME: home }, encoding: 'utf8',
+    env: { ...process.env, HOME: home, BUILD_STUDIO_HOME: path.join(home, '.build-studio') }, encoding: 'utf8',
   });
   return JSON.parse(out);
 }

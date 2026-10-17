@@ -49,6 +49,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { REGISTRY_PATH } = require('@build-studio/shared/constants');
 const { execFileSync } = require('child_process');
 
 const CHILD_ENV = {
@@ -92,7 +93,7 @@ function parseArgs(argv) {
     quiet: false,
     dirs: [],
     scanProjects: false,
-    registry: path.join(os.homedir(), '.build-studio', 'registry.json'),
+    registry: REGISTRY_PATH,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];

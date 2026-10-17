@@ -1317,7 +1317,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   }
 
   // --- Learnings effectiveness tracking ---
-  const LEARNINGS_STATS_PATH = path.join(require('os').homedir(), '.build-studio', 'learnings-stats.json');
+  const LEARNINGS_STATS_PATH = path.join(require('@build-studio/shared/constants').BUILD_STUDIO_DIR, 'learnings-stats.json');
 
   function loadLearningsStats() {
     try {

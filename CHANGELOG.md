@@ -44,6 +44,17 @@ that move underneath you without your having edited anything.
 
 - **A "Ready to launch" button showed at the owner checks step.** The step
   launches nothing and the button did nothing; it is gone.
+- **Running the test suite wrote into your real Build Studio and Claude Code
+  files.** Tests that drive a workflow to completion ran learnings
+  maintenance against `~/.build-studio/learnings`; tests that deliver a QA
+  report made a real decision-layer call with your OpenRouter key and logged
+  the fixture run to `~/.build-studio/decisions/shadow.jsonl`; and every
+  fixture repo a test created was added to `~/.claude.json` as a trusted
+  folder (one machine had 4,700 such entries). A test process now gets an
+  empty home of its own, removed when it exits, so none of this reaches your
+  files and no test reads your hub config or spends on your key. The new
+  `BUILD_STUDIO_HOME` environment variable points Build Studio at another
+  home folder; normal use is unchanged.
 
 ### Changed
 
@@ -64,6 +75,13 @@ that move underneath you without your having edited anything.
 ### Upgrade steps
 
 **In Build Studio:** rebuild the hub, run the full inject, restart the app.
+
+**On a machine where you ran the tests before this change (optional):** the
+old runs may have left fixture entries behind. In `~/.claude.json`, project
+entries whose path is a temp folder (`/var/folders/…/T/…`, `/tmp/…`) are test
+leftovers; remove them only while no Claude Code session is open, since it
+rewrites that file. In `~/.build-studio/decisions/shadow.jsonl`, lines whose
+`project` is a fixture name such as `lean-fixture` are not real runs.
 
 **In each managed project:** nothing to do. The first Save for later adds
 `.build-studio/saved-owner-checks.json` to the project's `.gitignore` and
