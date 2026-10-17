@@ -21,6 +21,31 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-17 — QA on a test-only branch runs only the tests it changed
+
+### Changed
+
+- **With `qa_validation.scope: new-uitests`, a branch that changes only test
+  code no longer runs the whole unit-test target.** A story that only added
+  tests (evidence captures, a parity test) still sat through every unit test
+  in QA: on one project, 8 of the step's 11 minutes, re-running thousands of
+  tests against app code nobody had touched. QA now runs just the test classes
+  the branch adds or modifies, unit and UI alike. xcodebuild still builds every
+  test target, so a test that no longer compiles still fails. "Test-only" is
+  strict: every changed file under the app folder must be a Swift file in a
+  test target that declares a test class (or is deleted), and every line the
+  branch changes in `project.pbxproj` must name one of those files. Any app
+  source, shared test helper, test resource, scheme or build-setting change
+  runs the full unit target as before. Projects on `scope: full` are
+  unchanged.
+
+### Upgrade steps
+
+**In Build Studio:** sync the project-server (`node inject-resources.js
+--sync-only` in `packages/desktop`) and restart the app.
+
+**In each managed project:** nothing to do.
+
 ## 2026-10-12 — An agent's question no longer disappears when you open its terminal
 
 ### Added

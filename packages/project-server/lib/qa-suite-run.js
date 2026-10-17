@@ -552,6 +552,69 @@ function nativeSuiteRelevance({ projectRoot, projectPath, changedFiles, extraPat
     : { relevant: false, reason: `the branch changes nothing under ${list.join(', ')}`, watched: list };
 }
 
+/**
+ * Does this branch change only test code? Then which test classes need to run?
+ *
+ * fazon's FAZ-444 changed no app source, only two new unit-test files, one new
+ * XCUITest file and their project.pbxproj entries, and QA still ran all 8,023
+ * unit tests (8 of its 11 minutes). Unchanged app code cannot make an unchanged
+ * test give a different result, so a test-only branch runs just the test
+ * classes it adds or modifies. xcodebuild still builds every test target under
+ * `-only-testing`, so a test that no longer compiles still fails the run.
+ *
+ * Test-only means every changed file that the app builds from (`watched`, from
+ * nativeSuiteRelevance) is either
+ *   - a Swift file in a test target (a folder ending in `Tests`) that declares
+ *     at least one test class, or is deleted. A changed file declaring none is
+ *     shared test code (fixtures, helpers, a base TestCase) that unchanged
+ *     tests depend on, so it runs the full target;
+ *   - project.pbxproj, when every line the diff adds or removes names one of
+ *     those test files. Anything else in it (build settings, a new group, an
+ *     app file) is an app change.
+ * When in doubt it says not test-only, and the caller keeps its full run.
+ *
+ * @param changes   [{ status: 'A'|'M'|'D'|…, file }] from `git diff --name-status --no-renames`
+ * @param pbxprojDiff  the `git diff` text of project.pbxproj, or null when unreadable
+ * @returns {{ testOnly: true, classes: string[] } | { testOnly: false, reason: string }}
+ */
+function testOnlyBranchScope({ changes, watched, projectPath, pbxprojDiff = null, readFile }) {
+  if (!Array.isArray(changes) || !Array.isArray(watched) || !watched.length) {
+    return { testOnly: false, reason: 'the branch diff is unknown' };
+  }
+  const isWatched = (f) => watched.some((w) => (w.endsWith('/') ? f.startsWith(w) : f === w || f.startsWith(`${w}/`)));
+  const pbxprojPath = projectPath ? `${projectPath.replace(/\\/g, '/')}/project.pbxproj` : null;
+  const testTargetOf = (f) => (f.endsWith('.swift') ? f.split('/').slice(0, -1).find((seg) => /Tests$/.test(seg)) : null);
+  const classes = [];
+  const testFileNames = new Set();
+  let pbxprojChanged = false;
+  for (const { status, file } of changes) {
+    if (!isWatched(file)) continue;
+    if (file === pbxprojPath) { pbxprojChanged = true; continue; }
+    const target = testTargetOf(file);
+    if (!target) return { testOnly: false, reason: `the branch changes ${file}, which is not test code` };
+    testFileNames.add(path.posix.basename(file));
+    if (status === 'D') continue;
+    let src;
+    try { src = readFile(file); } catch (_) { return { testOnly: false, reason: `${file} could not be read` }; }
+    const declared = testClassesIn(src);
+    if (!declared.length) return { testOnly: false, reason: `${file} declares no test class, so it is shared test code other tests may use` };
+    for (const cls of declared) if (!classes.includes(`${target}/${cls}`)) classes.push(`${target}/${cls}`);
+  }
+  if (pbxprojChanged) {
+    if (typeof pbxprojDiff !== 'string') return { testOnly: false, reason: 'the project.pbxproj diff could not be read' };
+    for (const line of pbxprojDiff.split('\n')) {
+      if (!/^[+-]/.test(line) || /^(\+\+\+|---)/.test(line)) continue;
+      if (!line.slice(1).trim()) continue;
+      const named = line.match(/\/\* ([^*]+?\.swift)(?: in \w+)? \*\//);
+      if (!named || !testFileNames.has(named[1])) {
+        return { testOnly: false, reason: `project.pbxproj changes more than test-file entries (${line.slice(1).trim().slice(0, 80)})` };
+      }
+    }
+  }
+  if (!classes.length) return { testOnly: false, reason: 'the branch adds or modifies no test class' };
+  return { testOnly: true, classes };
+}
+
 function xcodebuildInFlight({ run = execFileSync } = {}) {
   let pids = [];
   try {
@@ -889,6 +952,7 @@ module.exports = {
   uiTestIdentifiers,
   isXcodebuildTestArgs,
   nativeSuiteRelevance,
+  testOnlyBranchScope,
   DEFAULT_TIMEOUT_MINUTES,
   PROGRESS_INTERVAL_MS,
   parallelArgs,

@@ -8690,7 +8690,7 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       //     waiting on xcodebuild created the "no output, must be stuck" loop.
       // PRD-001 backlog: qa_validation.scope='new-uitests' narrows XCUITest to
       // only new/modified test files in this branch (full unit-test target still
-      // runs). Regression XCUITests are run manually via Operations → UITests
+      // runs, unless the branch changes only test code). Regression XCUITests are run manually via Operations → UITests
       // tab before merge. Saves 20-40 min per QA round on iOS-sized projects.
       const qaScope = (config.qa_validation && config.qa_validation.scope) || 'full';
       // Resolve the .xcodeproj and scheme ONCE, here, before anything derives a
@@ -8768,11 +8768,39 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
           const iosProject = (suiteTarget && suiteTarget.project)
             || (config.simulator && config.simulator.project) || `ios/${iosScheme}.xcodeproj`;
           const unitTarget = (config.qa_validation && config.qa_validation.unit_test_target) || `${iosScheme}Tests`;
-          const onlyTestingFlags = [`-only-testing:${unitTarget}`]
-            .concat(testClasses.map(c => `-only-testing:${c}`))
-            .map(s => `  ${s}`)
+          // A branch that changes only test code runs only the test classes it
+          // adds or modifies, not the whole unit target (qa-suite-run.js).
+          let testOnly = null;
+          try {
+            const changes = execFileSync('git', ['diff', '--name-status', '--no-renames', 'main...HEAD'], { cwd: projectRoot, encoding: 'utf8' })
+              .split('\n').map(l => l.trim()).filter(Boolean)
+              .map(l => { const [status, file] = l.split('\t'); return { status: status[0], file }; });
+            const { watched } = qaSuite.nativeSuiteRelevance({
+              projectRoot, projectPath: iosProject, changedFiles: changes.map(c => c.file),
+              extraPaths: (config.qa_validation && config.qa_validation.native_suite_paths) || [],
+            });
+            let pbxprojDiff = null;
+            try {
+              pbxprojDiff = execFileSync('git', ['diff', 'main...HEAD', '--', `${iosProject}/project.pbxproj`], { cwd: projectRoot, encoding: 'utf8' });
+            } catch (_) { pbxprojDiff = null; }
+            testOnly = qaSuite.testOnlyBranchScope({
+              changes, watched, projectPath: iosProject, pbxprojDiff,
+              readFile: (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8'),
+            });
+            console.log(`[qa-suite] test-only branch: ${testOnly.testOnly ? `yes, running ${testOnly.classes.length} test class(es)` : `no, ${testOnly.reason}`}`);
+          } catch (e) {
+            testOnly = null;
+          }
+          const scopeTargets = testOnly && testOnly.testOnly
+            ? [...new Set([...testOnly.classes, ...testClasses])]
+            : [unitTarget, ...testClasses];
+          const onlyTestingFlags = scopeTargets
+            .map(c => `  -only-testing:${c}`)
             .join(' \\\n');
-          qaScopeTargets = [unitTarget, ...testClasses];
+          qaScopeTargets = scopeTargets;
+          const testOnlySection = testOnly && testOnly.testOnly
+            ? `**This branch changes only test code** (no app source; its project.pbxproj changes only add or remove those test files), so the full unit target (\`${unitTarget}\`) does not run either: unchanged app code cannot make an unchanged test give a different result. Only the test classes this branch adds or modifies run:\n${scopeTargets.map(c => '- `' + c + '`').join('\n')}\n\nxcodebuild still builds every test target, so a test that no longer compiles still fails the run. Do not run the rest of the unit target yourself.`
+            : '';
           qaScopeSection = `\n\n## QA SCOPE — NEW UITests ONLY (qa_validation.scope=new-uitests)
 
 Regression XCUITests take 20-40 min and aren't validating *this PRD's* surface — they're re-running unrelated tests that haven't changed. Skip them this round; the operator runs full regression manually via the **Operations → UITests** tab before pushing to remote.
@@ -8792,7 +8820,7 @@ ${onlyTestingFlags} \\
   2>&1 | tee /tmp/qa-test-output.log
 \`\`\`
 
-The first \`-only-testing:${unitTarget}\` flag scopes to all unit tests in the unit-test target; subsequent \`-only-testing:Target/Class\` flags scope XCUITest to just the new/modified classes. Any pre-existing XCUITest file unchanged in this branch is intentionally excluded — that coverage runs in the manual regression step.`;
+${testOnlySection || `The first \`-only-testing:${unitTarget}\` flag scopes to all unit tests in the unit-test target; subsequent \`-only-testing:Target/Class\` flags scope XCUITest to just the new/modified classes.`} Any pre-existing XCUITest file unchanged in this branch is intentionally excluded — that coverage runs in the manual regression step.`;
         } catch (e) {
           console.warn('[workflow] qa_validation.scope=new-uitests: could not compute scoped tests:', e.message);
         }

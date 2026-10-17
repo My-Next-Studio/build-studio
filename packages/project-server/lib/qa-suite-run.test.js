@@ -790,3 +790,50 @@ test('nativeSuiteRelevance runs the suite whenever it cannot tell', () => {
   assert.equal(unreadable.relevant, false);
   assert.deepEqual(unreadable.watched, ['ios/']);
 });
+
+// A branch that changes only test code ran the whole unit target anyway: fazon's
+// FAZ-444 added three test files and their pbxproj entries, and QA spent 8 of its
+// 11 minutes on 8,023 unchanged unit tests. It now runs only the changed classes.
+test('testOnlyBranchScope: a test-only branch runs just the classes it adds or modifies', () => {
+  const { testOnlyBranchScope } = require('./qa-suite-run');
+  const sources = {
+    'ios/AppTests/Erase/NewParityTests.swift': 'final class NewParityTests: XCTestCase {}',
+    'ios/AppTests/Erase/RenderTests.swift': '@MainActor\nfinal class RenderTests: XCTestCase {}\nclass Other: XCTestCase {}',
+    'ios/AppUITests/ConfirmUITests.swift': 'final class ConfirmUITests: XCTestCase {}',
+    'ios/AppTests/Support/Fixtures.swift': 'enum Fixtures { static let a = 1 }',
+    'ios/AppTests/Support/BaseTestCase.swift': 'class AppBaseTestCase: XCTestCase {}',
+  };
+  const readFile = (f) => { if (!(f in sources)) throw new Error('ENOENT'); return sources[f]; };
+  const pbxEntries = '+\t\tE1 /* NewParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2 /* NewParityTests.swift */; };\n'
+    + '+\t\tE2 /* RenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderTests.swift; sourceTree = "<group>"; };\n'
+    + '+\t\t\t\tE3 /* ConfirmUITests.swift in Sources */,\n';
+  const pbxDiff = `diff --git a/ios/App.xcodeproj/project.pbxproj b/ios/App.xcodeproj/project.pbxproj\n--- a/ios/App.xcodeproj/project.pbxproj\n+++ b/ios/App.xcodeproj/project.pbxproj\n@@ -24,6 +24,7 @@\n \t\tFA /* Settings.swift in Sources */ = {isa = PBXBuildFile; };\n${pbxEntries}`;
+  const branch = [
+    { status: 'A', file: 'ios/AppTests/Erase/NewParityTests.swift' },
+    { status: 'A', file: 'ios/AppTests/Erase/RenderTests.swift' },
+    { status: 'A', file: 'ios/AppUITests/ConfirmUITests.swift' },
+    { status: 'M', file: 'ios/App.xcodeproj/project.pbxproj' },
+    { status: 'A', file: 'docs/qa/evidence/shot.png' },
+    { status: 'M', file: 'docs/backlog/X-1.md' },
+  ];
+  const run = (changes, diff = pbxDiff) => testOnlyBranchScope({ changes, watched: ['ios/'], projectPath: 'ios/App.xcodeproj', pbxprojDiff: diff, readFile });
+
+  assert.deepEqual(run(branch), { testOnly: true, classes: ['AppTests/NewParityTests', 'AppTests/RenderTests', 'AppTests/Other', 'AppUITests/ConfirmUITests'] });
+  assert.equal(run([...branch, { status: 'D', file: 'ios/AppTests/OldTests.swift' }]).testOnly, true, 'a deleted test file is fine; the build still compiles the target');
+
+  const no = (changes, diff, why) => {
+    const r = run(changes, diff);
+    assert.equal(r.testOnly, false, why);
+    return r.reason;
+  };
+  assert.match(no([...branch, { status: 'M', file: 'ios/App/EraseScreens.swift' }], pbxDiff, 'app source'), /EraseScreens\.swift, which is not test code/);
+  assert.match(no([...branch, { status: 'M', file: 'ios/AppTests/Support/Fixtures.swift' }], pbxDiff, 'shared test code'), /shared test code/);
+  assert.match(no([...branch, { status: 'M', file: 'ios/AppTests/Support/BaseTestCase.swift' }], pbxDiff, 'a base test class'), /shared test code/);
+  no([...branch, { status: 'A', file: 'ios/AppTests/Fixtures/data.json' }], pbxDiff, 'a test resource');
+  no([...branch, { status: 'M', file: 'ios/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme' }], pbxDiff, 'the scheme');
+  assert.match(no(branch, `${pbxDiff}+\t\t\t\tIPHONEOS_DEPLOYMENT_TARGET = 18.0;\n`, 'a build setting'), /more than test-file entries/);
+  no(branch, `${pbxDiff}+\t\tE9 /* EraseScreens.swift in Sources */ = {isa = PBXBuildFile; };\n`, 'an app file added to the project');
+  no(branch, null, 'an unreadable pbxproj diff');
+  no([{ status: 'M', file: 'docs/a.md' }], pbxDiff, 'no test class at all');
+  no(null, pbxDiff, 'an unknown diff');
+});
