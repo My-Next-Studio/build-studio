@@ -38,6 +38,8 @@ const qaUnchangedLib = require('../qa-unchanged');
 const awaitingOwner = require('../awaiting-owner');
 const jsTestScope = require('../js-test-scope');
 const workQueue = require('../work-queue');
+const savedOwnerChecks = require('../saved-owner-checks');
+const { ensureIgnoreRule } = require('../ignore-rule');
 const docBudget = require('../doc-budget');
 const { subagentUsage, withSubagents } = require('../subagent-usage');
 
@@ -6024,10 +6026,29 @@ Fix only the issues raised. Commit your changes.`,
     wf.currentStep = 'completed';
   }
 
-  // Done at owner_checks: complete the run. No evidence, no condition.
-  function finishOwnerChecks(wf) {
-    wf.steps[OWNER_CHECKS_STEP] = { ...(wf.steps[OWNER_CHECKS_STEP] || {}), status: 'completed', completedAt: new Date().toISOString() };
+  // Done, Skip or Save for later at owner_checks: complete the run. No
+  // evidence, no condition. `outcome` records which (done | skipped | saved).
+  function finishOwnerChecks(wf, outcome) {
+    wf.steps[OWNER_CHECKS_STEP] = {
+      ...(wf.steps[OWNER_CHECKS_STEP] || {}), status: 'completed', completedAt: new Date().toISOString(),
+      ...(outcome ? { outcome } : {}),
+    };
     wf.currentStep = 'completed';
+  }
+
+  // The saved-checks file is local state. Ignore it before it is first written
+  // and commit the rule (scoped to .gitignore), as the work queue does: a
+  // modified .gitignore on the default branch would block the next run.
+  function ensureSavedChecksIgnored() {
+    try {
+      if (ensureIgnoreRule(projectRoot, savedOwnerChecks.IGNORE_RULE) && fs.existsSync(path.join(projectRoot, '.git'))) {
+        scopedCommit(projectRoot, ['.gitignore'], 'chore: gitignore the saved owner checks')
+          .then((r) => { if (!r.committed) console.warn(`[owner-checks] .gitignore not committed: ${r.reason}`); })
+          .catch((e) => console.warn(`[owner-checks] .gitignore not committed: ${e.message}`));
+      }
+    } catch (e) {
+      console.warn(`[owner-checks] could not update .gitignore: ${e.message}`);
+    }
   }
 
   function advanceBySequence(wf, res, current, fallback) {
@@ -8504,11 +8525,16 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       return res.json({ workflow: wf });
     }
 
-    // owner_checks: the owner's Done (approve or skip) completes the run.
-    // Anything else leaves it showing the list.
+    // owner_checks: the owner's Done (approve), Skip, or Save for later
+    // completes the run. Save for later keeps the checks on the Queue tab
+    // (lib/saved-owner-checks.js). Anything else leaves it showing the list.
     if (wf.currentStep === OWNER_CHECKS_STEP) {
-      if (action !== 'approve' && action !== 'skip') return res.json({ workflow: wf });
-      finishOwnerChecks(wf);
+      if (action !== 'approve' && action !== 'skip' && action !== 'save_for_later') return res.json({ workflow: wf });
+      if (action === 'save_for_later') {
+        ensureSavedChecksIgnored();
+        savedOwnerChecks.saveForLater(config.statePath, wf, (wf.steps[OWNER_CHECKS_STEP] || {}).checks || wf.ownerChecks);
+      }
+      finishOwnerChecks(wf, { approve: 'done', skip: 'skipped', save_for_later: 'saved' }[action]);
       writeWorklog(wf);
       state.saveWorkflow(wf);
       return res.json({ workflow: wf, completed: true });

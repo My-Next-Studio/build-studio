@@ -204,3 +204,70 @@ test('GET /api/overview describes the project: its queued run, the next entry an
     assert.match(o.progress.lastCommit.subject, /gitignore the work queue|init/);
   } finally { await srv.close(); repo.clean(); }
 });
+
+// Owner checks saved for later (owner request, 2026-10-17): at a run's
+// owner_checks step, Save for later completes the run and keeps its checks on
+// the Queue tab until the owner marks them done or skips them. Skip and Done
+// keep nothing. Neither touches the backlog item.
+async function atOwnerChecks(srv, checks) {
+  const r = await srv.call('POST', '/api/workflow/start', { type: 'execution', input: 'LS-002', preset: 'lean' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const wf = srv.state.loadWorkflow();
+  wf.currentStep = 'capture_learnings';
+  wf.steps.capture_learnings = { status: 'pending', agents: [] };
+  wf.ownerChecks = checks;
+  srv.state.saveWorkflow(wf);
+  await srv.call('POST', '/api/workflow/advance', {});
+  assert.equal(srv.state.loadWorkflow().currentStep, 'owner_checks');
+}
+
+async function waitUntilClean(root) {
+  for (let i = 0; i < 50 && tracked(root) !== ''; i++) await new Promise((r) => setTimeout(r, 50));
+  return tracked(root);
+}
+
+test('Save for later completes the run and lists its checks on the queue until done or skipped', async () => {
+  const repo = makeFixtureRepo();
+  const srv = await mount(repo.root);
+  try {
+    await atOwnerChecks(srv, [
+      { text: 'Look at the notes list at 1024 × 720', step: 'qa_validation' },
+      { text: 'Save a note on a device', step: 'qa_validation' },
+    ]);
+    const saved = await srv.call('POST', '/api/workflow/advance', { action: 'save_for_later' });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const wf = srv.state.loadWorkflow();
+    assert.equal(wf.currentStep, 'completed', 'saving completes the run, as Done does');
+    assert.equal(wf.steps.owner_checks.outcome, 'saved');
+
+    let q = (await srv.call('GET', '/api/work-queue')).body;
+    assert.equal(q.savedChecks.length, 1);
+    const entry = q.savedChecks[0];
+    assert.equal(entry.item, 'LS-002');
+    assert.equal(entry.itemInfo.title, 'Save notes');
+    assert.deepEqual(entry.checks.map((c) => c.text), ['Look at the notes list at 1024 × 720', 'Save a note on a device']);
+    assert.equal(await waitUntilClean(repo.root), '', 'the saved file is ignored and the rule committed');
+
+    assert.equal((await srv.call('DELETE', '/api/work-queue/saved-checks/nope?outcome=done')).status, 404);
+    const done = await srv.call('DELETE', `/api/work-queue/saved-checks/${entry.id}?outcome=done`);
+    assert.equal(done.status, 200);
+    assert.deepEqual(done.body.savedChecks, []);
+    q = (await srv.call('GET', '/api/work-queue')).body;
+    assert.deepEqual(q.savedChecks, []);
+  } finally { await srv.close(); repo.clean(); }
+});
+
+test('Skip and Done at owner checks keep nothing for later', async () => {
+  for (const action of ['skip', 'approve']) {
+    const repo = makeFixtureRepo();
+    const srv = await mount(repo.root);
+    try {
+      await atOwnerChecks(srv, [{ text: 'Look at the notes list', step: 'qa_validation' }]);
+      await srv.call('POST', '/api/workflow/advance', { action });
+      const wf = srv.state.loadWorkflow();
+      assert.equal(wf.currentStep, 'completed', action);
+      assert.equal(wf.steps.owner_checks.outcome, action === 'skip' ? 'skipped' : 'done');
+      assert.deepEqual((await srv.call('GET', '/api/work-queue')).body.savedChecks, [], action);
+    } finally { await srv.close(); repo.clean(); }
+  }
+});

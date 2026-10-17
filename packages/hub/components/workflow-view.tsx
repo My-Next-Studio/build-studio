@@ -1960,10 +1960,19 @@ function StepDetail({
           )}
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', margin: '10px 0' }}>
             The change is merged. Run any of these you want; nothing needs to be attached or signed off.
+            Not a good moment? Save them for later: they wait at the bottom of the Queue tab.
           </div>
-          {step.status !== 'completed' && (
-            <button className="wf-btn primary" disabled={!!advancing} onClick={() => onAdvance('approve')}>Done</button>
-          )}
+          {step.status !== 'completed' ? (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="wf-btn primary" disabled={!!advancing} onClick={() => onAdvance('approve')} title="I ran the checks I wanted. Complete the run.">Done</button>
+              <button className="wf-btn secondary" disabled={!!advancing} onClick={() => onAdvance('save_for_later')} title="Complete the run and keep these checks on the Queue tab for later.">Save for later</button>
+              <button className="wf-btn secondary" disabled={!!advancing} onClick={() => onAdvance('skip')} title="Complete the run without keeping the checks.">Skip</button>
+            </div>
+          ) : (step as { outcome?: string }).outcome ? (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)' }}>
+              {{ done: 'Marked done.', skipped: 'Skipped.', saved: 'Saved for later on the Queue tab.' }[(step as { outcome?: string }).outcome!] || null}
+            </div>
+          ) : null}
         </div>
       )}
 
@@ -2069,7 +2078,8 @@ function StepDetail({
       )}
 
       {/* Actions */}
-      {isCurrentStep && step.status === 'pending' && agents.length === 0 && activeKey !== 'owner_interview' && (() => {
+      {/* owner_checks has its own buttons (above); it launches nothing. */}
+      {isCurrentStep && step.status === 'pending' && agents.length === 0 && activeKey !== 'owner_interview' && activeKey !== 'owner_checks' && (() => {
         // Manual steps that don't launch agents — show approve/skip instead
         const manualSteps = ['demo_review', 'device_testing', 'merge_to_main', 'merge_for_review', 'owner_signoff', 'owner_consultations']
         if (manualSteps.includes(activeKey)) {

@@ -56,7 +56,7 @@ Use these words with the owner, and keep them distinct:
 | running | agents are working; `progress.lastActivity` shows when they last did |
 | waiting for you | `needsOwner` is set, or `queue.current.status.state` is `waiting_for_owner` |
 | ready to merge | the run reached its merge gate; only the owner approves a merge |
-| owner checks | merged; the run lists recommended manual checks (`steps.owner_checks.checks`). Optional: read them to the owner; the owner runs them or not and clicks Done, with no proof |
+| owner checks | merged; the run lists recommended manual checks (`steps.owner_checks.checks`). Optional: read them to the owner; the owner runs them (Done), saves them for later, or skips them, with no proof. Saved ones are in `queue.savedChecks` |
 | finished | the job's own phase verifiably finished (a draft has its PRD, a review left the item Reviewed, a build or fix merged) |
 | stopped | the run ended without finishing its phase (cancelled, for instance) |
 | blocked | `queue.next.ready` is false; `reason` is the start's own refusal |
@@ -75,6 +75,8 @@ this conversation, and say what you did.
 | "Move it first" / "Remove it" | `PATCH <port>/api/work-queue/<entryId>` `{ "position": 0 }` / `DELETE <port>/api/work-queue/<entryId>` |
 | "Merge it" (the run is ready to merge) | `POST <port>/api/workflow/advance` `{ "action": "approve" }` |
 | "Done with the checks" (the run is at owner checks) | `POST <port>/api/workflow/advance` `{ "action": "approve" }` |
+| "Save the checks for later" / "Skip the checks" (at owner checks) | `POST <port>/api/workflow/advance` `{ "action": "save_for_later" }` / `{ "action": "skip" }` |
+| "I did the saved checks for FAZ-123" / "Drop them" | `DELETE <port>/api/work-queue/saved-checks/<id>?outcome=done` / `?outcome=skipped` (the id is in `queue.savedChecks`) |
 | "Start the next one" | if the previous run's step is `completed`: `POST <port>/api/workflow/finish` first, then `POST <port>/api/work-queue/<next.entryId>/start` |
 
 Rules that hold whatever the owner's words:

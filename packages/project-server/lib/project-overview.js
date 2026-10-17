@@ -82,6 +82,8 @@ function projectOverview({ name, wf, queue, draft, lastCommit, source = 'live', 
       next: queue.next || null,
       following: (queue.pending || []).slice(1, 4).map((e) => ({ id: e.id, item: e.item, action: e.action || null, title: e.itemInfo ? e.itemInfo.title : null })),
       pendingCount: (queue.pending || []).length,
+      // Manual checks the owner saved for later from finished runs.
+      savedChecks: (queue.savedChecks || []).map((e) => ({ id: e.id, item: e.item, title: e.itemInfo ? e.itemInfo.title : null, checks: e.checks.map((c) => c.text) })),
     } : null,
   };
 }

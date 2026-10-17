@@ -21,7 +21,29 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-17 — QA on a test-only branch runs only the tests it changed
+## 2026-10-17 — Owner checks can wait for later; test-only branches run only their tests
+
+### Added
+
+- **Save a run's owner checks for later.** The owner checks step at the end of
+  an execution or bugfix run now has three buttons: **Done** (you ran them),
+  **Save for later**, and **Skip**. All three complete the run as Done did.
+  Save for later also keeps the checks on the **Queue** tab, in a new
+  "Manual checks for later" list at the bottom: one row per story or task,
+  expanding to the same checks the run showed, with **Done** and **Skip** to
+  take a row off the list. The end of a run is often the wrong moment for a
+  manual check; this lets them pile up until a good one, such as before a
+  release. A second run for the same item adds its new checks to that item's
+  row. Nothing is gated on the list: moving an item to Done in the backlog
+  works whatever it holds. The list lives in
+  `.build-studio/saved-owner-checks.json`, local and gitignored (the rule is
+  added and committed the first time something is saved). The project
+  overview carries it as `queue.savedChecks`.
+
+### Fixed
+
+- **A "Ready to launch" button showed at the owner checks step.** The step
+  launches nothing and the button did nothing; it is gone.
 
 ### Changed
 
@@ -41,10 +63,11 @@ that move underneath you without your having edited anything.
 
 ### Upgrade steps
 
-**In Build Studio:** sync the project-server (`node inject-resources.js
---sync-only` in `packages/desktop`) and restart the app.
+**In Build Studio:** rebuild the hub, run the full inject, restart the app.
 
-**In each managed project:** nothing to do.
+**In each managed project:** nothing to do. The first Save for later adds
+`.build-studio/saved-owner-checks.json` to the project's `.gitignore` and
+commits that one line.
 
 ## 2026-10-12 — An agent's question no longer disappears when you open its terminal
 

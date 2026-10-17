@@ -9,6 +9,7 @@ const { deriveNeedsAttention } = require('../needs-attention');
 const { ensureIgnoreRule } = require('../ignore-rule');
 const { scopedCommit } = require('../scoped-commit');
 const wq = require('../work-queue');
+const savedOwnerChecks = require('../saved-owner-checks');
 const { projectOverview } = require('../project-overview');
 const { execFileSync } = require('child_process');
 
@@ -64,11 +65,14 @@ function createWorkQueueRouter(config, { state, workflowRouter, draftingRouter, 
     const outside = wf && !linked
       ? { kind: 'workflow', id: wf.id, type: wf.type, item: wf.itemId || null, step: wf.currentStep }
       : null;
+    // Manual checks saved for later from finished runs' owner_checks steps.
+    const savedChecks = savedOwnerChecks.loadSaved(statePath).map((e) => ({ ...e, itemInfo: e.item ? brief(item(e.item)) : null }));
     return {
       observedAt: new Date().toISOString(),
       current,
       outsideQueue: outside,
       pending,
+      savedChecks,
       next: pending[0] ? { entryId: pending[0].id, item: pending[0].item, title: pending[0].itemInfo ? pending[0].itemInfo.title : null, ...readiness(pending[0]) } : null,
     };
   }
@@ -153,6 +157,16 @@ function createWorkQueueRouter(config, { state, workflowRouter, draftingRouter, 
       if (queue.pending.length === before) return res.status(404).json({ error: 'no entry with that id' });
     }
     wq.saveQueue(statePath, queue);
+    changed(res);
+  });
+
+  // Done or Skip on a saved owner check: either way it leaves the list. The
+  // run is long finished and the backlog item is not touched.
+  router.delete('/work-queue/saved-checks/:id', (req, res) => {
+    const outcome = req.query.outcome === 'skipped' ? 'skipped' : 'done';
+    const entry = savedOwnerChecks.removeSaved(statePath, req.params.id);
+    if (!entry) return res.status(404).json({ error: 'no saved checks with that id' });
+    console.log(`[owner-checks] ${entry.item || entry.id}: saved checks ${outcome}`);
     changed(res);
   });
 

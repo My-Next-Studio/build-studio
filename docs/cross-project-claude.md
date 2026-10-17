@@ -110,7 +110,8 @@ line.
 - **A reviewer** lists such checks under `### Owner checks` in its report and
   judges everything else as usual; they never make a change unapproved. The
   workflow collects them and shows them in its last step, **Owner checks**,
-  where the owner runs them or not and clicks Done.
+  where the owner runs them (Done), saves them for later on the Queue tab, or
+  skips them.
 - **Holding a run for the owner** is only for a product decision the spec left
   open and the build cannot go on without (which option, whether to spend
   money). Put that decision in the PRD's open questions, to be settled at

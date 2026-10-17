@@ -15,12 +15,15 @@ interface CurrentEntry extends Entry {
   run?: { kind: string; id?: string; type?: string }
   status?: { state: string; step?: string; detail?: string } | null
 }
+interface SavedCheck { text: string; step?: string | null; runId?: string }
+interface SavedChecks { id: string; item: string | null; runType: string | null; savedAt: string; updatedAt?: string; checks: SavedCheck[]; itemInfo: ItemInfo | null }
 interface Next { entryId: string; item: string; ready: boolean; action: string | null; reason?: string; canOverride?: boolean }
 interface QueueView {
   observedAt: string
   current: CurrentEntry | null
   outsideQueue: { id: string; type: string; item: string | null; step: string } | null
   pending: Entry[]
+  savedChecks?: SavedChecks[]
   next: Next | null
   error?: string
 }
@@ -53,6 +56,7 @@ export function QueueTab() {
   const [itemInput, setItemInput] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [openChecks, setOpenChecks] = useState<Record<string, boolean>>({})
 
   const load = useCallback(() => {
     api.get('/work-queue').then((v: QueueView) => setView(v)).catch(() => {})
@@ -89,6 +93,7 @@ export function QueueTab() {
   const move = (id: string, position: number) => act(() => api.patch(`/work-queue/${id}`, { position }))
   const setAction = (id: string, action: string) => act(() => api.patch(`/work-queue/${id}`, { action: action || null }))
   const remove = (id: string) => act(() => api.del(`/work-queue/${id}`))
+  const resolveChecks = (id: string, outcome: 'done' | 'skipped') => act(() => api.del(`/work-queue/saved-checks/${id}?outcome=${outcome}`))
   const start = (id: string, override = false) => act(() => api.post(`/work-queue/${id}/start`, override ? { override: true } : {}))
 
   if (!view) return <div style={{ padding: 20, fontFamily: 'var(--mono)', color: 'var(--muted)' }}>Loading…</div>
@@ -194,6 +199,50 @@ export function QueueTab() {
           />
           <button className="wf-btn secondary" disabled={busy || !itemInput.trim()} onClick={add}>Add to queue</button>
         </div>
+      </section>
+
+      <section>
+        <div style={sectionHeader}>Manual checks for later ({(view.savedChecks || []).length})</div>
+        {(view.savedChecks || []).length === 0 ? (
+          <div style={{ color: 'var(--muted)' }}>
+            None saved. At a run&apos;s owner checks, Save for later puts them here, to run before a release.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(view.savedChecks || []).map(c => {
+              const open = !!openChecks[c.id]
+              return (
+                <div key={c.id} style={{ ...card, padding: '6px 10px' }}>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <button
+                      style={{ ...smallBtn, border: 'none', background: 'transparent', padding: 0, width: 18 }}
+                      onClick={() => setOpenChecks(o => ({ ...o, [c.id]: !open }))}
+                      title={open ? 'Hide the checks' : 'Show what to check'}
+                    >{open ? '▾' : '▸'}</button>
+                    <strong style={{ width: 70 }}>{c.item || '—'}</strong>
+                    <span
+                      style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                      onClick={() => setOpenChecks(o => ({ ...o, [c.id]: !open }))}
+                    >
+                      {c.itemInfo ? c.itemInfo.title : c.item ? <span style={{ color: 'var(--muted)' }}>item no longer exists</span> : null}
+                    </span>
+                    <span style={{ color: 'var(--muted)' }}>{c.checks.length} check{c.checks.length === 1 ? '' : 's'}</span>
+                    <span style={{ color: 'var(--muted)', width: 80 }} title={`Saved ${new Date(c.savedAt).toLocaleString()}`}>{new Date(c.updatedAt || c.savedAt).toLocaleDateString()}</span>
+                    <button style={smallBtn} disabled={busy} onClick={() => resolveChecks(c.id, 'done')} title="I ran these. Remove them from the list.">Done</button>
+                    <button style={smallBtn} disabled={busy} onClick={() => resolveChecks(c.id, 'skipped')} title="Not running these. Remove them from the list.">Skip</button>
+                  </div>
+                  {open && (
+                    <ul style={{ margin: '8px 0 2px', paddingLeft: 46, lineHeight: 1.6 }}>
+                      {c.checks.map((k, i) => (
+                        <li key={i}>{k.text}{k.step ? <span style={{ color: 'var(--muted)' }}> · from {k.step}</span> : null}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </section>
     </div>
   )

@@ -27,7 +27,7 @@ const HUMAN_GATES = {
   owner_consultations: 'The owner reviews the PM output and provides notes.',
   owner_interview: 'The PM interviews the owner about the decisions that shape the product.',
   demo_review: 'The owner watches the demo and approves it.',
-  owner_checks: 'The run recommends manual checks. Run them or not, then click Done; no proof is asked for.',
+  owner_checks: 'The run recommends manual checks. Run them now, save them for later, or skip them; no proof is asked for.',
 };
 
 /**
@@ -36,7 +36,7 @@ const HUMAN_GATES = {
  */
 const HUMAN_GATE_ACTIONS = {
   owner_interview: 'Answer in the interview below, then click Finish interview (or Skip interview).',
-  owner_checks: 'Read the list on the Workflow tab, run what you want, then click Done.',
+  owner_checks: 'Read the list on the Workflow tab, then click Done, Save for later (it goes to the Queue tab) or Skip.',
 };
 
 function currentStepOf(wf) {
