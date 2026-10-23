@@ -21,18 +21,28 @@ const sessions = () => quiet('list-sessions', '-F', '#{session_name}').split('\n
 const windowNames = (s) => quiet('list-windows', '-t', `=${s}`, '-F', '#{window_name}').split('\n').filter(Boolean).sort();
 
 /**
+ * The environment the project-server really has: started from the desktop app,
+ * with no locale. tmux then prints a tab in a `-F` format as `_`, which broke
+ * every listing split on tabs while these tests, run from a UTF-8 shell, passed
+ * (2026-10-23).
+ */
+const NO_LOCALE = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(LANG|LC_.*)$/.test(k)));
+
+/**
  * tmux.js bound to the test socket. `hook(args)` runs before each tmux call the
  * helpers make, and may throw to stand in for a call that failed; `after(args)`
- * runs once it has returned.
+ * runs once it has returned. Both get the command and its arguments, without
+ * tmux's own flags (`-u`) in front.
  */
 function helpersOnTestSocket({ hook = () => {}, after = () => {} } = {}) {
   const real = require('child_process');
   const original = real.execFileSync;
   real.execFileSync = (cmd, args, opts) => {
     if (cmd !== 'tmux') return original(cmd, args, opts);
-    hook(args);
-    const out = original(cmd, ['-L', SOCKET, ...args], opts);
-    after(args);
+    const command = args[0] === '-u' ? args.slice(1) : args;
+    hook(command);
+    const out = original(cmd, ['-L', SOCKET, ...args], { ...opts, env: NO_LOCALE });
+    after(command);
     return out;
   };
   delete require.cache[require.resolve('./tmux')];

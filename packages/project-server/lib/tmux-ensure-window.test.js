@@ -22,13 +22,17 @@ const SOCKET = 'bs-ensure-window-test';
 const tmux = (...args) => execFileSync('tmux', ['-L', SOCKET, ...args], { stdio: ['pipe', 'pipe', 'pipe'] }).toString();
 const quiet = (...args) => { try { tmux(...args); } catch (_) {} };
 
+// No locale, as the project-server has when the desktop app starts it: see
+// NO_LOCALE in tmux-grouped-kill.test.js.
+const NO_LOCALE = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(LANG|LC_.*)$/.test(k)));
+
 /** createTmuxOps bound to the throwaway socket, so real sessions are untouched. */
 function opsOnTestSocket() {
   const real = require('child_process');
   const originalExecFileSync = real.execFileSync;
   // Wrap execFileSync so every tmux call in tmux.js goes to our socket.
   real.execFileSync = (cmd, args, opts) => (cmd === 'tmux'
-    ? originalExecFileSync(cmd, ['-L', SOCKET, ...args], opts)
+    ? originalExecFileSync(cmd, ['-L', SOCKET, ...args], { ...opts, env: NO_LOCALE })
     : originalExecFileSync(cmd, args, opts));
   delete require.cache[require.resolve('./tmux')];
   const { createTmuxOps } = require('./tmux');

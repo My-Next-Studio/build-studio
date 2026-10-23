@@ -34,13 +34,25 @@ that move underneath you without your having edited anything.
   grouped with, because tmux visits sessions by name and `view-` sorts before
   `wf-`. (Earlier attempts to reproduce it used a base name that sorts first,
   which is why they did not crash.) The 09-28 fix removed those views first,
-  but when tmux was slow to answer the listing of them (each call has a
-  5-second limit), the listing was read as "nothing grouped" and the kill went
-  ahead. Build Studio now never uses `kill-window` on a session's last window:
+  but its listing of them never saw a group in the project-server (see the
+  locale entry below), and a listing tmux was slow to answer (each call has a
+  5-second limit) was also read as "nothing grouped", so the kill went ahead.
+  Build Studio now never uses `kill-window` on a session's last window:
   it closes the session with `kill-session`, which cannot crash. When tmux
   does not answer at all, nothing is killed and the project-server log says
   `[tmux] not killing …`. Leftover views are cleaned up even after their
   session has gone.
+- **Build Studio could not see its own tmux session groups, and from this
+  release could not close windows either.** The project-server is started by
+  the desktop app with no locale, and a tmux client outside UTF-8 prints the
+  tab in a listing format as `_`. The listings that find a session's grouped
+  views and a session's windows split on tabs, so they found nothing: since
+  09-28 no view was released before a kill, and with this release's first
+  fixes a window to close was never found. Draft then failed with "the earlier
+  "draft" window … could not be closed", agents' windows were left open after
+  their step, and a second window of the same name could open beside the old
+  one. Those listings now run tmux with `-u`. The tests passed throughout
+  because they ran in a UTF-8 shell; they now run tmux without a locale.
 - **A window could be closed by a near-miss of its name.** tmux matches
   window names by prefix as a fallback, so once `qa-validate` had gone,
   closing it could close `qa-validate-r2`. Windows are now matched exactly.

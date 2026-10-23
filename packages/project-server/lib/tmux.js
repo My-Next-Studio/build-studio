@@ -54,15 +54,31 @@ const execFileSync = (file, args, opts) =>
  *
  * Releasing views before the kill was the first version of this fix (09-28),
  * and on its own it was not enough: the crash came back on 10-16, -19, -20 and
- * -23. Every tmux call is bounded by TMUX_TIMEOUT_MS, and the listing that finds
- * the views timed out, which read as "not grouped", so the kill went ahead with
- * the view still attached. That timeout is most likely at exactly this moment:
- * an agent printing its last output into a pane this process is attached to (the
- * deadlock described above). So nothing here may read "tmux did not answer" as
- * "safe".
+ * -23. Every tmux call is bounded by TMUX_TIMEOUT_MS, and a listing that times
+ * out must not read as "not grouped". That timeout is most likely at exactly
+ * this moment: an agent printing its last output into a pane this process is
+ * attached to (the deadlock described above). So nothing here may read "tmux
+ * did not answer" as "safe".
+ *
+ * The listing also never saw a group at all, which on its own explains the
+ * crash coming back: see listSessionGroups.
+ */
+
+/**
+ * `-u` on every tmux call whose `-F` format separates fields with a tab. The
+ * project-server is started from the desktop app with no locale set, and a tmux
+ * client that does not think it is in UTF-8 prints each control character in a
+ * format as `_`. Split on tabs, every row was then one field: from 09-28 no
+ * session was ever seen as grouped, and from 10-23 killWindowSafely never found
+ * the window it was asked to kill, so a draft start refused to open beside a
+ * window it could not close (2026-10-23). The tests passed in a UTF-8 shell;
+ * they now run tmux without a locale, as the server does.
+ *
+ * A tab rather than a printable separator because tmux allows almost anything
+ * in a session or window name, a colon included.
  */
 function listSessionGroups() {
-  return execFileSync('tmux', ['list-sessions', '-F', '#{session_name}\t#{session_group}'], { stdio: ['pipe', 'pipe', 'pipe'] })
+  return execFileSync('tmux', ['-u', 'list-sessions', '-F', '#{session_name}\t#{session_group}'], { stdio: ['pipe', 'pipe', 'pipe'] })
     .toString().split('\n').filter(Boolean).map((l) => l.split('\t'));
 }
 
@@ -201,7 +217,7 @@ function killWindowSafely(target, failures) {
   const windowRef = str.slice(colon + 1);
   let windows;
   try {
-    windows = execFileSync('tmux', ['list-windows', '-t', `=${sessionName}`, '-F', '#{window_id}\t#{window_index}\t#{window_name}'], { stdio: ['pipe', 'pipe', 'pipe'] })
+    windows = execFileSync('tmux', ['-u', 'list-windows', '-t', `=${sessionName}`, '-F', '#{window_id}\t#{window_index}\t#{window_name}'], { stdio: ['pipe', 'pipe', 'pipe'] })
       .toString().split('\n').filter(Boolean).map((l) => l.split('\t'));
   } catch (e) {
     if (e && e.code === 'ETIMEDOUT') {
