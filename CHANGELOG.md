@@ -21,6 +21,57 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-23 — tmux can no longer crash when Build Studio closes a window
+
+### Fixed
+
+- **tmux still crashed now and then, taking every agent, drafting session and
+  Build Studio terminal with it.** The 2026-09-28 fix made this rarer, not
+  impossible: the same tmux 3.6a segfault came back four times (10-16, -19,
+  -20, -23), each time killing every run in progress on every project. The
+  trigger is now pinned down and reproduced. tmux crashes when `kill-window`
+  removes the last window of a session that a `view-*` terminal session is
+  grouped with, because tmux visits sessions by name and `view-` sorts before
+  `wf-`. (Earlier attempts to reproduce it used a base name that sorts first,
+  which is why they did not crash.) The 09-28 fix removed those views first,
+  but when tmux was slow to answer the listing of them (each call has a
+  5-second limit), the listing was read as "nothing grouped" and the kill went
+  ahead. Build Studio now never uses `kill-window` on a session's last window:
+  it closes the session with `kill-session`, which cannot crash. When tmux
+  does not answer at all, nothing is killed and the project-server log says
+  `[tmux] not killing …`. Leftover views are cleaned up even after their
+  session has gone.
+- **A window could be closed by a near-miss of its name.** tmux matches
+  window names by prefix as a fallback, so once `qa-validate` had gone,
+  closing it could close `qa-validate-r2`. Windows are now matched exactly.
+- **After a tmux crash, an agent's live terminal showed a bare shell instead of
+  the agent, even after a relaunch.** Opening the terminal while the agent's
+  session was gone made tmux start a new group holding a shell (and a new tmux
+  server, if none was running), and the project-server kept reusing that
+  terminal after the run was relaunched under the same session name. Opening a
+  terminal for a session that no longer exists now says so instead, and a
+  relaunched session gets a fresh terminal.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+Optionally, upgrade tmux to 3.8 (`brew upgrade tmux`), which carries the
+upstream fix for the crash itself (issue 5620; not yet run under Build
+Studio). The running tmux server keeps the old version until it next starts,
+which only happens once every tmux session has ended or after a reboot.
+Ending them all ends every running agent.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-10-17 — Owner checks can wait for later; test-only branches run only their tests
 
 ### Added

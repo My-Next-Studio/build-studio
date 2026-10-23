@@ -34,27 +34,55 @@ const execFileSync = (file, args, opts) =>
  * so every agent, every drafting session and every terminal the owner had open
  * in Build Studio goes with it. It happened three times in four days
  * (2026-09-25, -27, -28; crash reports in ~/Library/Logs/DiagnosticReports).
- * Upstream's fix ("grouped sessions sometimes being left as unusable command
- * targets while they are being killed", issue 5180) is listed for 3.8.
+ * Upstream fixed it in 3.8 (issues 5180 and 5620: session_detach no longer
+ * empties a session, so a grouped one is never left pointing at a freed window).
  *
  * Build Studio creates exactly that shape: the hub terminal attaches through a
  * `view-*` session grouped with the agent's session (server.js openAgentPty),
- * and that view lives as long as the agent window does. So before anything that
- * can destroy a session — killing its last window, or the session itself —
- * remove the view sessions grouped with it. The base session is then alone,
- * and destroying it never enters the group path. Killing a view only detaches
- * the hub's terminal for a window that is about to disappear anyway.
+ * and that view lives as long as the agent window does.
+ *
+ * Only `kill-window` on a session's LAST window reaches the crash, and only when
+ * a grouped session sorts before the base: tmux visits sessions by name, so
+ * `view-*` empties first and is left pointing at a freed window, which the
+ * lookup in notify_session then reads. `wf-*` sessions always sort after their
+ * views; `draft-*` ones never do. `kill-session` cannot crash at all: it
+ * destroys the one session named and never takes the group path
+ * (cmd-kill-session.c). Both were reproduced against 3.6a on a throwaway socket.
+ *
+ * So the rule: never kill-window a session's last window. Close its session
+ * instead (closeSession), and release the views around it.
+ *
+ * Releasing views before the kill was the first version of this fix (09-28),
+ * and on its own it was not enough: the crash came back on 10-16, -19, -20 and
+ * -23. Every tmux call is bounded by TMUX_TIMEOUT_MS, and the listing that finds
+ * the views timed out, which read as "not grouped", so the kill went ahead with
+ * the view still attached. That timeout is most likely at exactly this moment:
+ * an agent printing its last output into a pane this process is attached to (the
+ * deadlock described above). So nothing here may read "tmux did not answer" as
+ * "safe".
+ */
+function listSessionGroups() {
+  return execFileSync('tmux', ['list-sessions', '-F', '#{session_name}\t#{session_group}'], { stdio: ['pipe', 'pipe', 'pipe'] })
+    .toString().split('\n').filter(Boolean).map((l) => l.split('\t'));
+}
+
+/**
+ * Remove the hub's `view-*` sessions grouped with `sessionName`. Killing a view
+ * only detaches the hub's terminal for a window that is about to disappear.
+ *
+ * Works after the base session is gone too: the group keeps its name, the name
+ * of the session it was created from, and a view left in it holds the windows
+ * open, agent and all.
+ *
+ * @returns {number} views removed
  */
 function releaseGroupedViews(sessionName) {
   if (!sessionName) return 0;
   let rows = [];
-  try {
-    rows = execFileSync('tmux', ['list-sessions', '-F', '#{session_name}\t#{session_group}'], { stdio: ['pipe', 'pipe', 'pipe'] })
-      .toString().split('\n').filter(Boolean).map((l) => l.split('\t'));
-  } catch (_) { return 0; }
+  try { rows = listSessionGroups(); } catch (_) { return 0; }
   const base = rows.find(([name]) => name === sessionName);
-  if (!base || !base[1]) return 0;               // not grouped: nothing to do
-  const group = base[1];
+  const group = base ? base[1] : sessionName;
+  if (!group) return 0;                          // not grouped: nothing to do
   let n = 0;
   for (const [name, g] of rows) {
     if (name === sessionName || g !== group || !name.startsWith('view-')) continue;
@@ -63,17 +91,59 @@ function releaseGroupedViews(sessionName) {
   return n;
 }
 
-/** Kill one window without ever destroying a still-grouped session (see above). */
+/**
+ * Close a session and the views grouped with it. Crash-safe whatever is
+ * grouped, because it only ever uses kill-session.
+ *
+ * Views are released both before and after: before, so the hub's terminals
+ * detach; after, for a view that attached in between or that the first pass
+ * could not list, which would otherwise keep the windows alive with nobody
+ * watching.
+ */
+function closeSession(sessionName) {
+  if (!sessionName) return;
+  releaseGroupedViews(sessionName);
+  try { execFileSync('tmux', ['kill-session', '-t', `=${sessionName}`], { stdio: 'ignore' }); } catch (_) {}
+  releaseGroupedViews(sessionName);
+}
+
+/**
+ * Kill one window, never by kill-window on its session's last one (see above).
+ *
+ * `target` is `session:window`, the window by index or by exact name. It is
+ * matched here rather than by tmux, whose -t falls back to a prefix match: once
+ * `qa-validate` is gone, `wf-1:qa-validate` would kill `qa-validate-r2`.
+ *
+ * Fails closed. If tmux does not answer the listing, nothing is killed and a
+ * warning is logged: a window left open costs one idle shell until the session
+ * is closed, while guessing wrong costs every session on the machine.
+ *
+ * @returns {boolean} whether the window is gone because of this call
+ */
 function killWindowSafely(target) {
-  if (!target) return;
-  const sessionName = String(target).split(':')[0];
-  let windows = 0;
+  if (!target) return false;
+  const str = String(target);
+  const colon = str.indexOf(':');
+  if (colon < 1) return false;
+  const sessionName = str.slice(0, colon);
+  const windowRef = str.slice(colon + 1);
+  let windows;
   try {
-    windows = execFileSync('tmux', ['list-windows', '-t', `=${sessionName}`, '-F', '#{window_index}'], { stdio: ['pipe', 'pipe', 'pipe'] })
-      .toString().split('\n').filter(Boolean).length;
-  } catch (_) { /* session gone already */ }
-  if (windows <= 1) releaseGroupedViews(sessionName);
-  try { execFileSync('tmux', ['kill-window', '-t', target], { stdio: 'ignore' }); } catch (_) {}
+    windows = execFileSync('tmux', ['list-windows', '-t', `=${sessionName}`, '-F', '#{window_id}\t#{window_index}\t#{window_name}'], { stdio: ['pipe', 'pipe', 'pipe'] })
+      .toString().split('\n').filter(Boolean).map((l) => l.split('\t'));
+  } catch (e) {
+    if (e && e.code === 'ETIMEDOUT') {
+      console.warn(`[tmux] not killing ${str}: tmux did not answer within ${TMUX_TIMEOUT_MS}ms, so it cannot be told whether this is the session's last window`);
+    }
+    return false;                                // session gone, or tmux not answering
+  }
+  const hit = windows.find(([, index]) => index === windowRef) || windows.find(([, , name]) => name === windowRef);
+  if (!hit) return false;                        // that window is gone already
+  if (windows.length > 1) {
+    try { execFileSync('tmux', ['kill-window', '-t', hit[0]], { stdio: 'ignore' }); return true; } catch (_) { return false; }
+  }
+  closeSession(sessionName);
+  return true;
 }
 
 function createTmuxOps(config) {
@@ -89,6 +159,22 @@ function createTmuxOps(config) {
       execFileSync('tmux', ['has-session', '-t', sessionName], { stdio: 'ignore' });
       return true;
     } catch (_) { return false; }
+  }
+
+  /**
+   * tmux's id for the session named exactly `sessionName` (`$12`), or null when
+   * there is none. Unlike a name, an id is never reused while the server runs,
+   * so it tells a relaunched session apart from the one it replaced. Throws
+   * when tmux does not answer, which is not the same as "no such session".
+   */
+  function sessionId(sessionName) {
+    try {
+      return execFileSync('tmux', ['display-message', '-p', '-t', `=${sessionName}`, '#{session_id}'], { stdio: ['pipe', 'pipe', 'pipe'] })
+        .toString().trim() || null;
+    } catch (e) {
+      if (e && e.code === 'ETIMEDOUT') throw e;
+      return null;
+    }
   }
 
   function createSession(sessionName, windowName, cwd) {
@@ -163,8 +249,7 @@ function createTmuxOps(config) {
   }
 
   function killSession(sessionName) {
-    releaseGroupedViews(sessionName);
-    try { execFileSync('tmux', ['kill-session', '-t', sessionName], { stdio: 'ignore' }); } catch (_) {}
+    closeSession(sessionName);
   }
 
   // Kill a tmux window AND any processes it spawned that are still holding a port.
@@ -200,8 +285,7 @@ function createTmuxOps(config) {
         }
       } catch (_) {}
     }
-    releaseGroupedViews(sessionName);
-    try { execFileSync('tmux', ['kill-session', '-t', sessionName], { stdio: 'ignore' }); } catch (_) {}
+    closeSession(sessionName);
   }
 
   function capturePane(target, lines = 80) {
@@ -347,6 +431,7 @@ function createTmuxOps(config) {
   return {
     generateSessionName,
     hasSession,
+    sessionId,
     createSession,
     createWindow,
     ensureWindow,
@@ -434,4 +519,4 @@ function stripAnsi(str) {
 }
 
 module.exports = {
-  renderPipePaneLog, createTmuxOps, stripAnsi, releaseGroupedViews, killWindowSafely };
+  renderPipePaneLog, createTmuxOps, stripAnsi, releaseGroupedViews, closeSession, killWindowSafely };

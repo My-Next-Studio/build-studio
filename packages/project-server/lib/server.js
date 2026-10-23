@@ -334,14 +334,14 @@ function startServer(projectRoot, opts = {}) {
     } catch (_) {}
   }
 
-  function openAgentPty(agentWindow, target) {
+  function openAgentPty(agentWindow, target, baseId) {
     const viewSession = `view-${String(agentWindow).replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now().toString(36)}`;
     const env = { ...process.env };
     delete env.ANTHROPIC_API_KEY;
     let ptyProc;
     try {
       ptyProc = pty.spawn('tmux', [
-        'new-session', '-t', target.sessionName, '-s', viewSession, ';',
+        'new-session', '-t', `=${target.sessionName}`, '-s', viewSession, ';',
         'set-option', 'destroy-unattached', 'on', ';',
         // Mouse mode on the VIEW session only (grouped sessions keep their own
         // options, so the agent's session is untouched): the hub viewer's wheel
@@ -356,7 +356,7 @@ function startServer(projectRoot, opts = {}) {
     }
     const entry = {
       pty: ptyProc, viewSession, clients: new Set(), buffer: [],
-      sessionName: target.sessionName, window: target.window,
+      sessionName: target.sessionName, window: target.window, baseId,
     };
     ptyProc.onData((data) => {
       entry.buffer.push(data);
@@ -390,16 +390,38 @@ function startServer(projectRoot, opts = {}) {
       return;
     }
 
+    // The agent's session must exist before a view is grouped with it. tmux's
+    // `new-session -t NAME` does not fail when NAME is gone: it starts a new
+    // group of that name holding a bare shell, and starts a tmux server if none
+    // is running. After the 2026-10-23 tmux crash that is what the hub showed: a
+    // zsh where the agent had been, still cached here when the run relaunched
+    // under the same session name, so the new agent could not be watched.
+    let baseId;
+    try {
+      baseId = tmuxOps.sessionId(target.sessionName);
+    } catch (_) {
+      ws.send(JSON.stringify({ type: 'error', data: 'tmux is not answering; try again in a moment' }));
+      ws.close();
+      return;
+    }
+    if (!baseId) {
+      ws.send(JSON.stringify({ type: 'error', data: `The tmux session for "${agentWindow}" is gone, so there is nothing to show. Relaunch the step to start the agent again.` }));
+      ws.close();
+      return;
+    }
+
     let entry = agentPtys.get(agentWindow);
     // A window name can be reused against a different session — ensureWindow
-    // kills and recreates, and drafting reuses one name per item. Reattaching a
-    // pty pinned to the old target would show a pane that no longer exists.
-    if (entry && (entry.sessionName !== target.sessionName || entry.window !== target.window)) {
+    // kills and recreates, and drafting reuses one name per item, and a
+    // relaunch reuses the session name too. Reattaching a pty pinned to the old
+    // target would show a pane that no longer exists, so compare the session's
+    // id, not just its name.
+    if (entry && (entry.sessionName !== target.sessionName || entry.window !== target.window || entry.baseId !== baseId)) {
       reapAgentPty(agentWindow);
       entry = null;
     }
     if (!entry) {
-      const opened = openAgentPty(agentWindow, target);
+      const opened = openAgentPty(agentWindow, target, baseId);
       if (opened.error) {
         ws.send(JSON.stringify({ type: 'error', data: `Could not attach to agent terminal: ${opened.error}` }));
         ws.close();
