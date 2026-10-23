@@ -166,10 +166,13 @@ function createTmuxOps(config) {
    * there is none. Unlike a name, an id is never reused while the server runs,
    * so it tells a relaunched session apart from the one it replaced. Throws
    * when tmux does not answer, which is not the same as "no such session".
+   * display-message takes a PANE target, where a bare `=name` resolves to
+   * nothing and prints an empty line instead of failing; the trailing colon
+   * makes it name the session.
    */
   function sessionId(sessionName) {
     try {
-      return execFileSync('tmux', ['display-message', '-p', '-t', `=${sessionName}`, '#{session_id}'], { stdio: ['pipe', 'pipe', 'pipe'] })
+      return execFileSync('tmux', ['display-message', '-p', '-t', `=${sessionName}:`, '#{session_id}'], { stdio: ['pipe', 'pipe', 'pipe'] })
         .toString().trim() || null;
     } catch (e) {
       if (e && e.code === 'ETIMEDOUT') throw e;

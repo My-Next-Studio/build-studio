@@ -171,6 +171,17 @@ test('closeSession closes a grouped session without crashing', (t) => {
   assert.deepEqual(sessions(), ['sentinel']);
 });
 
+test('sessionId finds a live session by its exact name, and only that', (t) => {
+  // The hub refuses to open an agent terminal when this returns null, so a
+  // lookup that never matches reads every live session as gone.
+  const mod = setup(t, 1);
+  const ops = mod.createTmuxOps({ name: 'test' });
+  assert.match(ops.sessionId('wf-1'), /^\$\d+$/);
+  assert.notEqual(ops.sessionId('wf-1'), ops.sessionId('sentinel'));
+  assert.equal(ops.sessionId('wf'), null, 'a prefix is not a match');
+  assert.equal(ops.sessionId('does-not-exist'), null);
+});
+
 test('an ungrouped or missing session is a no-op', (t) => {
   const mod = setup(t, 1);
   assert.equal(mod.releaseGroupedViews('sentinel'), 0);
