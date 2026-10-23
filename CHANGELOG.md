@@ -59,6 +59,11 @@ that move underneath you without your having edited anything.
   bare shell, while the new draft ran unseen in a second window of the same
   name. Leftover views are now removed before a session of that name is created
   and before a terminal is attached, so the old window cannot come back.
+- **"Could not be closed" pointed at a log line that did not exist.** When
+  every kill came back as "already gone" while the window was plainly still
+  there (seen under load, during a review run), nothing was logged, so the
+  error's "the [tmux] warning in the server log says why" led nowhere. The
+  error now carries tmux's answers itself, and logs them.
 - **Opening a terminal again could close the one just opened.** When a cached
   terminal was replaced, the old one's exit closed whichever terminal was then
   on file under that agent, which was the new one.
@@ -69,10 +74,11 @@ that move underneath you without your having edited anything.
   window opening beside it.** This applies to every agent launch and draft
   start that reuses a window name. Before, the duplicate opened silently: two
   agents ran, and the hub and the Log button picked one of them. Now the launch
-  fails with "the earlier … window … could not be closed", and the
-  project-server log has a `[tmux]` warning naming the tmux call that failed
-  and what tmux said. Every failure on the close path is now logged this way,
-  except "already gone".
+  fails with "the earlier … window … could not be closed (tmux answered: …)",
+  naming each tmux call that failed and what tmux said. The same line goes to
+  the project-server log as a `[tmux]` warning. Other failures on the close
+  path are logged too, except "already gone", which is the normal answer when
+  a window closed on its own.
 
 ### Upgrade steps
 

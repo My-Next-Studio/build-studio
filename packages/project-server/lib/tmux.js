@@ -83,6 +83,17 @@ function isGone(e) {
 // draft start left the previous draft's window and the hub's view of it
 // standing, under load, and nothing said which call had failed. A failure
 // other than "already gone" is now logged with what tmux answered.
+//
+// "Already gone" is still not logged: it is the normal answer when a window
+// closed on its own. But it was wrong once the same day, under load, with the
+// window plainly still there, and no line anywhere said what tmux had answered.
+// So each helper also takes an optional `failures` list and adds every failed
+// call to it, gone or not, for a caller that can tell the two apart by looking
+// (createWindow).
+
+function noteFailure(failures, what, e) {
+  if (failures) failures.push(`${what}: ${tmuxError(e)}`);
+}
 
 /**
  * Remove the hub's `view-*` sessions grouped with `sessionName`. Killing a view
@@ -94,14 +105,14 @@ function isGone(e) {
  *
  * @returns {number} views removed
  */
-function releaseGroupedViews(sessionName) {
+function releaseGroupedViews(sessionName, failures) {
   if (!sessionName) return 0;
-  const rows = listSessionsFor(sessionName);
+  const rows = listSessionsFor(sessionName, failures);
   if (!rows) return 0;
   const base = rows.find(([name]) => name === sessionName);
   const group = base ? base[1] : sessionName;
   if (!group) return 0;                          // not grouped: nothing to do
-  return closeViews(rows, group, sessionName);
+  return closeViews(rows, group, sessionName, failures);
 }
 
 /**
@@ -123,14 +134,15 @@ function releaseOrphanViews(sessionName) {
   return closeViews(rows, sessionName, sessionName);
 }
 
-function listSessionsFor(sessionName) {
+function listSessionsFor(sessionName, failures) {
   try { return listSessionGroups(); } catch (e) {
     if (!isGone(e)) console.warn(`[tmux] could not list sessions to release the views of ${sessionName}: ${tmuxError(e)}`);
+    noteFailure(failures, 'list-sessions', e);
     return null;
   }
 }
 
-function closeViews(rows, group, sessionName) {
+function closeViews(rows, group, sessionName, failures) {
   let n = 0;
   for (const [name, g] of rows) {
     if (name === sessionName || g !== group || !name.startsWith('view-')) continue;
@@ -139,6 +151,7 @@ function closeViews(rows, group, sessionName) {
       n++;
     } catch (e) {
       if (!isGone(e)) console.warn(`[tmux] could not close view ${name} of ${sessionName}: ${tmuxError(e)}`);
+      noteFailure(failures, `kill-session ${name}`, e);
     }
   }
   return n;
@@ -153,15 +166,16 @@ function closeViews(rows, group, sessionName) {
  * could not list, which would otherwise keep the windows alive with nobody
  * watching.
  */
-function closeSession(sessionName) {
+function closeSession(sessionName, failures) {
   if (!sessionName) return;
-  releaseGroupedViews(sessionName);
+  releaseGroupedViews(sessionName, failures);
   try {
     execFileSync('tmux', ['kill-session', '-t', `=${sessionName}`], { stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (e) {
     if (!isGone(e)) console.warn(`[tmux] could not close session ${sessionName}: ${tmuxError(e)}`);
+    noteFailure(failures, `kill-session ${sessionName}`, e);
   }
-  releaseGroupedViews(sessionName);
+  releaseGroupedViews(sessionName, failures);
 }
 
 /**
@@ -175,9 +189,10 @@ function closeSession(sessionName) {
  * warning is logged: a window left open costs one idle shell until the session
  * is closed, while guessing wrong costs every session on the machine.
  *
+ * @param {string[]} [failures] collects every failed tmux call (see noteFailure)
  * @returns {boolean} whether the window is gone because of this call
  */
-function killWindowSafely(target) {
+function killWindowSafely(target, failures) {
   if (!target) return false;
   const str = String(target);
   const colon = str.indexOf(':');
@@ -194,20 +209,25 @@ function killWindowSafely(target) {
     } else if (!isGone(e)) {
       console.warn(`[tmux] not killing ${str}: could not list its session's windows: ${tmuxError(e)}`);
     }
+    noteFailure(failures, `list-windows ${sessionName}`, e);
     return false;                                // session gone, or tmux not answering
   }
   const hit = windows.find(([, index]) => index === windowRef) || windows.find(([, , name]) => name === windowRef);
-  if (!hit) return false;                        // that window is gone already
+  if (!hit) {
+    if (failures) failures.push(`list-windows ${sessionName}: no window ${windowRef}`);
+    return false;                                // that window is gone already
+  }
   if (windows.length > 1) {
     try {
       execFileSync('tmux', ['kill-window', '-t', hit[0]], { stdio: ['pipe', 'pipe', 'pipe'] });
       return true;
     } catch (e) {
       if (!isGone(e)) console.warn(`[tmux] could not kill ${str}: ${tmuxError(e)}`);
+      noteFailure(failures, `kill-window ${hit[0]}`, e);
       return false;
     }
   }
-  closeSession(sessionName);
+  closeSession(sessionName, failures);
   return true;
 }
 
@@ -302,6 +322,7 @@ function createTmuxOps(config) {
     // case where multiple duplicates already exist (one kill-window only
     // removes one of N at a time when names collide).
     let dup = null;
+    const failures = [];
     for (let attempts = 0; attempts <= 5; attempts++) {
       let names = [];
       try {
@@ -318,10 +339,16 @@ function createTmuxOps(config) {
       }
       dup = names.find(([, n]) => n === windowName);
       if (!dup || attempts === 5) break;
-      killWindowSafely(`${sessionName}:${dup[0]}`);
+      killWindowSafely(`${sessionName}:${dup[0]}`, failures);
     }
     if (dup) {
-      throw new Error(`the earlier "${windowName}" window in ${sessionName} could not be closed, so no second one was opened beside it; the [tmux] warning in the server log says why`);
+      // The window is still listed, so an "already gone" answer above was
+      // wrong, and it was not logged. Say here what tmux answered.
+      const why = failures.length
+        ? `tmux answered: ${[...new Set(failures)].join('; ')}`
+        : 'tmux reported it closed, but it is still there';
+      console.warn(`[tmux] could not close the earlier "${windowName}" window in ${sessionName}: ${why}`);
+      throw new Error(`the earlier "${windowName}" window in ${sessionName} could not be closed (${why}), so no second one was opened beside it`);
     }
     const out = execFileSync('tmux', ['new-window', '-t', `${sessionName}:`, '-n', windowName, '-P', '-F', '#{window_index}'], { cwd });
     return out.toString().trim();

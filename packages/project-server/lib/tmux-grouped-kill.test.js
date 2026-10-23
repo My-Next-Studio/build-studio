@@ -248,6 +248,31 @@ test('a window that could not be closed is not duplicated', (t) => {
   assert.match(warn.mock.calls[0].arguments[0], /could not kill wf-1:\d+: server exited unexpectedly/);
 });
 
+test('a close that tmux calls "already gone" but did not happen says what tmux answered', (t) => {
+  // Live 2026-10-23, under load: the draft's only window and the hub's view
+  // both survived the start, and the error pointed at a log line that did not
+  // exist, because every answer had read as "already gone".
+  const mod = setup(t, 1, {
+    hook: (args) => {
+      if (args[0] === 'kill-session') {
+        const e = new Error('kill-session failed');
+        e.stderr = Buffer.from('error connecting to /private/tmp/tmux-501/default (Resource temporarily unavailable)');
+        throw e;
+      }
+    },
+  });
+  const warn = t.mock.method(console, 'warn', () => {});
+  const ops = mod.createTmuxOps({ name: 'test' });
+  assert.throws(
+    () => ops.ensureWindow('wf-1', 'agent', process.cwd()),
+    /could not be closed \(tmux answered: kill-session view-agent-abc: error connecting to .*Resource temporarily unavailable.*; kill-session wf-1: error connecting to/,
+  );
+  assert.deepEqual(windowNames('wf-1'), ['agent'], 'no second "agent" window');
+  assert.deepEqual(sessions(), ['sentinel', 'view-agent-abc', 'wf-1']);
+  assert.equal(warn.mock.calls.length, 1, 'one line for the whole attempt, not one per retry');
+  assert.match(warn.mock.calls[0].arguments[0], /\[tmux\] could not close the earlier "agent" window in wf-1: tmux answered: kill-session view-agent-abc: error connecting to/);
+});
+
 test('a window listing that times out stops the launch instead of guessing', (t) => {
   const mod = setup(t, 1, {
     hook: (args) => {
