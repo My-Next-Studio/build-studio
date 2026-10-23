@@ -51,6 +51,28 @@ that move underneath you without your having edited anything.
   terminal after the run was relaunched under the same session name. Opening a
   terminal for a session that no longer exists now says so instead, and a
   relaunched session gets a fresh terminal.
+- **Starting a draft could leave the finished draft's window open beside the
+  new one, and the hub then showed the old one.** If closing the old window
+  failed (it happened under load, and the failure went unlogged), the old
+  window and the hub's view of it stayed. tmux reuses a session group by name,
+  so the next terminal joined that old group and showed the finished draft's
+  bare shell, while the new draft ran unseen in a second window of the same
+  name. Leftover views are now removed before a session of that name is created
+  and before a terminal is attached, so the old window cannot come back.
+- **Opening a terminal again could close the one just opened.** When a cached
+  terminal was replaced, the old one's exit closed whichever terminal was then
+  on file under that agent, which was the new one.
+
+### Changed
+
+- **A window that cannot be closed now stops the launch, instead of a second
+  window opening beside it.** This applies to every agent launch and draft
+  start that reuses a window name. Before, the duplicate opened silently: two
+  agents ran, and the hub and the Log button picked one of them. Now the launch
+  fails with "the earlier … window … could not be closed", and the
+  project-server log has a `[tmux]` warning naming the tmux call that failed
+  and what tmux said. Every failure on the close path is now logged this way,
+  except "already gone".
 
 ### Upgrade steps
 

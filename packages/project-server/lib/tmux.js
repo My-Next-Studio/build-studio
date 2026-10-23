@@ -66,6 +66,24 @@ function listSessionGroups() {
     .toString().split('\n').filter(Boolean).map((l) => l.split('\t'));
 }
 
+/** What a failed tmux call said, for a log line. */
+function tmuxError(e) {
+  if (e && e.code === 'ETIMEDOUT') return `tmux did not answer within ${TMUX_TIMEOUT_MS}ms`;
+  const stderr = e && e.stderr ? e.stderr.toString().trim() : '';
+  return stderr || (e && e.message) || String(e);
+}
+
+/** True when a tmux call failed only because what it named is already gone. */
+function isGone(e) {
+  const stderr = e && e.stderr ? e.stderr.toString() : '';
+  return /can't find (session|window)|no server running|error connecting to/.test(stderr);
+}
+
+// The close path below used to swallow every failure. Twice on 2026-10-23 a
+// draft start left the previous draft's window and the hub's view of it
+// standing, under load, and nothing said which call had failed. A failure
+// other than "already gone" is now logged with what tmux answered.
+
 /**
  * Remove the hub's `view-*` sessions grouped with `sessionName`. Killing a view
  * only detaches the hub's terminal for a window that is about to disappear.
@@ -78,15 +96,50 @@ function listSessionGroups() {
  */
 function releaseGroupedViews(sessionName) {
   if (!sessionName) return 0;
-  let rows = [];
-  try { rows = listSessionGroups(); } catch (_) { return 0; }
+  const rows = listSessionsFor(sessionName);
+  if (!rows) return 0;
   const base = rows.find(([name]) => name === sessionName);
   const group = base ? base[1] : sessionName;
   if (!group) return 0;                          // not grouped: nothing to do
+  return closeViews(rows, group, sessionName);
+}
+
+/**
+ * Remove views left in a group named `sessionName` that the session itself is
+ * not in. They outlive a session that was closed while a view's kill failed,
+ * still holding its windows. And tmux finds a group by NAME when a new view is
+ * grouped with a session (session_group_new), so the next view pulls the new
+ * session into that old group, old windows and all: a finished draft's window
+ * came back beside the next draft, and the hub showed it instead (2026-10-23).
+ *
+ * @returns {number} views removed
+ */
+function releaseOrphanViews(sessionName) {
+  if (!sessionName) return 0;
+  const rows = listSessionsFor(sessionName);
+  if (!rows) return 0;
+  const base = rows.find(([name]) => name === sessionName);
+  if (base && base[1] === sessionName) return 0; // the session is in that group: its views are live
+  return closeViews(rows, sessionName, sessionName);
+}
+
+function listSessionsFor(sessionName) {
+  try { return listSessionGroups(); } catch (e) {
+    if (!isGone(e)) console.warn(`[tmux] could not list sessions to release the views of ${sessionName}: ${tmuxError(e)}`);
+    return null;
+  }
+}
+
+function closeViews(rows, group, sessionName) {
   let n = 0;
   for (const [name, g] of rows) {
     if (name === sessionName || g !== group || !name.startsWith('view-')) continue;
-    try { execFileSync('tmux', ['kill-session', '-t', `=${name}`], { stdio: 'ignore' }); n++; } catch (_) {}
+    try {
+      execFileSync('tmux', ['kill-session', '-t', `=${name}`], { stdio: ['pipe', 'pipe', 'pipe'] });
+      n++;
+    } catch (e) {
+      if (!isGone(e)) console.warn(`[tmux] could not close view ${name} of ${sessionName}: ${tmuxError(e)}`);
+    }
   }
   return n;
 }
@@ -103,7 +156,11 @@ function releaseGroupedViews(sessionName) {
 function closeSession(sessionName) {
   if (!sessionName) return;
   releaseGroupedViews(sessionName);
-  try { execFileSync('tmux', ['kill-session', '-t', `=${sessionName}`], { stdio: 'ignore' }); } catch (_) {}
+  try {
+    execFileSync('tmux', ['kill-session', '-t', `=${sessionName}`], { stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch (e) {
+    if (!isGone(e)) console.warn(`[tmux] could not close session ${sessionName}: ${tmuxError(e)}`);
+  }
   releaseGroupedViews(sessionName);
 }
 
@@ -134,13 +191,21 @@ function killWindowSafely(target) {
   } catch (e) {
     if (e && e.code === 'ETIMEDOUT') {
       console.warn(`[tmux] not killing ${str}: tmux did not answer within ${TMUX_TIMEOUT_MS}ms, so it cannot be told whether this is the session's last window`);
+    } else if (!isGone(e)) {
+      console.warn(`[tmux] not killing ${str}: could not list its session's windows: ${tmuxError(e)}`);
     }
     return false;                                // session gone, or tmux not answering
   }
   const hit = windows.find(([, index]) => index === windowRef) || windows.find(([, , name]) => name === windowRef);
   if (!hit) return false;                        // that window is gone already
   if (windows.length > 1) {
-    try { execFileSync('tmux', ['kill-window', '-t', hit[0]], { stdio: 'ignore' }); return true; } catch (_) { return false; }
+    try {
+      execFileSync('tmux', ['kill-window', '-t', hit[0]], { stdio: ['pipe', 'pipe', 'pipe'] });
+      return true;
+    } catch (e) {
+      if (!isGone(e)) console.warn(`[tmux] could not kill ${str}: ${tmuxError(e)}`);
+      return false;
+    }
   }
   closeSession(sessionName);
   return true;
@@ -200,6 +265,9 @@ function createTmuxOps(config) {
    */
   function ensureWindow(sessionName, windowName, cwd) {
     if (!hasSession(sessionName)) {
+      // A new session by this name would be pulled into any group of the same
+      // name the moment the hub views it (see releaseOrphanViews).
+      releaseOrphanViews(sessionName);
       createSession(sessionName, windowName, cwd);
       return `${sessionName}:${windowName}`;
     }
@@ -209,11 +277,20 @@ function createTmuxOps(config) {
       // Only swallow the race — a failure with the session still standing is a
       // real error and must surface.
       if (hasSession(sessionName)) throw e;
+      releaseOrphanViews(sessionName);
       createSession(sessionName, windowName, cwd);
       return `${sessionName}:${windowName}`;
     }
   }
 
+  /**
+   * Add a window, first closing any window of the same name.
+   *
+   * Throws rather than open a second window beside one it could not close. A
+   * duplicate runs a second agent, and the hub's terminal shows whichever
+   * window tmux finds first: twice on 2026-10-23 that was the finished draft's
+   * bare shell, while the new draft ran unseen beside it.
+   */
   function createWindow(sessionName, windowName, cwd) {
     // Defensive deduplication — tmux happily allows duplicate window names
     // in a single session, but `capture-pane -t session:name` then returns
@@ -224,18 +301,27 @@ function createTmuxOps(config) {
     // existing window with this name before creating. The loop handles the
     // case where multiple duplicates already exist (one kill-window only
     // removes one of N at a time when names collide).
-    for (let attempts = 0; attempts < 5; attempts++) {
+    let dup = null;
+    for (let attempts = 0; attempts <= 5; attempts++) {
       let names = [];
       try {
-        const out = execFileSync('tmux', ['list-windows', '-t', sessionName, '-F', '#{window_index} #{window_name}'], { stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+        const out = execFileSync('tmux', ['list-windows', '-t', `=${sessionName}`, '-F', '#{window_index} #{window_name}'], { stdio: ['pipe', 'pipe', 'pipe'] }).toString();
         names = out.split('\n').filter(Boolean).map(l => {
           const sp = l.indexOf(' ');
           return [l.slice(0, sp), l.slice(sp + 1)];
         });
-      } catch (_) { break; }
-      const dup = names.find(([, n]) => n === windowName);
-      if (!dup) break;
+      } catch (e) {
+        // Closing the last window closes the session; new-window then fails
+        // and ensureWindow starts the session afresh.
+        if (isGone(e)) { dup = null; break; }
+        throw new Error(`could not check ${sessionName} for an earlier "${windowName}" window: ${tmuxError(e)}`);
+      }
+      dup = names.find(([, n]) => n === windowName);
+      if (!dup || attempts === 5) break;
       killWindowSafely(`${sessionName}:${dup[0]}`);
+    }
+    if (dup) {
+      throw new Error(`the earlier "${windowName}" window in ${sessionName} could not be closed, so no second one was opened beside it; the [tmux] warning in the server log says why`);
     }
     const out = execFileSync('tmux', ['new-window', '-t', `${sessionName}:`, '-n', windowName, '-P', '-F', '#{window_index}'], { cwd });
     return out.toString().trim();
@@ -522,4 +608,4 @@ function stripAnsi(str) {
 }
 
 module.exports = {
-  renderPipePaneLog, createTmuxOps, stripAnsi, releaseGroupedViews, closeSession, killWindowSafely };
+  renderPipePaneLog, createTmuxOps, stripAnsi, releaseGroupedViews, releaseOrphanViews, closeSession, killWindowSafely };

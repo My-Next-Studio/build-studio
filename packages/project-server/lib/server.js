@@ -9,7 +9,7 @@ const fs = require('fs');
 const { loadConfig, watchConfig } = require('./config');
 const { createStateManager } = require('./state');
 const { createGitOps } = require('./git');
-const { createTmuxOps } = require('./tmux');
+const { createTmuxOps, releaseOrphanViews } = require('./tmux');
 const { createFilesRouter } = require('./api/files');
 const { createStatusRouter } = require('./api/status');
 const { createTerminalRouter } = require('./api/terminal');
@@ -330,7 +330,7 @@ function startServer(projectRoot, opts = {}) {
       try { entry.pty.kill(); } catch (_) {}
     }
     try {
-      require('child_process').execFile('tmux', ['kill-session', '-t', entry.viewSession], () => {});
+      require('child_process').execFile('tmux', ['kill-session', '-t', `=${entry.viewSession}`], () => {});
     } catch (_) {}
   }
 
@@ -375,7 +375,10 @@ function startServer(projectRoot, opts = {}) {
           client.close();
         }
       }
-      reapAgentPty(agentWindow);
+      // Only if this pty is still the one on file. A replaced pty exits after
+      // its replacement is stored under the same key, and reaping by key then
+      // closed the terminal that had just been opened.
+      if (agentPtys.get(agentWindow) === entry) reapAgentPty(agentWindow);
     });
     agentPtys.set(agentWindow, entry);
     return entry;
@@ -421,6 +424,9 @@ function startServer(projectRoot, opts = {}) {
       entry = null;
     }
     if (!entry) {
+      // A view left in an old group of this name would pull the session into
+      // that group, and the terminal would show the old windows.
+      releaseOrphanViews(target.sessionName);
       const opened = openAgentPty(agentWindow, target, baseId);
       if (opened.error) {
         ws.send(JSON.stringify({ type: 'error', data: `Could not attach to agent terminal: ${opened.error}` }));

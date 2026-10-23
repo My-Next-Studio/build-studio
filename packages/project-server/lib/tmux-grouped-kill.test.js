@@ -182,6 +182,94 @@ test('sessionId finds a live session by its exact name, and only that', (t) => {
   assert.equal(ops.sessionId('does-not-exist'), null);
 });
 
+// 2026-10-23, twice: a draft start's close of the old draft window failed under
+// load, silently. The hub's view outlived the session holding the old window,
+// the next session of that name was pulled into the view's group, and the hub
+// showed the finished draft's shell while the new draft ran beside it.
+
+const windowIds = (s) => quiet('list-windows', '-t', `=${s}`, '-F', '#{window_id}').split('\n').filter(Boolean);
+
+test('a view left behind by a failed close cannot bring the old window back', (t) => {
+  let failViewKill = true;
+  const mod = setup(t, 1, {
+    hook: (args) => {
+      if (failViewKill && args[0] === 'kill-session' && String(args[2]).startsWith('=view-')) throw timedOut();
+    },
+  });
+  t.mock.method(console, 'warn', () => {});
+  const [oldWindow] = windowIds('wf-1');
+  const ops = mod.createTmuxOps({ name: 'test' });
+  ops.ensureWindow('wf-1', 'agent', process.cwd());        // the next start, with the view's kill failing
+  assert.deepEqual(sessions(), ['sentinel', 'view-agent-abc', 'wf-1'], 'the view survived, holding the old window');
+
+  failViewKill = false;
+  mod.releaseOrphanViews('wf-1');                          // what the hub does before attaching
+  tmux('new-session', '-d', '-t', '=wf-1', '-s', 'view-agent-new');
+  assert.ok(!windowIds('view-agent-new').includes(oldWindow), 'the hub does not see the old window');
+  assert.deepEqual(windowIds('view-agent-new'), windowIds('wf-1'), 'the hub sees the new session');
+});
+
+test('a new session of the same name releases the old group first', (t) => {
+  let failViewKill = true;
+  const mod = setup(t, 1, {
+    hook: (args) => {
+      if (failViewKill && args[0] === 'kill-session' && String(args[2]).startsWith('=view-')) throw timedOut();
+    },
+  });
+  t.mock.method(console, 'warn', () => {});
+  const ops = mod.createTmuxOps({ name: 'test' });
+  mod.closeSession('wf-1');
+  assert.deepEqual(sessions(), ['sentinel', 'view-agent-abc']);
+  failViewKill = false;
+  ops.ensureWindow('wf-1', 'agent', process.cwd());
+  assert.deepEqual(sessions(), ['sentinel', 'wf-1']);
+});
+
+test('releaseOrphanViews leaves the views of a live group alone', (t) => {
+  const mod = setup(t, 1);
+  assert.equal(mod.releaseOrphanViews('wf-1'), 0);
+  assert.deepEqual(sessions(), ['sentinel', 'view-agent-abc', 'wf-1']);
+});
+
+test('a window that could not be closed is not duplicated', (t) => {
+  const mod = setup(t, 2, {
+    hook: (args) => {
+      if (args[0] === 'kill-window') {
+        const e = new Error('kill-window failed');
+        e.stderr = Buffer.from('server exited unexpectedly');
+        throw e;
+      }
+    },
+  });
+  const warn = t.mock.method(console, 'warn', () => {});
+  const ops = mod.createTmuxOps({ name: 'test' });
+  assert.throws(() => ops.ensureWindow('wf-1', 'agent', process.cwd()), /could not be closed/);
+  assert.deepEqual(windowNames('wf-1'), ['agent', 'other1'], 'no second "agent" window');
+  assert.match(warn.mock.calls[0].arguments[0], /could not kill wf-1:\d+: server exited unexpectedly/);
+});
+
+test('a window listing that times out stops the launch instead of guessing', (t) => {
+  const mod = setup(t, 1, {
+    hook: (args) => {
+      if (args[0] === 'list-windows' && args.includes('#{window_index} #{window_name}')) throw timedOut();
+    },
+  });
+  const ops = mod.createTmuxOps({ name: 'test' });
+  assert.throws(() => ops.ensureWindow('wf-1', 'agent', process.cwd()), /could not check wf-1 .*did not answer/);
+  assert.deepEqual(windowNames('wf-1'), ['agent']);
+});
+
+test('a view that could not be closed is logged', (t) => {
+  const mod = setup(t, 1, {
+    hook: (args) => {
+      if (args[0] === 'kill-session' && String(args[2]).startsWith('=view-')) throw timedOut();
+    },
+  });
+  const warn = t.mock.method(console, 'warn', () => {});
+  mod.closeSession('wf-1');
+  assert.match(warn.mock.calls[0].arguments[0], /could not close view view-agent-abc of wf-1: tmux did not answer/);
+});
+
 test('an ungrouped or missing session is a no-op', (t) => {
   const mod = setup(t, 1);
   assert.equal(mod.releaseGroupedViews('sentinel'), 0);
