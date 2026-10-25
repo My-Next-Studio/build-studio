@@ -21,6 +21,50 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-25 — The decision layer's shadow mode reaches every judgement about agent text
+
+### Added
+
+- **Three more decision points in shadow mode**, beside the existing
+  `gate_blocked` one (see `docs/plans/calibrated-decisions-over-agent-text.md`).
+  Each asks the decision model the question a pattern already answers, logs
+  both answers to `~/.build-studio/decisions/shadow.jsonl` with a new `point`
+  value, and acts on nothing:
+  - `agent_pane`: what an agent's terminal shows (working, waiting at a
+    question, usage limit, login expired, idle at its prompt, exited to a
+    shell), beside the usage-limit, dead-process and stalled-agent patterns.
+    Asked when a limit is first seen, when the stalled verdict changes, when
+    the idle timeout fires and when a process is found dead.
+  - `report_final`: whether what an agent said last is its final report or a
+    progress note, beside the check that decides whether Recover is offered.
+  - `builder_role`: which execution role a PRD's header names, once per
+    execution run.
+
+### Changed
+
+- **With decisions enabled, more agent text goes to the decision provider.**
+  Until now only verification reports were sent. Now also the last 40 rows of
+  an agent's terminal at the events above, an agent's last message when it is
+  found finished-but-unreported or times out, and a PRD's header block when an
+  execution run starts. All of it goes to the same recipient (OpenRouter), and
+  each is also stored in the local shadow log, as reports already were. Nothing
+  changes with decisions off (the default), and a project still opts out with
+  `decisions: { enabled: false }`.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the project-servers.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-10-23 — tmux can no longer crash when Build Studio closes a window
 
 ### Fixed

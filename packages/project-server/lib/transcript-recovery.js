@@ -140,15 +140,50 @@ function looksLikeReport(text) {
  * @returns {null|{text:string, chars:number, transcript:string}}
  */
 function recoverAgentOutput(agent, opts = {}) {
+  const found = readFinalAssistantText(agent, opts);
+  if (!found || !looksLikeReport(found.text)) return null;
+  return { text: found.text, chars: found.text.length, transcript: found.transcript };
+}
+
+/**
+ * What an agent said last, report-shaped or not.
+ *
+ * @returns {null|{text:string, transcript:string}}
+ */
+function readFinalAssistantText(agent, opts = {}) {
   if (!agent || !agent.cliSessionId) return null;
   const file = findTranscript(agent.cliSessionId, agent.agentCwd, opts);
   if (!file) return null;
   let text = null;
   try { text = extractFinalAssistantText(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
-  if (!text || !looksLikeReport(text)) return null;
-  return { text, chars: text.length, transcript: file };
+  return text ? { text, transcript: file } : null;
 }
 
+/**
+ * looksLikeReport's question, asked in words, for the decision layer's shadow
+ * mode (decide.js, decision-points.js). The incident it must get right is the
+ * one above: "Still running; waiting for the notification." is not a report,
+ * however it is formatted. The plan's second founding case is the same one: a
+ * progress note offered for delivery as a final report.
+ */
+const REPORT_SHADOW_QUESTIONS = {
+  final_report: {
+    type: 'noul',
+    instructions: 'This message is the agent\'s final report on the task it was given.',
+    criteria: {
+      true: 'It reports the finished outcome: what was done, found or decided, as the close of the task. A report that lists remaining risks or follow-ups still counts.',
+      false: 'Work is still under way: it says something is running, that it is waiting for a result or a notification, or that a report will follow. Or it is a passing remark, a question to a person, or a plan for work not yet done.',
+    },
+  },
+};
+
+/**
+ * Bump whenever REPORT_SHADOW_QUESTIONS text changes.
+ *   1  2026-10-25  final_report
+ */
+const REPORT_SHADOW_QUESTIONS_VERSION = 1;
+
 module.exports = {
-  projectsRoot, slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput, looksLikeReport,
+  projectsRoot, slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput, readFinalAssistantText, looksLikeReport,
+  REPORT_SHADOW_QUESTIONS, REPORT_SHADOW_QUESTIONS_VERSION,
 };

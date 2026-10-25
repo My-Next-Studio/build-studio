@@ -1,6 +1,6 @@
 # Plan: calibrated decisions over agent text, measured before they are trusted
 
-> **Status: increments 1 and 2 implemented 2026-10-01, at one decision point; question set v3 2026-10-05; Luna comparison proposed 2026-10-07**
+> **Status: increments 1 and 2 implemented 2026-10-01, at one decision point; question set v3 2026-10-05; Luna comparison proposed 2026-10-07; increment 2 implemented at every text judgement 2026-10-25**
 > (proposed 2026-09-19). See *Where this stands* at the end.
 >
 > Owner request: evaluate the newly released "System One" class of decision
@@ -279,9 +279,73 @@ $0.00002 each. Three cases are a smoke test, not a calibration result.
   borderline), as did all three regex-flagged reports (0.83–0.93). Compare v2
   and v3 on live data, not on this replay, before judging the trial.
 
+### Trial review (2026-10-25, 619 reports over three weeks)
+
+Read by hand: every v3 disagreement between the model and the regex.
+
+- **v3, 383 reports:** `environment_cause` agreed with the regex on 367 (96%).
+  The regex flagged 13, and the model agreed on 11. Total cost of the trial
+  about $0.04; median latency 0.6 s.
+- **Of the 14 reports only the model flagged,** about 2 were real catches,
+  both the case the plan was written for: a build-guard refusal written in
+  prose, and UI tests failing because the accessibility API was disabled. The
+  rest were wrong. The largest group, 4 of them, was a test run whose setup
+  failed under an inherited production environment variable and then passed
+  cleanly on a rerun. The criteria already say a rerun that passed produced a
+  result; a v4 wording would have to say it about setup failures too.
+- **The 2 the model missed** both carried the explicit `Gate could not run:`
+  marker, which the regex catches by construction (0.44 and 0.47).
+- **`not_executed` is no signal:** about 85% of reports mention something not
+  run, so it answers yes almost always.
+- **No non-English report at all** reached a verification step in three weeks,
+  so the per-language comparison has no data yet.
+
+What it says about this decision point: the report format asks for an explicit
+marker line, so the regex already catches nearly everything, and the model's
+value is limited to reports that describe a blocker in prose. Decision points
+whose input has no such marker are where a reader can add something a pattern
+cannot. Owner decision: extend shadow mode to them, and act on nothing.
+
+### Built (2026-10-25): shadow mode at every text judgement
+
+Three more points in the shadow log, each asked on a transition and never per
+watchdog tick, and each at most once per agent launch and event:
+
+- **`agent_pane`**: what does the agent's terminal show? One Choice
+  (`working`, `waiting_for_answer`, `usage_limit`, `login_blocked`,
+  `idle_at_prompt`, `exited_to_shell`) covering three pattern modules that each
+  read the pane: `limit-block.js`, `agent-recovery.js` and `agent-stalled.js`
+  (a fourth, not in the table above, that tells a waiting agent from a working
+  one). One Choice rather than one Noul per module, because the states exclude
+  each other and separate questions' probabilities are not guaranteed
+  comparable. The state is the last 40 rows of the pane. Asked when a usage
+  limit is first seen, when the stalled verdict changes, when the idle timeout
+  fires and when a process is found dead. The timeout matters most: it is
+  where the patterns' misses surface, so the log holds negatives, not only what
+  the patterns flagged.
+- **`report_final`**: is what the agent said last its final report, or a
+  progress note? Shadows `looksLikeReport`, which decides whether Recover is
+  offered: the second founding incident. Asked when an agent is found finished
+  but unreported, and at the idle timeout with whatever it said last.
+- **`builder_role`**: which implementation role does the PRD header name? A
+  Choice over the project's execution roles plus `none`, asked once per
+  execution run. The state is the header only, the text the pattern reads, so
+  a role mentioned in the body cannot steer either answer.
+
+Left out, with the reason: `needs-attention.js` is derived from workflow state,
+not from text, and `plan-contract.js` is a JSON parse, which is exact. Neither
+has wording to judge. `exit-recovery.js` reconstructs from git, not from text;
+its question ("did it finish and forget to report?") is covered by the two
+agent points.
+
+Synthetic check on the live model, 13 cases: every pane state was named
+correctly (confidence 0.63–1.0), both progress notes scored P(final) 0.02, and
+a final report 0.89. Two cases the patterns miss went the right way: a short
+non-English final report (0.91; the pattern needs English markers or 800
+characters), and a header naming the role as a free-text `Track:` line.
+
 ### Open
 
-- The other six decision points.
 - **Candidate decision point: support triage verdict** (owner request
   2026-10-01, to take up only if the gate trial looks promising). Triage is an
   agent that investigates a report read-only and writes a proposal: a verdict

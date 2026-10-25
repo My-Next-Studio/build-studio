@@ -42,11 +42,8 @@ const KEY = String.raw`(?:builder\s+role|builder|role)`;
  * @returns {string|null} the value as written, or null when there is no hint
  */
 function parseBuilderRoleHint(text) {
-  const src = String(text || '');
-  if (!src.trim()) return null;
-  // Header block = everything before the first `##` heading.
-  const bodyStart = src.search(/^##\s/m);
-  const header = bodyStart === -1 ? src : src.slice(0, bodyStart);
+  const header = prdHeader(text);
+  if (!header.trim()) return null;
   // `**Role:** X`, `**Builder role:** X`, or the same without bold. Anchored to
   // the line start so a mid-sentence "role:" cannot match.
   const re = new RegExp(String.raw`^\s*(?:\*\*)?${KEY}(?:\*\*)?\s*:\s*(?:\*\*)?\s*(.+)$`, 'im');
@@ -90,4 +87,47 @@ function suggestBuilderRole({ prdText, item } = {}) {
   return null;
 }
 
-module.exports = { parseBuilderRoleHint, suggestBuilderRole, cleanValue };
+/** A PRD's header block: everything before the first `##` heading. */
+function prdHeader(text) {
+  const src = String(text || '');
+  const bodyStart = src.search(/^##\s/m);
+  return bodyStart === -1 ? src : src.slice(0, bodyStart);
+}
+
+/**
+ * parseBuilderRoleHint's question, asked in words, for the decision layer's
+ * shadow mode (decide.js, decision-points.js). A Choice over this project's
+ * execution roles, so the answer can be compared with the role the header line
+ * resolves to. The state is the header only, the same text the pattern reads,
+ * so a role mentioned in the body cannot steer either answer.
+ *
+ * @param {Array<{role: string}>} executionRoles  config.roles.execution
+ */
+function builderRoleShadowQuestions(executionRoles) {
+  const criteria = {};
+  for (const r of executionRoles || []) {
+    if (r && r.role) criteria[r.role] = r.skill ? `The ${r.role} role (skill ${r.skill}).` : null;
+  }
+  criteria[NO_ROLE] = 'The header names no implementation role or track.';
+  return {
+    builder_role: {
+      type: 'choice',
+      instructions: 'Which implementation role does this PRD header say should build it?',
+      criteria,
+    },
+  };
+}
+
+/** The builder_role option for "the header names none". */
+const NO_ROLE = 'none';
+
+/**
+ * Bump whenever builderRoleShadowQuestions text changes.
+ *   1  2026-10-25  builder_role
+ */
+const BUILDER_ROLE_SHADOW_QUESTIONS_VERSION = 1;
+
+module.exports = {
+  parseBuilderRoleHint, suggestBuilderRole, cleanValue, prdHeader,
+  builderRoleShadowQuestions, BUILDER_ROLE_SHADOW_QUESTIONS_VERSION, NO_ROLE,
+};

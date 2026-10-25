@@ -28,7 +28,7 @@ const { reconcilePrdPath } = require('../prd-path');
 const { resolveScreenshotCommand, qaScreenshotInstructions, builderScreenshotInstructions } = require('../screenshot-tool');
 const { killWindowSafely } = require('../tmux');
 const { extractOwnerAction } = require('../owner-action');
-const { suggestBuilderRole } = require('../builder-role-hint');
+const { suggestBuilderRole, parseBuilderRoleHint } = require('../builder-role-hint');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
@@ -4149,6 +4149,22 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     if (type === 'bugfix' && wf.taskPlan) initTaskExecution(wf);
 
     state.saveWorkflow(wf);
+
+    // Shadow-mode second opinion on the PRD header's builder-role line
+    // (lib/decision-points.js). Asked for every execution run with a PRD,
+    // whoever picked the role, so the log holds headers that name none too.
+    if (type === 'execution' && wf.prdPath) {
+      try {
+        const prdText = fs.readFileSync(path.join(projectRoot, wf.prdPath), 'utf8');
+        const raw = parseBuilderRoleHint(prdText);
+        const picked = raw ? validateBuilderRole(config, raw) : null;
+        decisionPoints.shadowBuilderRole({
+          projectConfig: config, wf, prdText,
+          executionRoles: (config.roles && config.roles.execution) || [],
+          resolvedRole: picked && picked.role ? picked.role.role : null,
+        });
+      } catch (_) { /* advisory: an unreadable PRD is caught by the gates above */ }
+    }
 
     // Over-limit docs are logged, never refused (lib/doc-budget.js).
     for (const w of docBudget.docBudgetWarnings(projectRoot, path.relative(projectRoot, docsPath) || 'docs')) {

@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput, looksLikeReport,
+  slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput, readFinalAssistantText, looksLikeReport,
 } = require('./transcript-recovery');
 
 /** Build a throwaway ~/.claude/projects tree. */
@@ -89,6 +89,18 @@ test('recoverAgentOutput returns the report with its length', () => {
   assert.equal(r.text, '**All issues addressed:** yes');
   assert.equal(r.chars, r.text.length);
   assert.match(r.transcript, /abc-123\.jsonl$/);
+});
+
+test('readFinalAssistantText returns the last words even when they are not a report', () => {
+  // The shadow layer is asked about exactly these: a progress note the
+  // pattern rightly refuses to offer for Recover.
+  const home = fakeHome([['-tmp-proj', 'abc-123.jsonl', assistantText('Still running; waiting for the notification.')]]);
+  const agent = { cliSessionId: 'abc-123', agentCwd: '/tmp/proj' };
+  assert.equal(recoverAgentOutput(agent, { home }), null);
+  const r = readFinalAssistantText(agent, { home });
+  assert.equal(r.text, 'Still running; waiting for the notification.');
+  assert.match(r.transcript, /abc-123\.jsonl$/);
+  assert.equal(readFinalAssistantText(null), null);
 });
 
 test('an agent with no CLI session id is not recoverable', () => {

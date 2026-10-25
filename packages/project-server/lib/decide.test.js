@@ -6,7 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const decide = require('./decide');
-const { shadowGateBlocked } = require('./decision-points');
+const { shadowGateBlocked, shadowAgentPane, shadowReportFinal, shadowBuilderRole, paneTail, resetAskedForTests } = require('./decision-points');
+const { existingPaneState } = require('./agent-stalled');
 
 const ON = { decisions: { enabled: true } };
 
@@ -29,7 +30,7 @@ function fakeFetch(answers, { status = 200 } = {}) {
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'decide-test-'));
 const readLog = (dir) => fs.readFileSync(path.join(dir, decide.SHADOW_LOG), 'utf8').trim().split('\n').map(JSON.parse);
 
-beforeEach(() => decide.resetWarningsForTests());
+beforeEach(() => { decide.resetWarningsForTests(); resetAskedForTests(); });
 
 // ── config: off unless configured, project can opt out ──────────────────────
 
@@ -164,4 +165,114 @@ test('a provider outage leaves no record and does not throw', async () => {
   } finally {
     console.warn = orig;
   }
+});
+
+// ── decision points 2–4: what the agent's terminal shows ────────────────────
+
+const AGENT = { role: 'QA', window: 'qa', cli: 'claude', startedAt: '2026-10-25T08:00:00.000Z' };
+const LIMIT_PANE = [
+  '⏺ Running the suite…',
+  '',
+  "You've hit your session limit · resets 10am (Europe/Stockholm)",
+  '',
+  '❯ ',
+  '',
+  '',
+].join('\n');
+
+test('the agent-pane point asks one Choice about the screen and records the pattern verdict beside it', async () => {
+  const logDir = tmpDir();
+  const fetchImpl = fakeFetch({ pane_state: { type: 'choice', choice: 'usage_limit', confidence: 0.9, probabilities: { usage_limit: 0.95, idle_at_prompt: 0.05 } } });
+  const rec = await shadowAgentPane({ projectConfig: { name: 'p' }, wf: RUN, agent: AGENT, trigger: 'limit_detected', pane: LIMIT_PANE, limit: true },
+    { hub: ON, key: 'k', logDir, fetchImpl });
+  assert.equal(rec.point, 'agent_pane');
+  assert.equal(rec.trigger, 'limit_detected');
+  assert.deepEqual(rec.existing, { pane_state: 'usage_limit', limit: true, exited: false, stalled_reason: null });
+  assert.equal(rec.answers.pane_state.value, 'usage_limit');
+  const q = fetchImpl.calls[0].body.questions.pane_state;
+  assert.equal(q.type, 'choice');
+  assert.deepEqual(Object.keys(q.criteria).sort(), ['exited_to_shell', 'idle_at_prompt', 'login_blocked', 'usage_limit', 'waiting_for_answer', 'working']);
+  assert.equal(rec.state, LIMIT_PANE.replace(/\s+$/, ''), 'trailing blank rows are not sent');
+});
+
+test('the agent-pane point asks each event once, however often the watchdog passes it', async () => {
+  const fetchImpl = fakeFetch({ pane_state: { type: 'choice', choice: 'working', confidence: 1, probabilities: { working: 1 } } });
+  const deps = { hub: ON, key: 'k', logDir: tmpDir(), fetchImpl };
+  const ask = (over = {}) => shadowAgentPane({ projectConfig: {}, wf: RUN, agent: AGENT, trigger: 'idle_timeout', pane: 'x', ...over }, deps);
+  assert.ok(await ask());
+  assert.equal(await ask(), null, 'the same event again');
+  assert.ok(await ask({ trigger: 'process_dead' }), 'a different event');
+  assert.ok(await ask({ agent: { ...AGENT, startedAt: '2026-10-25T09:00:00.000Z' } }), 'a relaunched agent');
+  assert.equal(fetchImpl.calls.length, 3);
+});
+
+test('a blank pane, or decisions off, asks nothing', async () => {
+  const fetchImpl = fakeFetch({});
+  assert.equal(await shadowAgentPane({ projectConfig: {}, wf: RUN, agent: AGENT, trigger: 'idle_timeout', pane: '\n\n  \n' }, { hub: ON, key: 'k', logDir: tmpDir(), fetchImpl }), null);
+  assert.equal(await shadowAgentPane({ projectConfig: {}, wf: RUN, agent: AGENT, trigger: 'idle_timeout', pane: 'x' }, { hub: {}, key: 'k', logDir: tmpDir(), fetchImpl }), null);
+  assert.equal(fetchImpl.calls.length, 0);
+});
+
+test('the pattern verdicts map onto pane_state, and silence-only verdicts have none', () => {
+  assert.equal(existingPaneState({ limit: true, stalledReason: 'awaiting_decision' }), 'usage_limit');
+  assert.equal(existingPaneState({ exited: true }), 'exited_to_shell');
+  assert.equal(existingPaneState({ stalledReason: 'awaiting_decision' }), 'waiting_for_answer');
+  assert.equal(existingPaneState({ stalledReason: 'auth_blocked' }), 'login_blocked');
+  assert.equal(existingPaneState({ stalledReason: 'finished_not_reported' }), 'idle_at_prompt');
+  assert.equal(existingPaneState({ stalledReason: 'model_stalled' }), null);
+  assert.equal(existingPaneState({}), null);
+});
+
+test('paneTail keeps the last lines and drops trailing blank ones', () => {
+  const pane = Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n') + '\n\n\n';
+  const tail = paneTail(pane, 40);
+  assert.equal(tail.split('\n').length, 40);
+  assert.ok(tail.endsWith('line 59'));
+});
+
+test('a shadow call cannot throw into the watchdog, even synchronously', () => {
+  const hub = Object.defineProperty({}, 'decisions', { get() { throw new Error('config exploded'); } });
+  let result;
+  assert.doesNotThrow(() => { result = shadowAgentPane({ projectConfig: {}, wf: RUN, agent: AGENT, trigger: 'idle_timeout', pane: 'x' }, { hub, key: 'k', logDir: tmpDir(), fetchImpl: fakeFetch({}) }); });
+  assert.ok(result instanceof Promise);
+});
+
+// ── decision point 5: final report, or a progress note ──────────────────────
+
+test('the report point records the progress note the pattern refuses, beside the model\'s answer', async () => {
+  const logDir = tmpDir();
+  const fetchImpl = fakeFetch({ final_report: { type: 'noul', noul: 0.04 } });
+  const text = 'Still running; waiting for the notification.';
+  const rec = await shadowReportFinal({ projectConfig: { name: 'p' }, wf: RUN, agent: AGENT, trigger: 'idle_timeout', text },
+    { hub: ON, key: 'k', logDir, fetchImpl });
+  assert.equal(rec.point, 'report_final');
+  assert.deepEqual(rec.existing, { final_report: false });
+  assert.equal(rec.answers.final_report.p, 0.04);
+  assert.equal(rec.state, text);
+  assert.equal(await shadowReportFinal({ projectConfig: {}, wf: RUN, agent: AGENT, trigger: 'idle_timeout', text }, { hub: ON, key: 'k', logDir, fetchImpl }), null, 'asked once');
+});
+
+// ── decision point 6: the PRD header's builder role ─────────────────────────
+
+const ROLES = [{ role: 'iOS Dev', skill: 'ios_dev' }, { role: 'Android Dev' }];
+
+test('the builder-role point sends only the header, and offers the project\'s roles plus none', async () => {
+  const fetchImpl = fakeFetch({ builder_role: { type: 'choice', choice: 'Android Dev', confidence: 0.8, probabilities: { 'Android Dev': 0.9, none: 0.1 } } });
+  const prdText = '# PRD-046 — Android foundation\n\n**Status:** Draft\n**Role:** `Android Dev` — the Phase 1.5 track\n\n## Scope\n\nThe iOS Dev role owns the shared parts.\n';
+  const rec = await shadowBuilderRole({ projectConfig: { name: 'p' }, wf: { ...RUN, currentStep: 'planning', prdPath: 'docs/prds/PRD-046.md' }, prdText, executionRoles: ROLES, resolvedRole: 'Android Dev' },
+    { hub: ON, key: 'k', logDir: tmpDir(), fetchImpl });
+  assert.equal(rec.point, 'builder_role');
+  assert.ok(!rec.state.includes('owns the shared parts'), 'the body cannot steer the answer');
+  assert.deepEqual(rec.existing, { builder_role: 'Android Dev', raw: 'Android Dev', resolves: true });
+  assert.deepEqual(Object.keys(fetchImpl.calls[0].body.questions.builder_role.criteria), ['iOS Dev', 'Android Dev', 'none']);
+});
+
+test('a header that names an unknown role keeps its raw value; one that names none says none', async () => {
+  const deps = () => ({ hub: ON, key: 'k', logDir: tmpDir(), fetchImpl: fakeFetch({ builder_role: { type: 'choice', choice: 'none', confidence: 1, probabilities: { none: 1 } } }) });
+  const wf = { ...RUN, prdPath: 'docs/prds/x.md' };
+  const unknown = await shadowBuilderRole({ projectConfig: {}, wf, prdText: '# X\n**Role:** Web Dev\n', executionRoles: ROLES }, deps());
+  assert.deepEqual(unknown.existing, { builder_role: 'Web Dev', raw: 'Web Dev', resolves: false });
+  const none = await shadowBuilderRole({ projectConfig: {}, wf, prdText: '# X\n**Status:** Draft\n', executionRoles: ROLES }, deps());
+  assert.deepEqual(none.existing, { builder_role: 'none', raw: null, resolves: true });
+  assert.equal(await shadowBuilderRole({ projectConfig: {}, wf, prdText: '# X\n', executionRoles: [] }, deps()), null, 'no roles, no question');
 });

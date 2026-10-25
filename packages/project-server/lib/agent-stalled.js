@@ -315,4 +315,62 @@ function classifyStalledAgent({
   };
 }
 
-module.exports = { classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, idleTimeoutVerdict, paneTooShortToRead, MIN_READABLE_PANE_ROWS, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS };
+/**
+ * What an agent's terminal shows, asked in words, for the decision layer's
+ * shadow mode (decide.js, decision-points.js). One question for three modules
+ * that each read the pane with patterns: this one (waiting at a question,
+ * blocked on a login, idle at a prompt), limit-block.js (a usage limit) and
+ * agent-recovery.js (the program exited to a shell). A Choice rather than one
+ * Noul per module, because the states exclude each other and probabilities from
+ * separate questions are not guaranteed comparable.
+ *
+ * This is the case no pattern can settle, written up in the plan: an agent
+ * WORKING versus one WAITING at a menu, from the screen alone.
+ */
+const PANE_SHADOW_QUESTIONS = {
+  pane_state: {
+    type: 'choice',
+    instructions: 'What is the coding agent in this terminal doing, judging by what the screen ends with?',
+    criteria: {
+      working: 'Busy: a spinner, an elapsed-time or token counter, a command still running, or output still arriving.',
+      waiting_for_answer: 'It asked a question or shows a menu, numbered options or a confirmation, and is holding until a person answers.',
+      usage_limit: 'A notice or dialog says a session, usage or weekly limit was hit, and the agent waits for it to reset.',
+      login_blocked: 'A login has expired or authentication failed, and the agent cannot continue until someone signs in.',
+      idle_at_prompt: 'Its own input prompt is empty and nothing is running: it stopped without asking anything.',
+      exited_to_shell: 'The agent program has ended and the terminal is back at a shell prompt.',
+    },
+  },
+};
+
+/**
+ * Bump whenever PANE_SHADOW_QUESTIONS text changes.
+ *   1  2026-10-25  pane_state
+ */
+const PANE_SHADOW_QUESTIONS_VERSION = 1;
+
+/** The stalled verdicts that read the pane, as pane_state options. */
+const STALLED_REASON_TO_PANE_STATE = {
+  auth_blocked: 'login_blocked',
+  awaiting_decision: 'waiting_for_answer',
+  finished_not_reported: 'idle_at_prompt',
+  agent_waiting: 'idle_at_prompt',
+  // model_stalled / agent_silent judge a non-interactive agent on silence, not
+  // on its screen, so they have no pane_state.
+};
+
+/**
+ * The engine's own answer to pane_state, from the pattern verdicts it reached
+ * at that moment, or null when none of them read the screen as anything (an
+ * idle timeout with no reason found).
+ */
+function existingPaneState({ limit = false, exited = false, stalledReason = null } = {}) {
+  if (limit) return 'usage_limit';
+  if (exited) return 'exited_to_shell';
+  return STALLED_REASON_TO_PANE_STATE[stalledReason] || null;
+}
+
+module.exports = {
+  classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, idleTimeoutVerdict, paneTooShortToRead,
+  MIN_READABLE_PANE_ROWS, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS,
+  PANE_SHADOW_QUESTIONS, PANE_SHADOW_QUESTIONS_VERSION, existingPaneState,
+};

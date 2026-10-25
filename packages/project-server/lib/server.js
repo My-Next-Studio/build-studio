@@ -531,6 +531,9 @@ function startServer(projectRoot, opts = {}) {
   const codexTelemetry = require('./codex-telemetry');
   const qaSuiteRun = require('./qa-suite-run');
   const transcriptRecovery = require('./transcript-recovery');
+  // Shadow-mode second opinions on the verdicts below (lib/decision-points.js).
+  // Fire-and-forget, on transitions only, and nothing here reads their answers.
+  const decisionPoints = require('./decision-points');
   // Provider usage limits (see lib/limit-block.js). Capped so a limit that keeps
   // re-blocking surfaces instead of being hammered the instant each reset lands.
   const limitBlock = require('./limit-block');
@@ -671,8 +674,9 @@ function startServer(projectRoot, opts = {}) {
             logText = fs.readFileSync(logFile, 'utf8');
             logSeenAt = fs.statSync(logFile).mtimeMs;
           } catch (_) { /* no log yet */ }
+          const limitPane = tmuxOps.capturePane(target, 200);
           const limit = limitBlock.detectLimitState({
-            pane: tmuxOps.capturePane(target, 200),
+            pane: limitPane,
             log: logText,
             // Anchor to when the notice was printed, not to now — see
             // lib/limit-block.js. Getting this wrong parks an agent for a day
@@ -689,6 +693,7 @@ function startServer(projectRoot, opts = {}) {
               };
               changed = true;
               console.log(`[limit] ${agent.role} blocked in ${activeWf.currentStep} — ${limitBlock.describeBlock(agent.blockedOnLimit, new Date(now))}`);
+              decisionPoints.shadowAgentPane({ projectConfig: config, wf: activeWf, agent, trigger: 'limit_detected', pane: limitPane, limit: true });
             }
             // Deliberately NOT marked 'error'. An errored agent is treated as a
             // terminal state by the review-advance guard, which is how one
@@ -821,6 +826,10 @@ function startServer(projectRoot, opts = {}) {
           // verdict is accurate for a genuinely dead process too.
           if (cls === 'dead' && !agentRecovery.hasResumeArtifacts(agent)) cls = 'alive';
           if (cls !== 'alive') {
+            decisionPoints.shadowAgentPane({
+              projectConfig: config, wf: activeWf, agent, trigger: `process_${cls}`,
+              pane: tmuxOps.capturePane(target, 40), exited: cls === 'dead',
+            });
             const decision = cls === 'dead'
               ? agentRecovery.decideRecovery(agent, { maxAutoResumes: AGENT_MAX_AUTO_RESUMES })
               : 'halt'; // window gone — nowhere to resume in place
@@ -883,11 +892,13 @@ function startServer(projectRoot, opts = {}) {
                 }
                 modelLastActivityMs = codexTelemetry.rolloutLastWrittenMs(agent.codexRolloutPath);
               }
+              const stalledPane = tmuxOps.capturePane(target, 40);
+              const recovered = transcriptRecovery.recoverAgentOutput(agent);
               const stalled = agentStalled.classifyStalledAgent({
-                paneText: tmuxOps.capturePane(target, 40),
+                paneText: stalledPane,
                 idleMs,
                 hasFeedback: !!agent.feedback,
-                hasRecoverableReport: !!transcriptRecovery.recoverAgentOutput(agent),
+                hasRecoverableReport: !!recovered,
                 waitConfirmMs: AGENT_DEAD_CONFIRM_MS,
                 cli: agent.cli || null,
                 modelLastActivityMs,
@@ -898,6 +909,11 @@ function startServer(projectRoot, opts = {}) {
                     || (agent.stalled && agent.stalled.question) !== stalled.question) {
                   console.warn(`[agent-stalled] ${agent.role} in ${activeWf.currentStep}: ${stalled.reason} — ${stalled.action}`);
                   changed = true;
+                  const trigger = `stalled:${stalled.reason}`;
+                  decisionPoints.shadowAgentPane({ projectConfig: config, wf: activeWf, agent, trigger, pane: stalledPane, stalledReason: stalled.reason });
+                  if (stalled.reason === 'finished_not_reported' && recovered) {
+                    decisionPoints.shadowReportFinal({ projectConfig: config, wf: activeWf, agent, trigger, text: recovered.text });
+                  }
                 }
                 agent.stalled = stalled;
                 agent.stalledReason = stalled.reason;
@@ -979,6 +995,16 @@ function startServer(projectRoot, opts = {}) {
                   : `Stalled — no log activity for ${Math.round(idleMs / 60000)} minutes (total elapsed ${Math.round(elapsed / 60000)}m), but the process is still alive. Check the pane before relaunching — a relaunch discards its context and any uncommitted work.`;
             changed = true;
             console.log(`[workflow] Agent ${agent.role} stalled — log idle for ${Math.round(idleMs / 60000)}m in step ${activeWf.currentStep}`);
+            // The timeout is where a verdict the patterns MISSED shows up: a
+            // limit they did not recognise, a question they could not see, a
+            // progress note they would not call a report. Ask both, so the log
+            // holds the negatives too, not only what the patterns flagged.
+            decisionPoints.shadowAgentPane({
+              projectConfig: config, wf: activeWf, agent, trigger: 'idle_timeout',
+              pane: tmuxOps.capturePane(target, 40), exited, stalledReason: agent.stalledReason || null,
+            });
+            const lastWords = transcriptRecovery.readFinalAssistantText(agent);
+            if (lastWords) decisionPoints.shadowReportFinal({ projectConfig: config, wf: activeWf, agent, trigger: 'idle_timeout', text: lastWords.text });
           }
 
         }
