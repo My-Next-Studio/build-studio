@@ -46,7 +46,12 @@ that move underneath you without your having edited anything.
   **Relaunch step**, which redid every agent, including reviewers that had
   already reported. It is also `POST /api/workflow/advance` with
   `{"action":"relaunch_agent","role":"QA"}` (add `"window"` when two agents
-  share a role). Task-execution agents keep their per-task Relaunch.
+  share a role). Task-execution agents keep their per-task Relaunch. An
+  agent whose report Build Studio reconstructed from git (after **Recover** on
+  an agent that exited without reporting) can be relaunched too: that report
+  is not the agent's verdict, and QA's gate refuses one with no test results.
+  Relaunching QA this way keeps the finished server-run suite and its results,
+  where **Relaunch step** would run the suite again.
 
 ### Changed
 

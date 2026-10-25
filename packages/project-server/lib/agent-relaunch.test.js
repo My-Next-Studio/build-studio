@@ -61,3 +61,11 @@ test('the round suffix is taken off, since the launcher adds it again', () => {
   // Only this round's suffix: an r2 window seen in round 3 is not touched.
   assert.equal(relaunchSpec({ role: 'QA', window: 'qa-r2', instruction: 'x' }, 3).window, 'qa-r2');
 });
+
+test('a done agent whose report was reconstructed from git can be relaunched', () => {
+  const { buildWorkSummary } = require('./exit-recovery');
+  const qa = { role: 'QA', window: 'qa-validate', status: 'done', instruction: 'x', feedback: buildWorkSummary({ role: 'QA', cli: 'codex', commits: [] }) };
+  assert.equal(findRelaunchable({ currentStep: 'qa_validation', steps: { qa_validation: { status: 'running', agents: [qa] } } }, { role: 'QA' }).agent, qa);
+  const own = { ...qa, feedback: '## QA\n\nSee the work recovered from git (RECONSTRUCTED, not agent-authored) above.' };
+  assert.match(findRelaunchable({ currentStep: 'qa_validation', steps: { qa_validation: { status: 'running', agents: [own] } } }, { role: 'QA' }).error, /has reported/, 'only the reconstruction heading counts, not the phrase anywhere');
+});

@@ -72,6 +72,14 @@ function hasRecoverableWork(facts, role) {
  *          commits:{sha:string, subject:string}[], filesChanged?:number,
  *          insertions?:number, deletions?:number, dirty?:string[]}} facts
  */
+/** In the heading of every reconstruction, and only there; see isReconstructed. */
+const RECONSTRUCTED_MARK = 'RECONSTRUCTED, not agent-authored';
+
+/** Is this report Build Studio's reconstruction from git rather than the agent's own? */
+function isReconstructed(feedback) {
+  return typeof feedback === 'string' && /^## .* — work recovered from git \(RECONSTRUCTED, not agent-authored\)/.test(feedback);
+}
+
 function buildWorkSummary(facts) {
   const {
     role = 'Agent', cli, step, base = 'main',
@@ -79,7 +87,7 @@ function buildWorkSummary(facts) {
   } = facts || {};
 
   const lines = [];
-  lines.push(`## ${role} — work recovered from git (RECONSTRUCTED, not agent-authored)`);
+  lines.push(`## ${role} — work recovered from git (${RECONSTRUCTED_MARK})`);
   lines.push('');
   lines.push('**How this report came to exist.** The agent committed its work and then its');
   lines.push(`process exited without reporting${cli ? `. ${cli} writes no resumable session or transcript, so` : ', so'}`);
@@ -121,4 +129,4 @@ function buildWorkSummary(facts) {
   return lines.join('\n');
 }
 
-module.exports = { hasRecoverableWork, buildWorkSummary, isPlanningRole, PLANNING_ROLES };
+module.exports = { hasRecoverableWork, buildWorkSummary, isReconstructed, isPlanningRole, PLANNING_ROLES };

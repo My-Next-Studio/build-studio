@@ -20,6 +20,8 @@
  */
 const SPEC_FIELDS = ['role', 'window', 'reportFeedback', 'instruction', 'historyOverride', 'taskIndex', 'branch', 'goalCondition'];
 
+const { isReconstructed } = require('./exit-recovery');
+
 /** Agents in these states can be relaunched; a 'done' one has already reported. */
 const RELAUNCHABLE = new Set(['error', 'running', 'pending']);
 
@@ -48,7 +50,12 @@ function findRelaunchable(wf, { role, window } = {}) {
   if (matches.length === 0) return { error: `no ${role} agent in ${stepKey}` };
   if (matches.length > 1) return { error: `${matches.length} ${role} agents in ${stepKey}; name the window` };
   const { agent, index } = matches[0];
-  if (!RELAUNCHABLE.has(agent.status)) {
+  // A report Build Studio reconstructed from git after the agent exited is not
+  // the agent's verdict, and a gate may refuse it for having no test results.
+  // fazon FAZ-460 (2026-10-25): a codex QA agent got nothing from the model,
+  // Recover filed the reconstruction, and qa_validation could not advance on it.
+  const reconstructed = agent.status === 'done' && isReconstructed(agent.feedback);
+  if (!RELAUNCHABLE.has(agent.status) && !reconstructed) {
     return { error: `${role} is ${agent.status}${agent.status === 'done' ? ' and has reported' : ''}; only a failed, stuck or pending agent is relaunched` };
   }
   if (!agent.instruction) return { error: `${role} has no stored instruction to relaunch from` };

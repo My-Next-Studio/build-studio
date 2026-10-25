@@ -3674,8 +3674,10 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
             </button>
           )}
           {/* A step agent (a reviewer, say) relaunched alone: the step's other
-              agents keep their reports. "Relaunch step" would redo them all. */}
-          {(agent.status === 'error' || agent.logError) && verdict !== 'waiting' && onRelaunchAgent && agent.taskIndex === undefined && (
+              agents keep their reports. "Relaunch step" would redo them all.
+              Also offered on a report Build Studio reconstructed from git,
+              which is not the agent's verdict (lib/agent-relaunch.js). */}
+          {(agent.status === 'error' || agent.logError || (agent.status === 'done' && !!agent.feedback?.includes('(RECONSTRUCTED, not agent-authored)'))) && verdict !== 'waiting' && onRelaunchAgent && agent.taskIndex === undefined && (
             <button
               onClick={(e) => { e.stopPropagation(); onRelaunchAgent(agent) }}
               title={`Relaunch ${agent.role} only. The other agents in this step keep their reports.`}
