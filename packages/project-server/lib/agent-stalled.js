@@ -118,6 +118,40 @@ function hasBackgroundWork(paneText) {
   return BACKGROUND_WORK_MARKERS.some((re) => re.test(t));
 }
 
+// Claude Code emits a "✻ <Word> for <time>" line when an agent's turn ends
+// (e.g. "✻ Cogitated for 3m 39s", "✻ Crunched for 24s"). While processing it
+// shows "✶ <Word>ing… still thinking" instead. This signal disambiguates
+// "agent finished and is waiting" from "agent is still working" — and it also
+// disambiguates the agent's own output from prompt scrollback (prompts may
+// contain prior-round feedback markers like **Approved:** but never the
+// turn-complete glyph).
+// Anchor on the duration unit ("for 32s" / "for 4m 32s"), not just "for <digit>":
+// Claude Code 2.1.x shows `✻ Waiting for 2 background agents to finish` WHILE
+// the agent is still working, which the unit-less pattern false-matched —
+// nudging (and risking a premature feedback POST from) mid-task agents.
+const TURN_COMPLETE_PATTERN = /✻\s+\S+\s+for\s+\d+[smh]\b/g;
+
+/**
+ * Did the agent's most recent turn end, with nothing after it?
+ *
+ * The turn-end line alone is not enough, because it stays on screen after the
+ * agent starts again. `claude --resume` reprints the earlier conversation, old
+ * turn-end lines included, so an agent resumed after a power cut was told its
+ * output "looks complete" seconds after it woke (fazon FAZ-460, 2026-10-25).
+ * A later turn shows as a submitted prompt (`❯ text` in the transcript) or
+ * as output (`⏺ ...`) below the last turn-end line. The composer also starts
+ * with `❯`, but it sits directly under a box rule, so it is not counted.
+ */
+function lastTurnEnded(paneText) {
+  const t = String(paneText || '');
+  let last = null;
+  for (const m of t.matchAll(TURN_COMPLETE_PATTERN)) last = m;
+  if (!last) return false;
+  const after = t.slice(last.index + last[0].length).split('\n').slice(1);
+  return !after.some((line, i) => /^⏺/.test(line)
+    || (/^❯\s*\S/.test(line) && !/^─{3,}/.test(after[i - 1] || '')));
+}
+
 /**
  * What the idle timeout does with an agent whose log has been silent `idleMs`.
  *
@@ -370,7 +404,7 @@ function existingPaneState({ limit = false, exited = false, stalledReason = null
 }
 
 module.exports = {
-  classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, idleTimeoutVerdict, paneTooShortToRead,
+  classifyStalledAgent, isAwaitingInput, extractQuestion, hasBackgroundWork, lastTurnEnded, idleTimeoutVerdict, paneTooShortToRead,
   MIN_READABLE_PANE_ROWS, AUTH_PATTERNS, WAITING_MARKERS, NON_INTERACTIVE_CLIS, MODEL_STALL_MS,
   PANE_SHADOW_QUESTIONS, PANE_SHADOW_QUESTIONS_VERSION, existingPaneState,
 };

@@ -24,7 +24,7 @@ test('the forgot-feedback nudge skips agents with background work pending', () =
   const i = src.indexOf('function detectAgentForgotFeedback(wf) {');
   assert.ok(i > 0);
   const body = src.slice(i, src.indexOf('\n  }\n', i));
-  const turn = body.indexOf('if (!TURN_COMPLETE_PATTERN.test(pane)) return;');
+  const turn = body.indexOf('if (!lastTurnEnded(pane)) return;');
   const guard = body.indexOf('if (hasBackgroundWork(pane)) return;');
   const push = body.indexOf('candidates.push({ agent, stepLabel });');
   assert.ok(turn > 0 && guard > turn && push > guard, 'background-work guard must sit between the turn check and the push');

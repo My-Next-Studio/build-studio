@@ -63,6 +63,15 @@ that move underneath you without your having edited anything.
   already marked "Session lost" before this update is not resumed: relaunch
   it as before.
 
+### Fixed
+
+- **A resumed agent is no longer told its work "looks complete" the moment it
+  wakes.** `claude --resume` reprints the earlier conversation, and the
+  forgot-feedback reminder read an old turn's "✻ Worked for …" line as the
+  agent having stopped without reporting. Now only a turn with nothing after
+  it counts, and an agent is left alone for three minutes after a resume. This
+  affected the dead-process resume too, not only the new session resume.
+
 ### Upgrade steps
 
 **In Build Studio** — project-server only:

@@ -11,7 +11,8 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { hasBackgroundWork } = require('./agent-stalled');
+const { hasBackgroundWork, lastTurnEnded } = require('./agent-stalled');
+const { inResumeGrace } = require('./agent-recovery');
 
 const CHECK_INTERVAL_MS = 15_000;
 const STALL_THRESHOLD_MS = 10 * 60 * 1000; // 10 min — agent stall warning
@@ -46,18 +47,6 @@ const FEEDBACK_COMPLETION_PATTERNS = [
   /```json[\s\S]*?\\?"tasks\\?"\s*:\s*\[/,    // unclosed json plan block
 ];
 
-// Claude Code emits a "✻ <Word> for <time>" line when an agent's turn ends
-// (e.g. "✻ Cogitated for 3m 39s", "✻ Crunched for 24s"). While processing it
-// shows "✶ <Word>ing… still thinking" instead. This signal disambiguates
-// "agent finished and is waiting" from "agent is still working" — and it also
-// disambiguates the agent's own output from prompt scrollback (prompts may
-// contain prior-round feedback markers like **Approved:** but never the
-// turn-complete glyph).
-// Anchor on the duration unit ("for 32s" / "for 4m 32s"), not just "for <digit>":
-// Claude Code 2.1.x shows `✻ Waiting for 2 background agents to finish` WHILE
-// the agent is still working, which the unit-less pattern false-matched —
-// nudging (and risking a premature feedback POST from) mid-task agents.
-const TURN_COMPLETE_PATTERN = /✻\s+\S+\s+for\s+\d+[smh]\b/;
 
 /**
  * Create an overseer bound to a specific project's state + config.
@@ -221,19 +210,23 @@ function createOverseer(config, state, broadcast) {
       if (!agent.window) return;
       const startedAt = agent.startedAt ? new Date(agent.startedAt).getTime() : 0;
       if (!startedAt || Date.now() - startedAt < FEEDBACK_NUDGE_DELAY_MS) return;
+      // Just resumed (agent-recovery): the CLI is still booting and reprinting
+      // its earlier conversation. Same grace the watchdog gives it.
+      if (inResumeGrace(agent, Date.now())) return;
       const pane = captureTmuxPane(sessionName, agent.window);
       if (!pane) return;
       // Single primary signal: the Claude Code turn-complete glyph
       // (`✻ <Word> for <Xs>`) appears only when an agent's turn ends — never
       // in prompt scrollback, never in tool output, never during processing
-      // (which shows `✶ <Word>ing…` instead). If it's present and the agent
-      // has no feedback recorded, the agent has stopped and forgotten the
-      // curl POST regardless of whether its output uses the structured
-      // markdown markers we expect. (Earlier double-check on
+      // (which shows `✶ <Word>ing…` instead). If the LAST turn ended that way
+      // and the agent has no feedback recorded, the agent has stopped and
+      // forgotten the curl POST regardless of whether its output uses the
+      // structured markdown markers we expect. (Earlier double-check on
       // FEEDBACK_COMPLETION_PATTERNS missed agents like example-ios T12 that
       // produced free-form prose summaries instead of the mandated
-      // **All issues addressed:** / **Approved:** format.)
-      if (!TURN_COMPLETE_PATTERN.test(pane)) return;
+      // **All issues addressed:** / **Approved:** format.) "Last" matters: an
+      // older turn's glyph stays on screen, see lastTurnEnded.
+      if (!lastTurnEnded(pane)) return;
       // A turn that ended with background shells or goal mode pending is a
       // pause, not the end: the agent wakes when they report. Nudging it then
       // told a dev agent mid-test-suite that its output "looks complete"

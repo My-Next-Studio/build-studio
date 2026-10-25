@@ -301,3 +301,55 @@ test('a pane squeezed too short to show a dialog is not read; an unknown height 
   assert.equal(paneTooShortToRead(50), false);
   assert.equal(paneTooShortToRead(null), false);
 });
+
+// ─── lastTurnEnded (fazon FAZ-460, 2026-10-25) ───────────────────────────────
+//
+// A resumed agent reprints its old turns; the forgot-feedback nudge read the
+// old turn-end line as "done" seconds after the resume.
+
+const RULE = '─'.repeat(60);
+const COMPOSER = `${RULE}\n❯ \n${RULE}\n  ⏵⏵ bypass permissions on (shift+tab to cycle)`;
+
+test('lastTurnEnded: a turn that ended with nothing after it', () => {
+  const { lastTurnEnded } = require('./agent-stalled');
+  assert.equal(lastTurnEnded(`⏺ All done, review written.\n\n✻ Worked for 23s · done 11:58 AM\n\n${COMPOSER}`), true);
+});
+
+test('lastTurnEnded: the composer placeholder does not count as a new turn', () => {
+  const { lastTurnEnded } = require('./agent-stalled');
+  assert.equal(lastTurnEnded(`✻ Cogitated for 3m 39s\n\n${RULE}\n❯ Try "fix lint errors"\n${RULE}`), true);
+});
+
+test('lastTurnEnded: an old turn-end line followed by a resume prompt and new work', () => {
+  const { lastTurnEnded } = require('./agent-stalled');
+  const pane = [
+    '⏺ The UI run\'s background task will notify me when it finishes.',
+    '',
+    '✻ Worked for 23s · done 11:58 AM',
+    '',
+    '❯ Your CLI process was killed mid-run by an external event and this session has been resumed.',
+    '',
+    '  Ran 1 shell command',
+    '',
+    '✻ Incubating… (6s · ↓ 241 tokens · thinking with medium effort)',
+    COMPOSER,
+  ].join('\n');
+  assert.equal(lastTurnEnded(pane), false);
+});
+
+test('lastTurnEnded: output after the last turn-end line means a later turn is running', () => {
+  const { lastTurnEnded } = require('./agent-stalled');
+  assert.equal(lastTurnEnded(`✻ Brewed for 38m 34s · done 11:28 AM\n\n⏺ Background command "npm test" completed (exit code 0)\n\n${COMPOSER}`), false);
+});
+
+test('lastTurnEnded: no turn-end line at all, or a working spinner', () => {
+  const { lastTurnEnded } = require('./agent-stalled');
+  assert.equal(lastTurnEnded(''), false);
+  assert.equal(lastTurnEnded('✻ Waiting for 2 background agents to finish'), false);
+  assert.equal(lastTurnEnded(`✻ Whirlpooling… (1m 6s · ↓ 4.0k tokens · esc to interrupt)\n${COMPOSER}`), false);
+});
+
+test('lastTurnEnded: the latest of several turn-end lines decides', () => {
+  const { lastTurnEnded } = require('./agent-stalled');
+  assert.equal(lastTurnEnded(`✻ Worked for 1m\n\n❯ continue\n\n⏺ Posted the feedback.\n\n✻ Worked for 12s\n\n${COMPOSER}`), true);
+});
