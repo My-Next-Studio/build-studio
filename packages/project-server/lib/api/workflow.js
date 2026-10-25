@@ -13,6 +13,7 @@ const { deriveNeedsAttention } = require('../needs-attention');
 const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
 const agentRecovery = require('../agent-recovery');
 const agentRelaunch = require('../agent-relaunch');
+const uitestScope = require('../uitest-scope');
 const learningScope = require('../learning-scope');
 const limitBlock = require('../limit-block');
 const memoryGuard = require('../memory-guard');
@@ -182,9 +183,10 @@ function iosDerivedDataGuidance(config, wf) {
  * hours of a single task, followed by QA testing the same branch again.
  *
  * So the builder follows the same scope QA does. Unit tests and every other
- * suite still run in full; only the XCUITest regression narrows to the classes
- * the branch adds or modifies. The list cannot be precomputed the way QA's is
- * (the builder writes those tests), so it gets the rule and the command.
+ * suite still run in full; only the XCUITest regression narrows to the tests
+ * the branch adds or modifies (uitest-scope.js). The list cannot be precomputed
+ * the way QA's is (the builder writes those tests), so it gets a command that
+ * computes it from the working tree.
  * Projects without the setting keep the complete suite.
  *
  * @returns {{goalClause: string, guidance: string}}
@@ -205,9 +207,13 @@ function builderTestRequirement(config, baseBranch = 'main') {
   }
   const unitTarget = config.qa_validation.unit_test_target || 'the unit-test target';
   return {
-    goalClause: 'every unit test (including the pre-implementation tests committed before this session started) and every other non-XCUITest suite has been run in full and passes, and every XCUITest class this branch adds or modifies versus '
-      + `${baseBranch} has been run and passes; the full XCUITest regression suite is NOT required (this project sets qa_validation.scope=new-uitests, so it runs periodically and before a release)${jsClause}`,
-    guidance: `- The final verification run is every unit test (${unitTarget}) and every other non-XCUITest suite in full, plus ONLY the XCUITest classes this branch adds or modifies. Do NOT run the full XCUITest regression suite: this project runs it periodically and before a release, not per task. List the classes to run with\n  \`git diff --name-only --diff-filter=AM ${baseBranch}...HEAD -- '*UITests/*.swift'\`\n  and pass every XCTestCase subclass those files declare as \`-only-testing:<UITestTarget>/<Class>\`. Read the class names from the files: a file may declare several classes, none named after the file, and a shared support file declares none and adds nothing. If no classes result, no XCUITests are required.${jsGuidance}`,
+    goalClause: 'every unit test (including the pre-implementation tests committed before this session started) and every other non-XCUITest suite has been run in full and passes, and every XCUITest that `node "$BUILD_STUDIO_UITEST_SCOPE"` lists for this branch versus '
+      + `${baseBranch} has been run and passes (the test files it adds in full; in the test files it modifies, the tests that reach the changed code); the full XCUITest regression suite is NOT required (this project sets qa_validation.scope=new-uitests, so it runs periodically and before a release)${jsClause}`,
+    // The list is computed by uitest-scope.js, the same code QA's run uses, so
+    // the builder and QA cover the same tests. A modified file runs only the
+    // tests that reach its changed code: one copy edit in a helper had pulled a
+    // 44-minute class into both runs (fazon FAZ-460, 2026-10-25).
+    guidance: `- The final verification run is every unit test (${unitTarget}) and every other non-XCUITest suite in full, plus ONLY the XCUITests this branch adds or modifies. Do NOT run the full XCUITest regression suite: this project runs it periodically and before a release, not per task. Get the XCUITests to run with\n  \`node "$BUILD_STUDIO_UITEST_SCOPE" ${baseBranch}\`\n  It prints one \`-only-testing:\` flag per line, and on stderr why: a test file the branch adds runs in full; in a test file it modifies, only the tests that reach the changed code run (a test whose code did not change is left to the regression run, like an unchanged class). Pass every line to xcodebuild exactly as printed, and run the command again after your last change to a UI test file, since the list follows your edits. QA runs the same list. If it prints nothing, no XCUITests are required. Only if \`$BUILD_STUDIO_UITEST_SCOPE\` is unset: list the files with \`git diff --name-only --diff-filter=AM ${baseBranch}...HEAD -- '*UITests/*.swift'\` and pass every XCTestCase subclass they declare as \`-only-testing:<UITestTarget>/<Class>\` (a shared support file declares none and adds nothing).${jsGuidance}`,
   };
 }
 
@@ -2485,9 +2491,12 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       // iOS-SPECIFIC PROTECTIONS block). Reaper only touches Shutdown+idle clones,
       // so it's safe to run while another project is mid-test.
       const xctestCleanScript = path.join(__dirname, '..', 'xctest-clean.js');
+      // The XCUITests the branch has to run, for the builder (uitest-scope-cli.js).
+      const uitestScopeScript = path.join(__dirname, '..', 'uitest-scope-cli.js');
       const simEnvLine = simDest
         ? `export BUILD_STUDIO_SIMULATOR_DESTINATION=${JSON.stringify(simDest)}\n` +
-          `export XCTEST_CLEAN=${JSON.stringify(xctestCleanScript)}\n`
+          `export XCTEST_CLEAN=${JSON.stringify(xctestCleanScript)}\n` +
+          `export BUILD_STUDIO_UITEST_SCOPE=${JSON.stringify(uitestScopeScript)}\n`
         : '';
       // Unset PORT before launching the agent. The Electron hub runs on
       // PORT=18080; that value propagates hub → project-server → tmux server →
@@ -8817,13 +8826,14 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       if (qaScope === 'new-uitests' && config.simulator && config.simulator.destination) {
         try {
           const { execFileSync } = require('child_process');
-          const diff = execFileSync('git', ['diff', '--name-only', '--diff-filter=AM', 'main...HEAD'], { cwd: projectRoot, encoding: 'utf8' });
-          const uitestFiles = diff.split('\n')
-            .map(s => s.trim())
-            .filter(f => /^ios\/.*UITests\/.*\.swift$/.test(f));
-          const testClasses = qaSuite.uiTestIdentifiers(uitestFiles, {
-            readFile: (f) => fs.readFileSync(path.join(projectRoot, f), 'utf8'),
-          });
+          // The tests the branch adds, and in the test files it modifies only
+          // the tests that reach the changed code (uitest-scope.js). The
+          // builder ran the same list from the same code.
+          const uiScope = uitestScope.computeUiTestScope({ cwd: projectRoot, base: 'main' });
+          for (const f of uiScope.files) {
+            console.log(`[qa-suite] XCUITest scope: ${f.file} — ${f.mode === 'methods' ? `${f.ids.length} test(s)` : f.mode === 'classes' ? 'whole class' : 'nothing'} (${f.reason})`);
+          }
+          const testClasses = uiScope.ids;
           // Identify the unit-test target from project config; fall back to the
           // <Scheme>Tests convention derived from config.simulator.scheme.
           // Prefer the resolved target. `<Scheme>` survives only as prompt text
@@ -8857,8 +8867,12 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
           } catch (e) {
             testOnly = null;
           }
+          // testOnly lists every changed test CLASS, UI ones included. Its UI
+          // entries are replaced by the narrower list above, or a modified UI
+          // class would run whole again.
+          const isUiTarget = (id) => /UITests$/.test(String(id).split('/')[0]);
           const scopeTargets = testOnly && testOnly.testOnly
-            ? [...new Set([...testOnly.classes, ...testClasses])]
+            ? [...new Set([...testOnly.classes.filter(c => !isUiTarget(c)), ...testClasses])]
             : [unitTarget, ...testClasses];
           const onlyTestingFlags = scopeTargets
             .map(c => `  -only-testing:${c}`)
@@ -8871,7 +8885,7 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
 
 Regression XCUITests take 20-40 min and aren't validating *this PRD's* surface — they're re-running unrelated tests that haven't changed. Skip them this round; the operator runs full regression manually via the **Operations → UITests** tab before pushing to remote.
 
-This branch adds or modifies **${testClasses.length} XCUITest file(s)** (vs \`main\`):
+This branch adds or modifies these XCUITests (vs \`main\`): new test files in full, and in modified ones only the tests that reach the changed code:
 ${testClasses.length > 0 ? testClasses.map(c => '- `' + c + '`').join('\n') : '- _(none — only unit tests will run this round)_'}
 
 **Use this scoped invocation INSTEAD of the broad command in §5:**
@@ -8886,7 +8900,7 @@ ${onlyTestingFlags} \\
   2>&1 | tee /tmp/qa-test-output.log
 \`\`\`
 
-${testOnlySection || `The first \`-only-testing:${unitTarget}\` flag scopes to all unit tests in the unit-test target; subsequent \`-only-testing:Target/Class\` flags scope XCUITest to just the new/modified classes.`} Any pre-existing XCUITest file unchanged in this branch is intentionally excluded — that coverage runs in the manual regression step.`;
+${testOnlySection || `The first \`-only-testing:${unitTarget}\` flag scopes to all unit tests in the unit-test target; subsequent \`-only-testing:Target/Class[/test]\` flags scope XCUITest to just the new and changed tests.`} Any pre-existing XCUITest unchanged in this branch is intentionally excluded — that coverage runs in the manual regression step.`;
         } catch (e) {
           console.warn('[workflow] qa_validation.scope=new-uitests: could not compute scoped tests:', e.message);
         }

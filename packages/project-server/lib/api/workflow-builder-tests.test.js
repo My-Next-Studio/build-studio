@@ -25,16 +25,36 @@ test('scope=new-uitests: unit and other suites in full, XCUITests only for the b
   assert.doesNotMatch(r.goalClause, /COMPLETE test suite/);
   assert.match(r.goalClause, /every unit test .* pre-implementation tests/);
   assert.match(r.goalClause, /every other non-XCUITest suite has been run in full/);
-  assert.match(r.goalClause, /XCUITest class this branch adds or modifies versus main/);
+  assert.match(r.goalClause, /every XCUITest that `node "\$BUILD_STUDIO_UITEST_SCOPE"` lists for this branch versus main/);
   assert.match(r.goalClause, /full XCUITest regression suite is NOT required/);
   assert.match(r.guidance, /Do NOT run the full XCUITest regression suite/);
-  assert.match(r.guidance, /git diff --name-only --diff-filter=AM main\.\.\.HEAD -- '\*UITests\/\*\.swift'/);
+  // The list comes from the same code QA's run uses (uitest-scope.js), per
+  // test in a modified file (fazon FAZ-460, 2026-10-25).
+  assert.match(r.guidance, /`node "\$BUILD_STUDIO_UITEST_SCOPE" main`/);
+  assert.match(r.guidance, /only the tests that reach the changed code run/);
+  assert.match(r.guidance, /run the command again after your last change to a UI test file/);
+  // The class rule survives only as the fallback for a missing variable.
+  assert.match(r.guidance, /Only if `\$BUILD_STUDIO_UITEST_SCOPE` is unset: .*git diff --name-only --diff-filter=AM main\.\.\.HEAD -- '\*UITests\/\*\.swift'/);
   assert.match(r.guidance, /a shared support file declares none/);
+});
+
+test('the builder\'s start script exports the scope command beside the clone reaper', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'workflow.js'), 'utf8');
+  assert.match(src, /export BUILD_STUDIO_UITEST_SCOPE=\$\{JSON\.stringify\(uitestScopeScript\)\}/);
+  assert.match(src, /const uitestScopeScript = path\.join\(__dirname, '\.\.', 'uitest-scope-cli\.js'\);/);
+  assert.ok(fs.existsSync(path.join(__dirname, '..', 'uitest-scope-cli.js')));
+});
+
+test('QA\'s run takes its XCUITests from the same computation', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'workflow.js'), 'utf8');
+  assert.match(src, /const uiScope = uitestScope\.computeUiTestScope\(\{ cwd: projectRoot, base: 'main' \}\);/);
+  assert.match(src, /testOnly\.classes\.filter\(c => !isUiTarget\(c\)\)/, 'a test-only branch must not bring a modified UI class back whole');
 });
 
 test('the base branch and a configured unit-test target reach the text', () => {
   const r = builderTestRequirement({ qa_validation: { scope: 'new-uitests', unit_test_target: 'FazonTests' } }, 'develop');
   assert.match(r.goalClause, /versus develop/);
+  assert.match(r.guidance, /"\$BUILD_STUDIO_UITEST_SCOPE" develop/);
   assert.match(r.guidance, /develop\.\.\.HEAD/);
   assert.match(r.guidance, /\(FazonTests\)/);
 });

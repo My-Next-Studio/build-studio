@@ -950,6 +950,7 @@ function formatSuiteSection(run) {
 
 module.exports = {
   uiTestIdentifiers,
+  testClassesIn,
   isXcodebuildTestArgs,
   nativeSuiteRelevance,
   testOnlyBranchScope,

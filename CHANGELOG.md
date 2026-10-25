@@ -79,6 +79,22 @@ that move underneath you without your having edited anything.
   as "Process exited … cannot be continued in place" after 15 minutes and
   needed a relaunch by hand. A Codex retry still in progress does not count;
   only its final give-up line does.
+- **`qa_validation.scope: new-uitests` now narrows a modified UI test file to
+  the tests that reach the change.** It used to run every UI test class the
+  branch added or modified, a whole class at a time, so a small edit in a large
+  class ran all of it. On one iOS project a one-string copy change in a helper
+  of a 24-test help-flow class, used by only two of its tests, cost 44 minutes
+  in the builder and 44 again in QA. Now a test file the branch adds still
+  runs in full. In a file it modifies, the changed lines are traced through
+  that file's functions to the tests that call them, and only those run, for
+  example `-only-testing:AppUITests/HelpFlowUITests/testF01_SettingUp_EN`.
+  The whole class still runs when a change cannot be traced: one outside any
+  function (a stored property, the class declaration), one in `setUp`,
+  `tearDown`, an `init`, an override or a static function, or one no test in
+  the file calls. QA's server-run suite and the builder use the same code, so
+  they cover the same tests. The builder gets it as a command,
+  `node "$BUILD_STUDIO_UITEST_SCOPE" main`, which prints the `-only-testing`
+  flags and, on stderr, why each file runs what it runs.
 
 ### Fixed
 
@@ -99,9 +115,20 @@ cd packages/hub && npx next build
 cd packages/desktop && node inject-resources.js
 ```
 
-Then restart the Build Studio app.
+Then restart the Build Studio app. A builder already running keeps the
+whole-class instructions it was launched with; the narrower scope reaches
+builders started after the restart, and QA runs started after it.
 
 **In each managed project** — nothing to do.
+
+### Notes for forks
+
+- The UI test selection lives in `lib/uitest-scope.js`, and both the QA suite
+  and the builder's `BUILD_STUDIO_UITEST_SCOPE` command
+  (`lib/uitest-scope-cli.js`) call `computeUiTestScope`. Keep it that way: a
+  builder and QA that pick their tests separately end up covering different
+  tests. When in doubt the selection must widen to the class, never narrow to
+  nothing.
 
 ---
 
