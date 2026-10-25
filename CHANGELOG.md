@@ -109,6 +109,13 @@ that move underneath you without your having edited anything.
   agent having stopped without reporting. Now only a turn with nothing after
   it counts, and an agent is left alone for three minutes after a resume. This
   affected the dead-process resume too, not only the new session resume.
+- **Draft works again after its Claude conversation was deleted.** Deleting a
+  session in the Claude desktop app deletes its file on disk, and so does
+  Claude's own retention (`cleanupPeriodDays`). Draft and Create story kept
+  resuming the deleted conversation: the terminal showed "No conversation
+  found with session ID …" and returned to the shell, every time. Now a
+  drafting session whose conversation is gone starts a fresh one. The context
+  of the old conversation is lost either way.
 
 ### Upgrade steps
 

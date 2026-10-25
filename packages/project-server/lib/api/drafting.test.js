@@ -37,7 +37,8 @@ async function postTo(root, tmux, route, body) {
   return post(root, tmux, body, route);
 }
 
-async function post(root, tmux, body, route = '/draft/start') {
+// The real lookup scans ~/.claude/projects; these sessions only exist in the test.
+async function post(root, tmux, body, route = '/draft/start', { transcriptExists = () => true } = {}) {
   // The shape config.js produces: docsPath ABSOLUTE, docs_path relative. A
   // relative docsPath here hid a router that could not find any backlog item.
   const config = {
@@ -48,7 +49,7 @@ async function post(root, tmux, body, route = '/draft/start') {
   };
   const app = express();
   app.use(express.json());
-  app.use('/api', createDraftingRouter(config, {}, tmux));
+  app.use('/api', createDraftingRouter(config, {}, tmux, { transcriptExists }));
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, r));
   const { port } = server.address();
@@ -156,6 +157,24 @@ test('a dead window resumes the conversation rather than starting over', async (
   assert.equal(r.body.cliSessionId, first.body.cliSessionId, 'same conversation');
   const cmd = tmux.calls.find(c => c[0] === 'sendKeys')[2];
   assert.match(cmd, /--resume '/, 'resumed, not pinned anew');
+});
+
+// launch-studio, 2026-10-25: the conversation was deleted in the Claude desktop
+// app, and every Draft after that resumed the missing id and exited at once.
+test('a conversation deleted from disk is not resumed: the next Draft starts fresh', async () => {
+  const root = makeProject({
+    'EX-018': { type: 'Feature', status: 'Backlog', title: 'A' },
+    'EX-019': { type: 'Feature', status: 'Backlog', title: 'B' },
+  });
+  const first = await post(root, fakeTmux(), { itemId: 'EX-018' });
+  const tmux = fakeTmux();
+  const r = await post(root, tmux, { itemId: 'EX-019' }, '/draft/start', { transcriptExists: () => false });
+
+  assert.equal(r.status, 200);
+  assert.equal(r.body.mode, 'fresh');
+  assert.notEqual(r.body.cliSessionId, first.body.cliSessionId, 'a new conversation');
+  assert.doesNotMatch(tmux.calls.find(c => c[0] === 'sendKeys')[2], /--resume/);
+  assert.deepEqual(readState(root).session.items, ['EX-019']);
 });
 
 test('fresh: true abandons the old conversation deliberately', async () => {

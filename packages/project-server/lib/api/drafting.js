@@ -20,12 +20,17 @@ const { findDraftSessionId } = require('../draft-session-id');
 const { readItem, refreshBacklogIndex } = require('../backlog');
 const agentSkills = require('../agent-skills');
 const { computeDraftDelta, formatDraftDelta } = require('../draft-delta');
+const { findTranscript } = require('../transcript-recovery');
 
 /**
  * Drafting runs OUTSIDE the workflow slot — see lib/drafting.js for why that is
  * a requirement rather than a convenience.
  */
-function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraftSessionId, templateDir = resolveTemplateDir() } = {}) {
+function createDraftingRouter(config, state, tmuxOps, {
+  findSessionId = findDraftSessionId,
+  templateDir = resolveTemplateDir(),
+  transcriptExists = (cliSessionId) => !!findTranscript(cliSessionId, config.projectRoot),
+} = {}) {
   const router = express.Router();
   const projectRoot = config.projectRoot;
   const projectName = config.name || path.basename(projectRoot);
@@ -364,7 +369,16 @@ function createDraftingRouter(config, state, tmuxOps, { findSessionId = findDraf
     // ── otherwise launch: resuming the old conversation, or starting one ──────
     // Resume only on the CLI that holds the conversation: another CLI's id means
     // nothing to it. A CLI switch starts fresh (plan decision 5).
-    const priorId = prior && prior.cli === cli ? sessionIdOf(prior) : null;
+    let priorId = prior && prior.cli === cli ? sessionIdOf(prior) : null;
+    // A Claude conversation can be deleted outside Build Studio (Claude's own
+    // retention, or deleting it in the desktop app, which removes the file).
+    // `claude --resume` then only prints "No conversation found" and exits, and
+    // every later Draft resumed the same missing id (launch-studio, 2026-10-25).
+    // Start fresh instead: the context is gone either way.
+    if (priorId && canPinSession(cli) && !transcriptExists(priorId)) {
+      console.warn(`[draft] conversation ${priorId} no longer exists on disk — starting a fresh drafting session`);
+      priorId = null;
+    }
     const resuming = !!(priorId && canResumeSession(cli) && !wantFresh);
     // Claude's id is chosen here; Codex/OpenCode choose their own and it is read
     // back later, so a fresh launch on those starts with none.
