@@ -12,6 +12,7 @@ const { transitionFeaturesForPRD, refreshBacklogIndex, readBacklogGroups, BACKLO
 const { deriveNeedsAttention } = require('../needs-attention');
 const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
 const agentRecovery = require('../agent-recovery');
+const agentRelaunch = require('../agent-relaunch');
 const learningScope = require('../learning-scope');
 const limitBlock = require('../limit-block');
 const memoryGuard = require('../memory-guard');
@@ -2552,7 +2553,7 @@ ${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFla
         const limitPromptFile = `prompt-limit-resume-${windowName}.txt`;
         const limitScriptName = `start-${windowName}-limit-resume.sh`;
         fs.writeFileSync(path.join(agentCwd, limitPromptFile),
-          'The usage limit that interrupted you has lifted and this session has been resumed with your context intact. Continue your assigned task from where you left off. Your original instructions still apply in full, including reporting your structured feedback via the curl POST at the end of your prompt.', 'utf-8');
+          'The usage or rate limit that interrupted you has lifted and this session has been resumed with your context intact. Continue your assigned task from where you left off. Your original instructions still apply in full, including reporting your structured feedback via the curl POST at the end of your prompt.', 'utf-8');
         fs.writeFileSync(path.join(agentCwd, limitScriptName), `#!/bin/zsh
 eval "$(/opt/homebrew/bin/brew shellenv)" 2>/dev/null
 unset PORT
@@ -3453,6 +3454,7 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
       .map(a => ({
         role: a.role,
         step: a.step || null,
+        kind: a.blockedOnLimit.kind || 'usage',
         resetsAt: a.blockedOnLimit.resetsAt || null,
         resumeCount: a.blockedOnLimit.resumeCount || 0,
         detail: limitBlock.describeBlock(a.blockedOnLimit),
@@ -5196,6 +5198,28 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     if (moved.changed) {
       console.log(`[workflow] PRD moved: ${moved.from} → ${moved.to} (per the backlog item's prd: field)`);
       state.saveWorkflow(wf);
+    }
+
+    // --- Relaunch one agent of the current step (lib/agent-relaunch.js) ---
+    // The rest of the step is untouched: its finished agents keep their
+    // reports, and the step advances as usual once this one reports.
+    if (action === 'relaunch_agent') {
+      const found = agentRelaunch.findRelaunchable(wf, { role: req.body.role, window: req.body.window });
+      if (found.error) return res.status(400).json({ error: found.error });
+      const step = wf.steps[wf.currentStep];
+      const old = found.agent;
+      console.log(`[workflow] Relaunching ${old.role} alone in step=${wf.currentStep} (was ${old.status}${old.error ? `: ${String(old.error).slice(0, 120)}` : ''})`);
+      if (old.window) {
+        try { tmuxOps.killWindowAndChildren(`${wf.sessionName}:${old.window}`); } catch (_) {}
+      }
+      if (_aaReject.step === wf.currentStep) _aaReject = { step: null, count: 0, error: null };
+      if (step.autoAdvanceError) delete step.autoAdvanceError;
+      const [launched] = launchWorkflowAgents(wf, [agentRelaunch.relaunchSpec(old, wf.round || 1)], { useWorktrees: false });
+      step.agents[found.index] = launched;
+      if (launched.status === 'running') step.status = 'running';
+      state.saveWorkflow(wf);
+      if (launched.status !== 'running') return res.status(500).json({ workflow: wf, error: launched.error || 'relaunch failed' });
+      return res.json({ workflow: wf });
     }
 
     // --- Relaunch: reset current step and re-enter it ---

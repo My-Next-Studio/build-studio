@@ -211,3 +211,48 @@ test('server.js relaunches codex with its limit-resume script, only at a shell',
   const launch = require('fs').readFileSync(require('path').join(__dirname, 'api', 'workflow.js'), 'utf8');
   assert.match(launch, /codex exec resume\$\{dangerFlag\}\$\{modelFlag\}\$\{effortFlag\} "\$1"/);
 });
+
+// ── Rate limit: codex gave up on a 429 (run-studio RS-043, 2026-10-25) ───────
+// Read as a crash, it halted a reviewer that a relaunch 15 minutes later ran
+// fine. It is a block with no reset time, retried on a short backoff.
+const RATE_PANE = [
+  'curl -s -X POST http://localhost:3008/api/workflow/feedback ...',
+  'ERROR: exceeded retry limit, last status: 429 Too Many Requests',
+  'ERROR: exceeded retry limit, last status: 429 Too Many Requests',
+  'lars@Mac run-studio % ',
+].join('\n');
+
+test('codex giving up on a 429 is a rate-limit block', () => {
+  const s = detectLimitState({ pane: RATE_PANE });
+  assert.equal(s.kind, 'rate');
+  assert.equal(s.resetsAt, null);
+  assert.equal(s.needsConfirm, false);
+  assert.match(s.raw, /^exceeded retry limit, last status: 429 Too Many Requests$/);
+});
+
+test('a 429 the CLI is still retrying is not a block, and a usage limit stays one', () => {
+  assert.equal(detectLimitState({ pane: 'stream error: 429 Too Many Requests; retrying 2/5 in 4s…' }), null);
+  assert.equal(detectLimitState({ pane: `${CODEX}\n${RATE_PANE}` }).kind, 'usage', 'the usage limit, with its reset time, wins');
+});
+
+test('a rate-limit block is retried after 5, 15, 30, then every 60 minutes, uncapped', () => {
+  const min = 60000;
+  const t0 = new Date('2026-10-25T15:08:00Z').getTime();
+  const at = (m) => new Date(t0 + m * min);
+  const block = { kind: 'rate', detectedAt: at(0).toISOString(), resumeCount: 99 };
+  assert.equal(isResumeDue(block, at(4)).due, false);
+  const v = isResumeDue(block, at(5));
+  assert.equal(v.due, true);
+  assert.equal(v.probe, true, 'counted as a probe, so the usage-limit cap never applies');
+  const after = (n, lastMin) => ({ ...block, probeCount: n, lastProbeAt: at(lastMin).toISOString() });
+  assert.equal(isResumeDue(after(1, 5), at(19)).due, false);
+  assert.equal(isResumeDue(after(1, 5), at(20)).due, true);
+  assert.equal(isResumeDue(after(2, 20), at(50)).due, true);
+  assert.equal(isResumeDue(after(3, 50), at(109)).due, false);
+  assert.equal(isResumeDue(after(9, 50), at(110)).due, true, 'hourly from then on');
+});
+
+test('the summary names a rate limit and when it retries', () => {
+  assert.match(describeBlock({ kind: 'rate', detectedAt: '2026-10-25T15:08:00Z' }), /^Rate-limited by the provider \(429\) — relaunching automatically at /);
+  assert.match(describeBlock({ kind: 'rate', detectedAt: '2026-10-25T15:08:00Z', probeCount: 2, lastProbeAt: '2026-10-25T15:28:00Z' }), /\(2 retries so far\)/);
+});

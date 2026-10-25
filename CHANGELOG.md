@@ -39,6 +39,14 @@ that move underneath you without your having edited anything.
     progress note, beside the check that decides whether Recover is offered.
   - `builder_role`: which execution role a PRD's header names, once per
     execution run.
+- **Relaunch a single agent of a step.** A failed or stuck agent in a step
+  such as the PRD review now has its own **↺ Relaunch** button on its card. It
+  starts that agent again from the instruction it was launched with, and the
+  step's other agents keep their reports. Until now the only way was
+  **Relaunch step**, which redid every agent, including reviewers that had
+  already reported. It is also `POST /api/workflow/advance` with
+  `{"action":"relaunch_agent","role":"QA"}` (add `"window"` when two agents
+  share a role). Task-execution agents keep their per-task Relaunch.
 
 ### Changed
 
@@ -62,6 +70,15 @@ that move underneath you without your having edited anything.
   project-server starts and on its 30-second watchdog tick, so an agent
   already marked "Session lost" before this update is not resumed: relaunch
   it as before.
+- **A Codex agent that gives up on a rate limit is retried, not halted.** When
+  the provider answers 429 and Codex exits with `exceeded retry limit, last
+  status: 429 Too Many Requests`, the agent now waits on the limit like on a
+  usage limit and is relaunched into the same conversation after 5, 15 and 30
+  minutes, then hourly until it gets through. The run's banner says "waiting
+  on a rate limit" and when the next try is. Until now the agent was reported
+  as "Process exited … cannot be continued in place" after 15 minutes and
+  needed a relaunch by hand. A Codex retry still in progress does not count;
+  only its final give-up line does.
 
 ### Fixed
 
@@ -74,13 +91,15 @@ that move underneath you without your having edited anything.
 
 ### Upgrade steps
 
-**In Build Studio** — project-server only:
+**In Build Studio** — the hub changed too (the per-agent Relaunch button and
+the rate-limit banner), so rebuild it and do a full inject:
 
 ```bash
-cd packages/desktop && node inject-resources.js --sync-only
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
 ```
 
-Then restart the project-servers.
+Then restart the Build Studio app.
 
 **In each managed project** — nothing to do.
 

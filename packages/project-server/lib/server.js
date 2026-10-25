@@ -715,6 +715,7 @@ function startServer(projectRoot, opts = {}) {
           if (limit) {
             if (!agent.blockedOnLimit) {
               agent.blockedOnLimit = {
+                kind: limit.kind,
                 raw: limit.raw,
                 resetsAt: limit.resetsAt ? limit.resetsAt.toISOString() : null,
                 detectedAt: new Date(now).toISOString(),
@@ -723,6 +724,18 @@ function startServer(projectRoot, opts = {}) {
               changed = true;
               console.log(`[limit] ${agent.role} blocked in ${activeWf.currentStep} — ${limitBlock.describeBlock(agent.blockedOnLimit, new Date(now))}`);
               decisionPoints.shadowAgentPane({ projectConfig: config, wf: activeWf, agent, trigger: 'limit_detected', pane: limitPane, limit: true });
+            } else if ((agent.blockedOnLimit.kind || 'usage') !== limit.kind) {
+              // A relaunch after a rate limit ran into the usage limit, or the
+              // other way round: a new situation, with its own wait.
+              console.log(`[limit] ${agent.role} — the ${agent.blockedOnLimit.kind || 'usage'} limit is now a ${limit.kind} limit: ${limit.raw}`);
+              agent.blockedOnLimit = {
+                kind: limit.kind,
+                raw: limit.raw,
+                resetsAt: limit.resetsAt ? limit.resetsAt.toISOString() : null,
+                detectedAt: new Date(now).toISOString(),
+                resumeCount: 0,
+              };
+              changed = true;
             }
             // Deliberately NOT marked 'error'. An errored agent is treated as a
             // terminal state by the review-advance guard, which is how one

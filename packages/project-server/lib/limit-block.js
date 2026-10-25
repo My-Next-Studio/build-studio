@@ -42,6 +42,36 @@ const LIMIT_RE = /(?:hit|reached)\s+your\s+(?:session|usage|weekly)\s+limit/i;
  */
 const CHOOSER_RE = /stop and wait for (?:the )?limit to reset/i;
 
+/**
+ * A rate limit, not a usage limit: the provider answered 429 and codex gave up
+ * after its own retries, exiting with
+ *
+ *     ERROR: exceeded retry limit, last status: 429 Too Many Requests
+ *
+ * There is no reset time; it is usually over within minutes. Read as a crash,
+ * it halted a review agent that one relaunch a quarter of an hour later ran
+ * fine (run-studio RS-043, 2026-10-25). Only the final give-up line is matched,
+ * never a retry in progress, so an agent still working never reads as blocked.
+ */
+const RATE_LIMIT_RE = /exceeded retry limit,?\s+last status:?\s+429\b[^\n]*/i;
+
+/**
+ * How long to wait before each relaunch after a rate limit: short at first,
+ * since these clear quickly, then hourly like the codex usage-limit probe.
+ */
+const RATE_RETRY_DELAYS_MS = [5, 15, 30, 60].map(m => m * 60 * 1000);
+
+function rateRetryDelayMs(block) {
+  const n = (block && block.probeCount) || 0;
+  return RATE_RETRY_DELAYS_MS[Math.min(n, RATE_RETRY_DELAYS_MS.length - 1)];
+}
+
+/** When the next relaunch after a rate limit is due. */
+function nextRateRetryAt(block) {
+  const last = new Date(block.lastProbeAt || block.detectedAt || 0).getTime();
+  return Number.isFinite(last) ? new Date(last + rateRetryDelayMs(block)) : null;
+}
+
 /** `resets 10am`, `resets 10:30 pm`, `resets at 3 PM` — the trailing zone is the machine's own. */
 const RESET_RE = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
 
@@ -159,6 +189,16 @@ function isResumeDue(block, now = new Date(), opts = {}) {
   const unknownDelay = Number.isFinite(opts.unknownResetDelayMs) ? opts.unknownResetDelayMs : 60 * 60 * 1000;
   if (!block) return { due: false, reason: 'not blocked' };
 
+  // A rate limit has no reset to wait for: retry on the backoff above,
+  // uncapped, the way probing works for a codex usage limit.
+  if (block.kind === 'rate') {
+    const at = nextRateRetryAt(block);
+    if (!at) return { due: false, reason: 'rate limited, no detection time' };
+    return now.getTime() >= at.getTime()
+      ? { due: true, probe: true, reason: `rate limit: retry ${(block.probeCount || 0) + 1}` }
+      : { due: false, reason: `rate limited, retrying at ${at.toISOString()}` };
+  }
+
   // Probing (non-interactive CLIs): a relaunch that is still limited is refused
   // at once and costs nothing, and the limit can lift long before the time it
   // announced — credits bought, or a plan reset. Codex said "try again at Oct
@@ -198,6 +238,12 @@ function isResumeDue(block, now = new Date(), opts = {}) {
 /** Human summary for the UI — says what is happening and when it resolves. */
 function describeBlock(block, now = new Date()) {
   if (!block) return null;
+  if (block.kind === 'rate') {
+    const at = nextRateRetryAt(block);
+    const clock = at ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
+    const tries = block.probeCount ? ` (${block.probeCount} retr${block.probeCount === 1 ? 'y' : 'ies'} so far)` : '';
+    return `Rate-limited by the provider (429)${tries} — relaunching automatically${clock ? ` at ${clock}` : ''}.`;
+  }
   const when = block.resetsAt ? new Date(block.resetsAt) : null;
   const valid = when && Number.isFinite(when.getTime());
   const clock = valid
@@ -237,7 +283,10 @@ function stripAnsi(s) {
  *
  * @param {{pane?:string, log?:string}} sources
  * @param {Date} now
- * @returns {null|{raw:string, resetsAt:Date|null, needsConfirm:boolean}}
+ * A pane with no usage-limit notice but codex's 429 give-up line is a rate
+ * limit (`kind: 'rate'`, see RATE_LIMIT_RE).
+ *
+ * @returns {null|{raw:string, resetsAt:Date|null, needsConfirm:boolean, kind:'usage'|'rate'}}
  */
 function detectLimitState({ pane = '', log = '', seenAt } = {}, now = new Date()) {
   // Anchor the reset arithmetic to when the notice was PRINTED — callers pass
@@ -253,17 +302,20 @@ function detectLimitState({ pane = '', log = '', seenAt } = {}, now = new Date()
   // The CURRENT state has to come from the pane. A limit notice sitting in the
   // log proves only that the agent was blocked at some point — it may have
   // resumed and moved on since.
-  if (!fromPane && !needsConfirm) return null;
+  if (!fromPane && !needsConfirm) {
+    const rate = RATE_LIMIT_RE.exec(paneClean);
+    return rate ? { raw: rate[0].trim().replace(/\s+/g, ' '), resetsAt: null, needsConfirm: false, kind: 'rate' } : null;
+  }
 
   const fromLog = fromPane && fromPane.resetsAt ? null : parseLimitNotice(log, anchor);
   const resetsAt = (fromPane && fromPane.resetsAt) || (fromLog && fromLog.resetsAt) || null;
   const raw = (fromPane && fromPane.raw)
     || (fromLog && fromLog.raw)
     || 'Waiting at the usage-limit prompt';
-  return { raw, resetsAt, needsConfirm };
+  return { raw, resetsAt, needsConfirm, kind: 'usage' };
 }
 
 module.exports = {
-  parseLimitNotice, parseResetTime, isResumeDue, describeBlock, detectLimitState,
-  LIMIT_RE, CHOOSER_RE,
+  parseLimitNotice, parseResetTime, isResumeDue, describeBlock, detectLimitState, nextRateRetryAt,
+  LIMIT_RE, CHOOSER_RE, RATE_LIMIT_RE, RATE_RETRY_DELAYS_MS,
 };

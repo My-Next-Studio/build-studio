@@ -68,6 +68,7 @@ interface NeedsAttention {
 interface LimitBlockedAgent {
   role: string
   step: string | null
+  kind?: 'usage' | 'rate'
   resetsAt: string | null
   resumeCount: number
   detail: string
@@ -1466,9 +1467,13 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             <span style={{ flexShrink: 0 }}>⏳</span>
             <span style={{ flex: 1 }}>
               <b style={{ color: 'var(--text)' }}>
-                {limitBlocked.length === 1
-                  ? `${limitBlocked[0].role} is waiting on the usage limit`
-                  : `${limitBlocked.length} agents are waiting on the usage limit`}
+                {(() => {
+                  const kinds = new Set(limitBlocked.map(a => a.kind || 'usage'))
+                  const what = kinds.size > 1 ? 'a provider limit' : kinds.has('rate') ? 'a rate limit' : 'the usage limit'
+                  return limitBlocked.length === 1
+                    ? `${limitBlocked[0].role} is waiting on ${what}`
+                    : `${limitBlocked.length} agents are waiting on ${what}`
+                })()}
               </b>
               <br />
               {limitBlocked[0].detail}
@@ -1937,7 +1942,10 @@ function StepDetail({
             const taskLabel = activeKey === 'task_execution' && a.taskIndex !== undefined
               ? `Task ${a.taskIndex + 1}`
               : undefined
-            return <AgentFeedbackCard key={i} agent={a} taskLabel={taskLabel} onViewLog={onViewLog} onMarkDone={onMarkDone} onRelaunchTask={(idx) => onAdvance('relaunch_task', { taskIndex: idx })} />
+            return <AgentFeedbackCard key={i} agent={a} taskLabel={taskLabel} onViewLog={onViewLog} onMarkDone={onMarkDone} onRelaunchTask={(idx) => onAdvance('relaunch_task', { taskIndex: idx })}
+              onRelaunchAgent={activeKey === wf.currentStep && activeKey !== 'task_execution'
+                ? (ag) => onAdvance('relaunch_agent', { role: ag.role, window: ag.window })
+                : undefined} />
           })}
         </div>
       )}
@@ -3495,7 +3503,7 @@ function OverseerCard({ overseer, onDismiss, onNudgeAgent }: { overseer: Oversee
   )
 }
 
-function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunchTask }: { agent: WorkflowAgent; taskLabel?: string; onViewLog: (w: string) => void; onMarkDone: (role: string) => void; onRelaunchTask?: (taskIndex: number) => void }) {
+function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunchTask, onRelaunchAgent }: { agent: WorkflowAgent; taskLabel?: string; onViewLog: (w: string) => void; onMarkDone: (role: string) => void; onRelaunchTask?: (taskIndex: number) => void; onRelaunchAgent?: (agent: WorkflowAgent) => void }) {
   const [expanded, setExpanded] = useState(false)
   const verdict = detectVerdict(agent)
   const vc = VERDICT_CONFIG[verdict]
@@ -3656,6 +3664,21 @@ function AgentFeedbackCard({ agent, taskLabel, onViewLog, onMarkDone, onRelaunch
           {(agent.status === 'error' || agent.logError) && verdict !== 'waiting' && onRelaunchTask && agent.taskIndex !== undefined && (
             <button
               onClick={(e) => { e.stopPropagation(); onRelaunchTask(agent.taskIndex!) }}
+              style={{
+                padding: '2px 8px', borderRadius: 4,
+                border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.1)',
+                color: 'var(--blue)', fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              ↺ Relaunch
+            </button>
+          )}
+          {/* A step agent (a reviewer, say) relaunched alone: the step's other
+              agents keep their reports. "Relaunch step" would redo them all. */}
+          {(agent.status === 'error' || agent.logError) && verdict !== 'waiting' && onRelaunchAgent && agent.taskIndex === undefined && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRelaunchAgent(agent) }}
+              title={`Relaunch ${agent.role} only. The other agents in this step keep their reports.`}
               style={{
                 padding: '2px 8px', borderRadius: 4,
                 border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.1)',
