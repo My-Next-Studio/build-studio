@@ -492,23 +492,6 @@ function startServer(projectRoot, opts = {}) {
     ws.on('close', () => ptyClients.delete(ws));
   });
 
-  // Stale workflow check on startup
-  const wf = state.loadWorkflow();
-  if (wf && wf.currentStep !== 'completed') {
-    if (!tmuxOps.hasSession(wf.sessionName)) {
-      for (const step of Object.values(wf.steps || {})) {
-        for (const agent of step.agents || []) {
-          if (agent.status === 'running') {
-            agent.status = 'error';
-            agent.error = 'Session lost (server restart)';
-          }
-        }
-      }
-      state.saveWorkflow(wf);
-      console.log(`⚠ Stale workflow detected (${wf.id}) — agents marked as lost`);
-    }
-  }
-
   // Agent timeout — mark agents as stalled only when the log file shows no
   // activity for AGENT_IDLE_TIMEOUT_MS. Differentiates "stuck" from "still
   // working" so a long-running QA regression (>30min of streaming output)
@@ -547,6 +530,58 @@ function startServer(projectRoot, opts = {}) {
   // resumed, so a relaunch that hits the limit again is counted, not restarted.
   const LIMIT_RELAUNCH_GRACE_MS = 5 * 60 * 1000;
   const LIMIT_RESUME_MESSAGE = 'The usage limit that interrupted you has reset. Continue your assigned task from where you left off — your original instructions still apply in full, including reporting your structured feedback via the curl POST at the end of your prompt.';
+
+  // The workflow's tmux session is gone (machine restart, power loss, killed
+  // by hand). Each claude agent is resumed with its context in a recreated
+  // window; the rest halt for a relaunch. See planLostSessionRecovery.
+  // Returns whether it changed the workflow.
+  function recoverLostSession(wf) {
+    let changed = false;
+    const plan = agentRecovery.planLostSessionRecovery(wf, {
+      maxAutoResumes: AGENT_MAX_AUTO_RESUMES,
+      cwdExists: dir => fs.existsSync(dir),
+    });
+    for (const p of plan) {
+      let why = 'the tmux session is gone (machine restart, or the session was killed)';
+      if (p.action === 'resume') {
+        try {
+          const target = tmuxOps.ensureWindow(wf.sessionName, p.window, config.projectRoot);
+          tmuxOps.sendKeys(target, `cd '${p.cwd}' && bash ${p.resumeScript}`, config.projectRoot);
+          tmuxOps.pipePaneToLog(target, path.join(config.logsPath, `${p.window}-${wf.id}.log`), config.projectRoot);
+          const at = new Date().toISOString();
+          for (const a of p.agents) {
+            a.autoResumeCount = (a.autoResumeCount || 0) + 1;
+            a.lastAutoResumeAt = at;
+          }
+          console.log(`[agent-recovery] ${p.agents[0].role}: tmux session ${wf.sessionName} was gone — resumed with context in a new "${p.window}" window (attempt ${p.agents[0].autoResumeCount}/${AGENT_MAX_AUTO_RESUMES})`);
+          changed = true;
+          continue;
+        } catch (e) {
+          why += `, and resuming it in a new window failed (${e.message})`;
+        }
+      }
+      for (const a of p.agents) {
+        a.status = 'error';
+        a.error = `Session lost — ${why}. Relaunch the step.`;
+      }
+      console.log(`[agent-recovery] ${p.agents[0].role}: tmux session ${wf.sessionName} is gone — halted`);
+      changed = true;
+    }
+    return changed;
+  }
+
+  // A session lost while this server was down is handled now, not on the
+  // first tick 30s from now.
+  {
+    const wf = state.loadWorkflow();
+    if (wf && wf.currentStep !== 'completed' && wf.sessionName && !tmuxOps.hasSession(wf.sessionName)) {
+      try {
+        if (recoverLostSession(wf)) state.saveWorkflow(wf);
+      } catch (e) {
+        console.warn(`[agent-recovery] startup check failed: ${e.message}`);
+      }
+    }
+  }
 
   // Periodic stale session + timeout check (every 30s)
   setInterval(() => {
@@ -605,13 +640,7 @@ function startServer(projectRoot, opts = {}) {
       // for hours, needsAttention stayed null, and the project could not start
       // anything else because the slot was still held).
       if (!tmuxOps.hasSession(activeWf.sessionName)) {
-        for (const agent of agentRecovery.allAgentsOf(activeWf)) {
-          if (agent.status === 'running') {
-            agent.status = 'error';
-            agent.error = 'Session lost — the tmux session is gone (machine restart, or the session was killed). Relaunch the step.';
-            changed = true;
-          }
-        }
+        if (recoverLostSession(activeWf)) changed = true;
       }
 
       // Idle-based timeout — mark stalled when the agent's log file has not

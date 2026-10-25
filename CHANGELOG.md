@@ -50,6 +50,18 @@ that move underneath you without your having edited anything.
   each is also stored in the local shadow log, as reports already were. Nothing
   changes with decisions off (the default), and a project still opts out with
   `decisions: { enabled: false }`.
+- **A run interrupted by a machine restart or power loss now carries on by
+  itself.** When a workflow's tmux session is gone, each Claude agent that was
+  running is resumed in a new window with its conversation intact
+  (`claude --resume`), told to check what it was doing when it was cut off,
+  and continues the task. Until now every such agent halted with "Session
+  lost … Relaunch the step", and a relaunch started it over from its first
+  prompt. This shares the two-attempt cap of the existing dead-process resume,
+  so an agent that keeps dying still halts. Codex and OpenCode agents, and
+  agents whose worktree is gone, halt as before. It happens when the
+  project-server starts and on its 30-second watchdog tick, so an agent
+  already marked "Session lost" before this update is not resumed: relaunch
+  it as before.
 
 ### Upgrade steps
 

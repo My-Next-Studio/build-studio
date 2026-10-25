@@ -202,9 +202,56 @@ function allAgentsOf(wf) {
   return out;
 }
 
+/**
+ * What to do with each running agent when its whole tmux session is gone.
+ *
+ * A machine restart or power loss takes the tmux server down, and with it every
+ * agent's window and shell. That used to halt every such agent with "Session
+ * lost ... Relaunch the step", and a relaunch starts the agent over from its
+ * first prompt, so hours of a builder's context were thrown away even though its
+ * conversation sat intact on disk (fazon FAZ-460, 2026-10-25: a power cut
+ * mid-run). The process is as dead as in the dead-pane case above, and the same
+ * remedy applies: `claude --resume` with the pinned session id. Only the window
+ * has to be recreated first, because there is no surviving shell to type into.
+ *
+ * Grouped by window, because a task agent appears twice in allAgentsOf (the
+ * record and the step's mirror of it) and must be resumed once. The resume
+ * shares the dead-pane attempt cap, so an agent that keeps dying still halts.
+ * An agent whose working directory is gone (a removed worktree) halts too:
+ * there is nothing left to resume into.
+ *
+ * @param {object} wf
+ * @param {{ maxAutoResumes?: number, cwdExists?: (dir: string) => boolean }} [opts]
+ * @returns {Array<{ action: 'resume'|'halt', window: string|null, cwd: string|null,
+ *   resumeScript: string|null, agents: object[] }>}
+ */
+function planLostSessionRecovery(wf, { maxAutoResumes = 2, cwdExists = () => true } = {}) {
+  const byWindow = new Map();
+  for (const agent of allAgentsOf(wf)) {
+    if (agent.status !== 'running') continue;
+    const key = agent.window || agent;
+    if (!byWindow.has(key)) byWindow.set(key, []);
+    byWindow.get(key).push(agent);
+  }
+  const plan = [];
+  for (const agents of byWindow.values()) {
+    const a = agents.find(x => hasResumeArtifacts(x)) || agents[0];
+    const cwd = a.agentCwd || null;
+    const resumable = !!a.window && !!cwd && cwdExists(cwd) && decideRecovery(a, { maxAutoResumes }) === 'resume';
+    plan.push({
+      action: resumable ? 'resume' : 'halt',
+      window: a.window || null,
+      cwd,
+      resumeScript: a.resumeScript || null,
+      agents,
+    });
+  }
+  return plan;
+}
+
 module.exports = {
   paneReturnedToShell,
   isRevived,
   isShellCommand, classifyAgentProcess, decideRecovery, hasResumeArtifacts,
-  inResumeGrace, allAgentsOf,
+  inResumeGrace, allAgentsOf, planLostSessionRecovery,
 };

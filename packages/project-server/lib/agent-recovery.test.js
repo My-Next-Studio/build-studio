@@ -208,3 +208,51 @@ test('classify: unchanged — a live child still outranks a shell pane', () => {
   assert.equal(classifyAgentProcess({ paneCommand: 'bash', idleMs: MIN2, hasLiveChild: true }), 'alive');
   assert.equal(classifyAgentProcess({ paneCommand: 'bash', idleMs: MIN2, hasLiveChild: false }), 'dead');
 });
+
+// ─── A lost tmux session (fazon FAZ-460, 2026-10-25: a power cut mid-run) ─────
+
+const { planLostSessionRecovery } = require('./agent-recovery');
+
+const claudeAgent = (over = {}) => ({
+  role: 'iOS Dev', status: 'running', window: 't1-ios-dev', agentCwd: '/p',
+  cliSessionId: 'u-u-i-d', resumeScript: 'start-t1-ios-dev-resume.sh', ...over,
+});
+
+test('lost session: a claude agent is resumed into its own window and directory', () => {
+  const wf = { steps: {}, taskExecution: { taskStates: { 0: { agents: [claudeAgent()] } } } };
+  const [p] = planLostSessionRecovery(wf);
+  assert.equal(p.action, 'resume');
+  assert.equal(p.window, 't1-ios-dev');
+  assert.equal(p.cwd, '/p');
+  assert.equal(p.resumeScript, 'start-t1-ios-dev-resume.sh');
+});
+
+test('lost session: a task agent and its step mirror are resumed once, and both are marked', () => {
+  const src = claudeAgent();
+  const wf = {
+    steps: { task_execution: { agents: [{ ...src, taskIndex: 0 }] } },
+    taskExecution: { taskStates: { 0: { agents: [src] } } },
+  };
+  const plan = planLostSessionRecovery(wf);
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].agents.length, 2);
+});
+
+test('lost session: agents with no way to resume halt', () => {
+  const wf = {
+    steps: {
+      a: { agents: [claudeAgent({ window: 'a', cliSessionId: undefined })] },                  // codex
+      b: { agents: [claudeAgent({ window: 'b', autoResumeCount: 2 })] },                       // cap reached
+      c: { agents: [claudeAgent({ window: 'c', agentCwd: '/gone' })] },                        // worktree removed
+      d: { agents: [claudeAgent({ window: 'd', agentCwd: undefined })] },
+    },
+  };
+  const plan = planLostSessionRecovery(wf, { cwdExists: dir => dir !== '/gone' });
+  assert.deepEqual(plan.map(p => [p.window, p.action]), [['a', 'halt'], ['b', 'halt'], ['c', 'halt'], ['d', 'halt']]);
+});
+
+test('lost session: only running agents are touched', () => {
+  const wf = { steps: { s: { agents: [claudeAgent({ status: 'done' }), claudeAgent({ status: 'error', window: 'x' })] } } };
+  assert.deepEqual(planLostSessionRecovery(wf), []);
+  assert.deepEqual(planLostSessionRecovery(null), []);
+});
