@@ -163,19 +163,25 @@ That is the expected outcome of a working fix round, not a rubber stamp.
 
 ## REVIEW FORMAT — MANDATORY
 
+The owner reads this report for what still needs fixing. Do the verification above for every
+prior finding, but do NOT list the ones that are CLOSED: a list of settled findings buries the
+open ones, and a "MEDIUM" next to a closed item reads as an open medium. Report only the count.
+The Blocking / Medium / Low counts cover the findings below and nothing else.
+
 ## Review: ${role}
 
 **Approved:** yes | no
 **Blocking:** N  |  **Medium:** N  |  **Low:** N
-
-### Verification of prior findings
-- [round N] <your finding, one line> — CLOSED | NOT CLOSED | REGRESSED — <evidence>
+**Prior findings:** N checked, N closed
 
 ### Findings
-[Only NOT CLOSED / REGRESSED items, and defects in changed text. If none, say so.]
+[Only what needs fixing now: each NOT CLOSED or REGRESSED finding, cited as
+\`[round N] <finding> — NOT CLOSED | REGRESSED — <what remains>\`, and any defect in the changed
+text. If there are none, write "None." and nothing else here.]
 
 ### Action Items
-- [ ] [assignee_role] — description`;
+- [ ] [assignee_role] — description
+[Only for the findings above. Omit the section when there are none.]`;
 }
 
 /**

@@ -75,6 +75,15 @@ test('it keeps the machine-parsed verdict format the gate requires', () => {
   assert.match(i, /## Review: QA/);
 });
 
+// valkomna VK-062 (2026-10-27): every round-3 review listed its round-1
+// findings as "MEDIUM: … CLOSED", which read as open mediums on a clean round.
+test('closed findings are counted, not listed: the report shows only what needs fixing', () => {
+  const i = buildRereviewInstruction('UX', 'ux', 'p.md', 3);
+  assert.doesNotMatch(i, /### Verification of prior findings/);
+  assert.match(i, /\*\*Prior findings:\*\* N checked, N closed/);
+  assert.match(i, /do NOT list the ones that are CLOSED/);
+});
+
 test('an all-closed round is stated as the expected good outcome', () => {
   const i = buildRereviewInstruction('Brand', 'brand', 'p.md', 2);
   assert.match(i, /If every finding of yours is CLOSED/);
@@ -104,7 +113,7 @@ test('without a base sha it still says how to find the delta', () => {
 test('the rest of the contract survives the new section', () => {
   // The diff block is inserted mid-template; a broken literal would truncate it.
   const t = buildRereviewInstruction('UX', 'ux', 'docs/prds/PRD-1.md', 2, 'deadbee');
-  for (const marker of ['## WHAT BLOCKS', '## WHAT DOES NOT BLOCK', '### Verification of prior findings', '### Action Items', 'REGRESSED']) {
+  for (const marker of ['## WHAT BLOCKS', '## WHAT DOES NOT BLOCK', '**Prior findings:**', '### Action Items', 'REGRESSED']) {
     assert.ok(t.includes(marker), `missing: ${marker}`);
   }
 });

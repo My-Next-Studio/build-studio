@@ -53,7 +53,7 @@ async function post(root, tmux, { cli = 'claude', route = '/draft/create-story',
   };
   const app = express();
   app.use(express.json());
-  app.use('/api', createDraftingRouter(config, {}, tmux, { templateDir, ...(findSessionId ? { findSessionId } : {}) }));
+  app.use('/api', createDraftingRouter(config, {}, tmux, { templateDir, transcriptExists: () => true, ...(findSessionId ? { findSessionId } : {}) }));
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, r));
   const { port } = server.address();

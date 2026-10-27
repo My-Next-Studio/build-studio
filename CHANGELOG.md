@@ -43,6 +43,15 @@ that move underneath you without your having edited anything.
   get `--strictPort`. If the assigned worktree port is taken, the server exits
   with `EADDRINUSE` instead of quietly binding the next free port, which would
   have left `E2E_BASE_URL` pointing at a port nothing of yours serves.
+- **PRD re-reviews (round 2 and later) show only what still needs fixing.**
+  Each reviewer used to list every earlier finding of its own with its
+  verdict, for example "MEDIUM: keyboard users cannot scroll the table —
+  CLOSED", so a clean round looked like it still had open mediums. Reviewers
+  still check each earlier finding, but the report now gives only a count,
+  `**Prior findings:** 5 checked, 5 closed`. **Findings** lists only what is
+  not closed, has regressed, or is wrong in the changed text. The Blocking /
+  Medium / Low counts, which strict auto-advance reads, mean the same as
+  before.
 
 ### Upgrade steps
 
