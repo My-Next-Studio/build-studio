@@ -2498,6 +2498,21 @@ ${EFFICIENCY_INSTRUCTIONS}`,
           `export XCTEST_CLEAN=${JSON.stringify(xctestCleanScript)}\n` +
           `export BUILD_STUDIO_UITEST_SCOPE=${JSON.stringify(uitestScopeScript)}\n`
         : '';
+      // Tell the agent's test runs where the workflow's dev servers actually
+      // listen, so an E2E suite follows a worktree-offset port instead of
+      // hitting whatever holds the project default (another project's dev
+      // server answering on 5173 turns a whole suite into phantom 404s).
+      // Exported ONLY for servers this workflow started — same rule as the QA
+      // prompt's DEV SERVER PORTS section: say what is true, or say nothing;
+      // with no started server the project's own defaults apply. The backend
+      // URL uses 127.0.0.1, not localhost: Playwright's request API resolves
+      // localhost to ::1, and a Node server bound to 127.0.0.1 refuses that.
+      // The values come only from the workflow's own resolved ports, so they
+      // also override any BACKEND_URL inherited from the hub's environment.
+      const startedPorts = wf.devServerPorts || {};
+      const devUrlEnvLine =
+        (startedPorts.frontend ? `export E2E_BASE_URL=http://localhost:${startedPorts.frontend}\n` : '') +
+        (startedPorts.backend ? `export BACKEND_URL=http://127.0.0.1:${startedPorts.backend}\n` : '');
       // Unset PORT before launching the agent. The Electron hub runs on
       // PORT=18080; that value propagates hub → project-server → tmux server →
       // agent shell. If an agent then starts a project dev server to test its
@@ -2515,7 +2530,7 @@ if ! command -v ${cliBin} >/dev/null 2>&1; then
     if [ -x "$p/${cliBin}" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}${goalArmLine}${cliInvocation}
+${simEnvLine}${devUrlEnvLine}${goalArmLine}${cliInvocation}
 `;
       // Pre-trust project-scoped MCP servers so Claude Code's interactive
       // "New MCP server found in this project" prompt can't stall the agent.
@@ -2861,7 +2876,10 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
         }
 
         if (isViteBased) {
-          cmd = `${cmd} -- --port ${wtPort}`;
+          // --strictPort: fail with EADDRINUSE instead of silently moving to the
+          // next free port, which would leave the agent's E2E_BASE_URL pointing
+          // at a port this server never bound.
+          cmd = `${cmd} -- --port ${wtPort} --strictPort`;
         } else {
           cmd = `PORT=${wtPort} ${cmd}`;
         }

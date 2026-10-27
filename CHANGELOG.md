@@ -21,6 +21,40 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-27 — Agents' E2E runs follow the ports the workflow's dev servers really use
+
+### Changed
+
+- **Agents get the dev-server URLs in their shell.** When a workflow run has
+  started dev servers (worktree runs with `dev_commands`), every agent it then
+  launches has `E2E_BASE_URL=http://localhost:<frontend port>` and
+  `BACKEND_URL=http://127.0.0.1:<backend port>` exported. An E2E suite that
+  reads them follows the worktree-offset ports instead of hitting whatever
+  holds the project's default port. Before, another project's dev server on the
+  default port could make a whole suite fail with phantom 404s. When the
+  workflow started no dev server, nothing is exported and the project's own
+  defaults apply.
+  - `BACKEND_URL` replaces any value the agent's shell would have inherited
+    from the environment Build Studio runs in.
+  - The backend URL uses `127.0.0.1` rather than `localhost`, because
+    Playwright's request API resolves `localhost` to `::1` and a server bound
+    to `127.0.0.1` refuses that.
+- **Vite dev servers started by a workflow fail instead of drifting.** They now
+  get `--strictPort`. If the assigned worktree port is taken, the server exits
+  with `EADDRINUSE` instead of quietly binding the next free port, which would
+  have left `E2E_BASE_URL` pointing at a port nothing of yours serves.
+
+### Upgrade steps
+
+**In Build Studio** — `cd packages/desktop && node inject-resources.js --sync-only`,
+then restart the app and any running project-servers.
+
+**In each managed project** — nothing required. To benefit, read
+`E2E_BASE_URL` for the E2E runner's `baseURL` and `BACKEND_URL` for direct
+backend calls in tests, with your usual defaults as the fallback.
+
+---
+
 ## 2026-10-25 — The decision layer's shadow mode reaches every judgement about agent text
 
 ### Added
