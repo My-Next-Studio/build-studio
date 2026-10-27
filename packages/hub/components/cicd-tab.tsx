@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useProjectApi } from '@/lib/use-project-api'
 import { roleConfig, avatarSrc } from '@/lib/roles'
+import { CiRuntimePanel } from './ci-runtime-panel'
 
 interface CommitEntry {
   hash: string
@@ -928,6 +929,9 @@ export function CicdTab() {
               onReset={() => setInvestigate({ phase: 'idle' })}
             />
           )}
+
+          {/* Runner time per workflow, and the drift notice */}
+          <CiRuntimePanel />
         </div>
       )}
 

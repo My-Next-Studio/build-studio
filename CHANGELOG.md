@@ -21,9 +21,47 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-27 — Agents' E2E runs follow the ports the workflow's dev servers really use
+## 2026-10-27 — Agents' E2E runs follow the ports the workflow's dev servers really use, and CI runtime drift gets a notice
+
+### Added
+
+- **A notice when a CI workflow's runtime drifts.** For projects with
+  `deployment.repo` set, Build Studio now records the runner time of every
+  successful push to the default branch, per CI workflow. Runner time is the
+  sum of the jobs' own durations, so time spent queued is not counted. When a
+  run takes more than 10% longer than the median of the up to ten runs before
+  it, and at least two minutes longer, the CI/CD tab shows a notice under the
+  CI light. The notice gives the old and new runner time, the push it started
+  with, and the steps that grew most. The Monitor tab shows it as a
+  low-severity row. A table under the notice lists each workflow's median and
+  latest runner time.
+  - The history is seeded from GitHub (the last 12 successful runs per
+    workflow), so a suite that has already grown can be flagged on the first
+    day.
+  - The notice stays while runs are still over the baseline they were
+    measured against, even after the rolling median catches up. It clears
+    itself when a run is back within budget.
+  - **Accept the new size** on the notice starts a new baseline from the
+    flagged run, for growth that was intended. A button to start a
+    maintenance pass is planned (`docs/plans/test-suite-drift.md`).
+  - Thresholds are set per project under `deployment.ci_runtime_budget`
+    (`threshold`, `window`, `min_runs`, `min_excess_seconds`), and
+    `ci_runtime_budget: false` turns the check off. Timings and baselines
+    are kept in `~/.build-studio/ci-runtime/<owner>__<repo>.json`, not in the
+    project. Cost: one `gh run list` per active workflow every 30 minutes,
+    and one `gh run view` per new run.
 
 ### Changed
+
+- **Agents are told to extend suite-wide checks instead of adding new
+  ones.** Builders and the test writer must look for an existing gate,
+  performance, Lighthouse/accessibility audit or snapshot sweep that covers
+  the surface before adding one, and must explain in their report when they
+  add one anyway. Code reviewers, the final reviewer and PRD reviewers now
+  raise a duplicate suite-wide check or CI step as a **MEDIUM** finding
+  naming the check to extend. Under strict review, a MEDIUM sends the round
+  back like any other. This came from a site whose CI had grown to two to
+  three hours because each PRD added its own gate.
 
 - **Agents get the dev-server URLs in their shell.** When a workflow run has
   started dev servers (from `dev_commands`), every agent it launches after that
@@ -78,10 +116,15 @@ that move underneath you without your having edited anything.
 
 ### Upgrade steps
 
-**In Build Studio** — `cd packages/desktop && node inject-resources.js --sync-only`,
-then restart the app and any running project-servers.
+**In Build Studio** — the CI/CD tab changed, so a hub rebuild and full inject:
+`cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`, then restart the app and
+any running project-servers.
 
-**In each managed project** — nothing required. To benefit, read
+**In each managed project** — nothing required for the runtime notice: it
+reads GitHub with the `gh` credential the CI light already uses. To turn it
+off for a project, set `ci_runtime_budget: false` under `deployment`. To
+benefit from the dev-server URLs, read
 `E2E_BASE_URL` for the E2E runner's `baseURL` and `BACKEND_URL` for direct
 backend calls in tests, with your usual defaults as the fallback. A project
 with two or more dev servers, none of them named `frontend`, should mark the
@@ -94,6 +137,13 @@ one the browser tests open with `role: frontend` in `dev_commands`.
   offset" is what took down other projects' servers.
 - The QA prompt and the agents' exported variables both come from
   `devServerUrls`; keep a single source so they name the same servers.
+- The runtime budget is derived by replaying the runs since the last
+  baseline marker (`evaluateBudget` in `lib/ci-runtime.js`), not stored as a
+  flag. Keep it that way, so a notice can never outlive its cause. A flag
+  keeps the baseline it opened with: judging later runs against the rolling
+  median would quietly drop a suite that grew and stayed grown.
+- The suite-growth rule's wording lives in `lib/suite-guardrail.js`, one
+  variant per kind of agent. Add new prompts through it, not with a copy.
 
 ---
 

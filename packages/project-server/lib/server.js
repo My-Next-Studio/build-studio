@@ -20,6 +20,8 @@ const { createRunRouter } = require('./api/run');
 const { createDeploymentRouter } = require('./api/deployment');
 const { createMonitorRouter } = require('./api/monitor');
 const { createMonitor } = require('./monitor');
+const { createCiRuntime } = require('./ci-runtime');
+const { createCiRuntimeRouter } = require('./api/ci-runtime');
 const { createPublisher, createPublishingRouter } = require('./api/publishing');
 const { createRunbooksRouter } = require('./api/runbooks');
 const { createOpsUITestsRouter } = require('./api/ops-uitests');
@@ -173,10 +175,13 @@ function startServer(projectRoot, opts = {}) {
   // Content publishing — off unless the project enables it. Built before the
   // monitor so its failures can surface there as alerts.
   const publisher = createPublisher(config);
-  const monitor = createMonitor(config, { extraAlerts: () => publisher.alerts() });
+  // CI runtime per workflow, and its drift notice (docs/plans/test-suite-drift.md).
+  const ciRuntime = createCiRuntime(config);
+  const monitor = createMonitor(config, { extraAlerts: () => [...publisher.alerts(), ...ciRuntime.alerts()] });
   const deploymentRouter = createDeploymentRouter(config, gitOps, { monitor });
   const localCiRouter = createLocalCiRouter(config);
   const monitorRouter = createMonitorRouter(config, monitor);
+  const ciRuntimeRouter = createCiRuntimeRouter(config, ciRuntime);
   const publishingRouter = createPublishingRouter(config, publisher);
   const runbooksRouter = createRunbooksRouter(config);
   const opsUITestsRouter = createOpsUITestsRouter(config);
@@ -195,6 +200,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', deploymentRouter);
   app.use('/api', localCiRouter);
   app.use('/api', monitorRouter);
+  app.use('/api', ciRuntimeRouter);
   app.use('/api', publishingRouter);
   app.use('/api', runbooksRouter);
   app.use('/api', opsUITestsRouter);
@@ -1111,6 +1117,7 @@ function startServer(projectRoot, opts = {}) {
       // Warm the CI/alert caches so the first hub poll after a restart shows
       // real state instead of an empty light. No-ops without deployment.repo.
       monitor.prime();
+      ciRuntime.prime();
     });
   };
 
