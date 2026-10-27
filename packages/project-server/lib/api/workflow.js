@@ -14,6 +14,7 @@ const { DEFAULT_MAX_REVIEW_ROUNDS } = require('../config');
 const agentRecovery = require('../agent-recovery');
 const agentRelaunch = require('../agent-relaunch');
 const uitestScope = require('../uitest-scope');
+const devPorts = require('../dev-ports');
 const learningScope = require('../learning-scope');
 const limitBlock = require('../limit-block');
 const memoryGuard = require('../memory-guard');
@@ -2499,20 +2500,16 @@ ${EFFICIENCY_INSTRUCTIONS}`,
           `export BUILD_STUDIO_UITEST_SCOPE=${JSON.stringify(uitestScopeScript)}\n`
         : '';
       // Tell the agent's test runs where the workflow's dev servers actually
-      // listen, so an E2E suite follows a worktree-offset port instead of
-      // hitting whatever holds the project default (another project's dev
-      // server answering on 5173 turns a whole suite into phantom 404s).
-      // Exported ONLY for servers this workflow started — same rule as the QA
-      // prompt's DEV SERVER PORTS section: say what is true, or say nothing;
-      // with no started server the project's own defaults apply. The backend
-      // URL uses 127.0.0.1, not localhost: Playwright's request API resolves
-      // localhost to ::1, and a Node server bound to 127.0.0.1 refuses that.
-      // The values come only from the workflow's own resolved ports, so they
-      // also override any BACKEND_URL inherited from the hub's environment.
-      const startedPorts = wf.devServerPorts || {};
-      const devUrlEnvLine =
-        (startedPorts.frontend ? `export E2E_BASE_URL=http://localhost:${startedPorts.frontend}\n` : '') +
-        (startedPorts.backend ? `export BACKEND_URL=http://127.0.0.1:${startedPorts.backend}\n` : '');
+      // listen, so an E2E suite follows the run's own port instead of hitting
+      // whatever holds the project default (another project's dev server
+      // answering on 5173 turns a whole suite into phantom 404s). Exported ONLY
+      // for servers this workflow started — same rule as the QA prompt's DEV
+      // SERVER PORTS section: say what is true, or say nothing. The values come
+      // only from the workflow's own ports, so they also override any
+      // BACKEND_URL inherited from the hub's environment. Every script below
+      // that starts the CLI carries them: a resume runs in a fresh shell, and
+      // without them a resumed QA agent tested against the defaults again.
+      const devUrlEnvLine = devPorts.devUrlEnvLines(wf.devServerPorts, config.dev_commands);
       // Unset PORT before launching the agent. The Electron hub runs on
       // PORT=18080; that value propagates hub → project-server → tmux server →
       // agent shell. If an agent then starts a project dev server to test its
@@ -2559,7 +2556,7 @@ ${unsetKey ? 'unset ANTHROPIC_API_KEY\n' : ''}if ! command -v claude >/dev/null 
     if [ -x "$p/claude" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${resumePromptFile}')"
+${simEnvLine}${devUrlEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${resumePromptFile}')"
 `;
         fs.writeFileSync(path.join(agentCwd, resumeScriptName), resumeScript, { mode: 0o755 });
         agent.cliSessionId = cliSessionId;
@@ -2586,7 +2583,7 @@ if ! command -v codex >/dev/null 2>&1; then
     if [ -x "$p/codex" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat '${limitPromptFile}')"
+${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat '${limitPromptFile}')"
 `, { mode: 0o755 });
         agent.limitResumeScript = limitScriptName;
       }
@@ -2782,57 +2779,54 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
     return launchWorkflowAgents(wf, agent, { useWorktrees: false });
   }
 
-  // Port offset for worktree dev servers to avoid conflicting with main branch dev servers.
-  // Main branch uses default ports (e.g., backend:4000, frontend:5173).
-  // Worktree servers use default + offset (e.g., backend:4100, frontend:5273).
-  const WORKTREE_PORT_OFFSET = 100;
-
+  // Dev servers run on their configured port + 100 when that is free, else the
+  // next free one, chosen per workflow (lib/dev-ports.js). A fixed +100 for
+  // every project put two projects with the same default on one port, and the
+  // second to reach QA killed the first one's server to take it.
   function startDevServers(wf, worktreePath) {
     const devCmds = config.dev_commands || [];
     if (devCmds.length === 0) return;
 
-    console.log(`[workflow] Starting ${devCmds.length} dev server(s) from ${worktreePath} (port offset: +${WORKTREE_PORT_OFFSET})`);
+    console.log(`[workflow] Starting ${devCmds.length} dev server(s) from ${worktreePath}`);
     let sessionExists = tmuxOps.hasSession(wf.sessionName);
 
-    // Kill any existing dev server windows from a previous round — they may be
-    // serving the wrong worktree and holding the port.
-    // IMPORTANT: kill-window only kills the shell, not child processes. We must
-    // also kill by port so the new server can actually bind.
+    // Kill this workflow's own servers from a previous round — they may be
+    // serving the wrong worktree and holding the port. ONLY ports this workflow
+    // recorded: a port merely matching the default + offset may be another
+    // project's server. kill-window only kills the shell, not child processes,
+    // so the port is killed too; with no session (a crashed run) the recorded
+    // ports are all that is left of it.
     const { execFileSync: execKill } = require('child_process');
-    if (sessionExists) {
-      for (const dev of devCmds) {
-        const windowName = `dev-${dev.name}`;
-        const portMatch = dev.port || (dev.name === 'backend' ? 4000 : dev.name === 'frontend' ? 5173 : null);
-        const wtPort = portMatch ? portMatch + WORKTREE_PORT_OFFSET : null;
-        // killWindowAndChildren kills the tmux window AND any processes still holding the port
-        tmuxOps.killWindowAndChildren(`${wf.sessionName}:${windowName}`, wtPort);
-        if (wtPort) console.log(`[workflow] Killed dev server window ${windowName} and port ${wtPort}`);
+    const previous = wf.devServerPorts || {};
+    for (const dev of devCmds) {
+      const ownPort = previous[dev.name] || null;
+      if (sessionExists) {
+        tmuxOps.killWindowAndChildren(`${wf.sessionName}:dev-${dev.name}`, ownPort);
+      } else if (ownPort) {
+        tmuxOps.killWindowAndChildren(null, ownPort);
       }
-    } else {
-      // Session doesn't exist yet but orphaned processes from a crashed previous run
-      // may still hold the offset ports. Kill by port directly.
-      for (const dev of devCmds) {
-        const portMatch = dev.port || (dev.name === 'backend' ? 4000 : dev.name === 'frontend' ? 5173 : null);
-        if (!portMatch) continue;
-        const wtPort = portMatch + WORKTREE_PORT_OFFSET;
-        tmuxOps.killWindowAndChildren(null, wtPort);
-      }
+      if (ownPort) console.log(`[workflow] Killed dev server window dev-${dev.name} and port ${ownPort}`);
     }
     // Brief pause for ports to be released
     try { execKill('sleep', ['1']); } catch (_) {}
 
-    // Track the worktree ports so we can pass them to agents.
-    // Two-pass: first compute all port assignments, then start servers so that
-    // the frontend server can reference the backend worktree URL (BACKEND_URL).
-    wf.devServerPorts = wf.devServerPorts || {};
-
-    // Pass 1: compute all offset ports
-    for (const dev of devCmds) {
-      const portMatch = dev.port || (dev.name === 'backend' ? 4000 : dev.name === 'frontend' ? 5173 : null);
-      if (portMatch) {
-        wf.devServerPorts[dev.name] = portMatch + WORKTREE_PORT_OFFSET;
-      }
+    // Choose every port before starting anything, so the frontend server can be
+    // given the backend's URL (BACKEND_URL).
+    const owner = `${config.name || path.basename(projectRoot)}/${wf.id}`;
+    const claimsFile = devPorts.claimsPath();
+    const claims = devPorts.readClaims(claimsFile);
+    const { ports, moved } = devPorts.allocateDevPorts({
+      devCmds,
+      previous,
+      isTaken: (port) => devPorts.portListening(port)
+        || devPorts.claimedByOther(claims, port, owner, { isListening: devPorts.portListening }),
+    });
+    for (const m of moved) {
+      console.log(`[workflow] ${m.name}: port ${m.wanted} is in use by something else — using ${m.port}`);
     }
+    wf.devServerPorts = ports;
+    devPorts.writeClaims(claimsFile, ports, owner, { isListening: devPorts.portListening });
+    const roles = devPorts.devServerRoles(devCmds);
 
     // Pass 2: start each server with full env (PORT + BACKEND_URL for frontend)
     for (const dev of devCmds) {
@@ -2888,8 +2882,8 @@ ${simEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat
 
       // Inject BACKEND_URL so vite's proxy target points to the worktree backend,
       // not the hardcoded main-branch port. Affects browser-initiated /api/* fetches.
-      const backendPort = wf.devServerPorts.backend;
-      if (dev.name === 'frontend' && backendPort) {
+      const backendPort = roles.backend ? wf.devServerPorts[roles.backend] : null;
+      if (dev.name === roles.frontend && backendPort) {
         cmd = `BACKEND_URL=http://localhost:${backendPort} ${cmd}`;
         console.log(`[workflow] frontend BACKEND_URL → http://localhost:${backendPort}`);
       }
@@ -8650,8 +8644,9 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       // capability that is not there. Say what is true, or say nothing.
       const ports = wf.devServerPorts || {};
       const hasDevServers = Object.keys(ports).length > 0;
-      const frontendUrl = ports.frontend ? `http://localhost:${ports.frontend}` : null;
-      const backendUrl = ports.backend ? `http://localhost:${ports.backend}` : null;
+      // The same roles the agents' E2E_BASE_URL / BACKEND_URL come from, so the
+      // prompt and the environment name the same servers.
+      const { frontend: frontendUrl, backend: backendUrl } = devPorts.devServerUrls(ports, config.dev_commands);
       const devServerSection = hasDevServers
         ? `\n\n## DEV SERVER PORTS\n\nThe workflow started these dev servers for this run:\n`
           + Object.entries(ports).map(([name, port]) => `- ${name}: http://localhost:${port}`).join('\n')

@@ -26,19 +26,42 @@ that move underneath you without your having edited anything.
 ### Changed
 
 - **Agents get the dev-server URLs in their shell.** When a workflow run has
-  started dev servers (worktree runs with `dev_commands`), every agent it then
-  launches has `E2E_BASE_URL=http://localhost:<frontend port>` and
-  `BACKEND_URL=http://127.0.0.1:<backend port>` exported. An E2E suite that
-  reads them follows the worktree-offset ports instead of hitting whatever
+  started dev servers (from `dev_commands`), every agent it launches after that
+  has `E2E_BASE_URL=http://localhost:<frontend port>` and
+  `BACKEND_URL=http://127.0.0.1:<backend port>` exported, and keeps them when
+  it is resumed after a crash, a lost session or a usage limit. An E2E suite
+  that reads them follows the run's own ports instead of hitting whatever
   holds the project's default port. Before, another project's dev server on the
   default port could make a whole suite fail with phantom 404s. When the
   workflow started no dev server, nothing is exported and the project's own
   defaults apply.
+  - Dev servers are started when QA validation begins, so QA and the fix
+    rounds after it get these variables. The builder in task execution runs
+    before any dev server exists and does not: its E2E runs still use the
+    project's own defaults.
+  - Which server is the frontend: one named `frontend`, or one marked
+    `role: frontend` in `dev_commands`. A project with a single dev server
+    under another name (`web`, say) gets it as the frontend. With several
+    servers and none named or marked, nothing is guessed: add `role`. The
+    backend is the one named `backend` or marked `role: backend`. The QA
+    prompt's port list uses the same rule.
   - `BACKEND_URL` replaces any value the agent's shell would have inherited
     from the environment Build Studio runs in.
   - The backend URL uses `127.0.0.1` rather than `localhost`, because
     Playwright's request API resolves `localhost` to `::1` and a server bound
-    to `127.0.0.1` refuses that.
+    to `127.0.0.1` refuses that. The QA prompt now gives the same address.
+- **Workflows in different projects no longer take each other's dev-server
+  ports.** Every project's dev servers used to run on the configured port
+  plus 100, so two projects with the same default (Vite's 5173) shared 5273.
+  When the second reached QA it killed whatever held 5273, which was the first
+  project's server, and the first project's tests then ran against the other
+  app. Now a run uses its configured port + 100 when that is free, otherwise
+  the next free port, and keeps the same ports through its later QA rounds.
+  It kills only the ports it started itself. Runs started in the same few
+  seconds are kept apart by `~/.build-studio/dev-port-claims.json`; a claim
+  lapses after ten minutes unless its port is still in use, so nothing needs
+  cleaning up after a crash. The server log says when a port was taken and
+  which one the run used instead.
 - **Vite dev servers started by a workflow fail instead of drifting.** They now
   get `--strictPort`. If the assigned worktree port is taken, the server exits
   with `EADDRINUSE` instead of quietly binding the next free port, which would
@@ -60,7 +83,17 @@ then restart the app and any running project-servers.
 
 **In each managed project** — nothing required. To benefit, read
 `E2E_BASE_URL` for the E2E runner's `baseURL` and `BACKEND_URL` for direct
-backend calls in tests, with your usual defaults as the fallback.
+backend calls in tests, with your usual defaults as the fallback. A project
+with two or more dev servers, none of them named `frontend`, should mark the
+one the browser tests open with `role: frontend` in `dev_commands`.
+
+### Notes for forks
+
+- Pick dev-server ports with `allocateDevPorts` (`lib/dev-ports.js`) and kill
+  only ports recorded in `wf.devServerPorts`. Killing by "configured port +
+  offset" is what took down other projects' servers.
+- The QA prompt and the agents' exported variables both come from
+  `devServerUrls`; keep a single source so they name the same servers.
 
 ---
 
