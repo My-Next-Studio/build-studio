@@ -21,6 +21,7 @@ const { createDeploymentRouter } = require('./api/deployment');
 const { createMonitorRouter } = require('./api/monitor');
 const { createMonitor } = require('./monitor');
 const { createCiRuntime } = require('./ci-runtime');
+const { createCiMaintenance } = require('./ci-maintenance');
 const { createCiRuntimeRouter } = require('./api/ci-runtime');
 const { createPublisher, createPublishingRouter } = require('./api/publishing');
 const { createRunbooksRouter } = require('./api/runbooks');
@@ -177,11 +178,12 @@ function startServer(projectRoot, opts = {}) {
   const publisher = createPublisher(config);
   // CI runtime per workflow, and its drift notice (docs/plans/test-suite-drift.md).
   const ciRuntime = createCiRuntime(config);
+  const ciMaintenance = createCiMaintenance(config, ciRuntime);
   const monitor = createMonitor(config, { extraAlerts: () => [...publisher.alerts(), ...ciRuntime.alerts()] });
   const deploymentRouter = createDeploymentRouter(config, gitOps, { monitor });
   const localCiRouter = createLocalCiRouter(config);
   const monitorRouter = createMonitorRouter(config, monitor);
-  const ciRuntimeRouter = createCiRuntimeRouter(config, ciRuntime);
+  const ciRuntimeRouter = createCiRuntimeRouter(config, ciRuntime, ciMaintenance);
   const publishingRouter = createPublishingRouter(config, publisher);
   const runbooksRouter = createRunbooksRouter(config);
   const opsUITestsRouter = createOpsUITestsRouter(config);
@@ -1118,6 +1120,9 @@ function startServer(projectRoot, opts = {}) {
       // real state instead of an empty light. No-ops without deployment.repo.
       monitor.prime();
       ciRuntime.prime();
+      // Files a finished maintenance analysis, and restarts the runtime
+      // baseline once its item has merged.
+      ciMaintenance.startTicking();
     });
   };
 

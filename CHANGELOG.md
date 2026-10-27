@@ -42,8 +42,19 @@ that move underneath you without your having edited anything.
     measured against, even after the rolling median catches up. It clears
     itself when a run is back within budget.
   - **Accept the new size** on the notice starts a new baseline from the
-    flagged run, for growth that was intended. A button to start a
-    maintenance pass is planned (`docs/plans/test-suite-drift.md`).
+    flagged run, for growth that was intended.
+  - **Start a maintenance pass** on the notice runs one analysis agent. It
+    reads the CI timings, the workflow file, and the gates and tests the
+    expensive steps run, along with where they came from. It changes nothing
+    in the project. Its proposals (what to merge, cut, scope down or move to
+    a scheduled run, each naming the test that still covers the acceptance
+    criterion) are filed as a backlog **Task** and committed. Click **Draft**
+    on it, and the PM writes the PRD with you. It then runs the normal
+    review, build and QA. When the item reaches Implemented, the runtime
+    baseline restarts for every workflow. One pass runs at a time, and the
+    notice shows its progress. The analysis may run up to 40 minutes and
+    uses the project's one-shot agent slot, so a CI investigation cannot run
+    at the same time. Design: `docs/plans/test-suite-drift.md`.
   - Thresholds are set per project under `deployment.ci_runtime_budget`
     (`threshold`, `window`, `min_runs`, `min_excess_seconds`), and
     `ci_runtime_budget: false` turns the check off. Timings and baselines
@@ -144,6 +155,11 @@ one the browser tests open with `role: frontend` in `dev_commands`.
   median would quietly drop a suite that grew and stayed grown.
 - The suite-growth rule's wording lives in `lib/suite-guardrail.js`, one
   variant per kind of agent. Add new prompts through it, not with a copy.
+- The maintenance pass's agent only writes a result file, and the server
+  files the backlog item (`lib/ci-maintenance.js`). The pass's state sits
+  beside the runtime store, in `<owner>__<repo>.maintenance.json`, and is
+  what restarts the baseline when the item is implemented. An item filed by
+  hand does not restart it.
 
 ---
 

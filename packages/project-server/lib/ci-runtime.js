@@ -364,7 +364,12 @@ function createCiRuntime(config, deps = {}) {
 
   function prime() { if (enabled) cache.refresh(); }
 
-  return { get, accept, markBaseline, alerts, prime, refresh: () => cache.refresh(), enabled };
+  /** One stored run, with its step timings. */
+  function run(id) {
+    return load().runs[id] || null;
+  }
+
+  return { get, run, accept, markBaseline, alerts, prime, refresh: () => cache.refresh(), enabled, storeFile: file };
 }
 
 function fmtDuration(secs) {

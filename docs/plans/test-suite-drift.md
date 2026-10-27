@@ -1,7 +1,6 @@
 # Plan: catch test-suite drift, and prune it through the normal pipeline
 
-> **Status: guardrail, measurement and notice implemented 2026-10-27; the
-> maintenance pass is proposed.**
+> **Status: implemented 2026-10-27.**
 >
 > Owner request: a managed project's CI suite had grown to two to three hours
 > for a small site, and the reason was that each PRD added its own gate or
@@ -129,19 +128,35 @@ two actions is taken. To keep it for later, the owner asks the PM to file it.
 
 ## The maintenance pass: an analysis that ends in a PRD
 
-The button starts one agent. It reads the CI job and step timings, the test
-files, and the PRDs the tests came from, and writes a **maintenance PRD**:
-which tests or gates to merge, cut, scope down or move to a scheduled run.
-For every test it removes, it names the remaining test that still covers that
-acceptance criterion.
+The button starts one agent (`lib/ci-maintenance.js`). It is given the
+runner time against the baseline, the steps that grew, and where the time
+goes in the latest run. It reads the workflow file, the gates and tests the
+expensive steps run, and the commits and PRDs they came from. Its proposals
+say which tests or gates to merge, cut, scope down or move to a scheduled
+run. For every test a proposal removes, it names the test that still covers
+that acceptance criterion. It changes nothing in the project, and writes its
+result to a file.
 
-That PRD then goes through the ordinary pipeline: review, execution, QA,
-merge. A separate workflow type was considered and rejected. It would
-duplicate the gates that already protect a change, and the review panel is
-exactly what should catch a cut that loses coverage.
+**The server files the result as a backlog Task**, and the owner clicks
+Draft on it. The PM then writes the PRD with the owner in the drafting
+session, and from there it is an ordinary PRD: review, execution, QA, merge.
+Two alternatives were rejected:
 
-The PRD is marked as maintenance, so the first green CI run on the default
-branch after it merges sets the baseline marker.
+- **The agent writes the PRD itself.** One step fewer, but each project has
+  its own PRD conventions (numbering, header lines, docs lint) that drafting
+  already handles. It would also leave the owner to push back on cuts in
+  review instead of choosing them first.
+- **A separate maintenance workflow type.** It would duplicate the gates
+  that already protect a change, and the review panel is exactly what should
+  catch a cut that loses coverage.
+
+The server files the item, not the agent, so the item's wording and its link
+back to the pass do not depend on an agent remembering them. One pass runs
+at a time: a second is refused while one is analysing or filed and not yet
+implemented. **When the item reaches Implemented (its PRD merged), the
+baseline marker is set for every workflow**, since the PRD may touch any of
+them. Any push run created after that point carries the merge, so the marker
+has the same effect as waiting for the first green run.
 
 ## Open
 

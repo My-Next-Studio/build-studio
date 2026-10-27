@@ -26,10 +26,21 @@ interface RuntimeWorkflow {
   marker: { at: string; reason: string } | null
   flag: RuntimeFlag | null
 }
+/** The maintenance pass on record — project-server lib/ci-maintenance.js. */
+interface MaintenancePass {
+  state: 'running' | 'filed' | 'done' | 'error' | 'lost'
+  workflow: string
+  startedAt: string
+  itemId?: string
+  title?: string
+  doneAt?: string
+  error?: string
+}
 interface CiRuntime {
   configured: boolean
   workflows: RuntimeWorkflow[]
   budget?: { threshold: number }
+  maintenance?: MaintenancePass | null
   error?: string | null
 }
 
@@ -54,6 +65,28 @@ function stepLabel(key: string): string {
   return i === -1 ? key : key.slice(i + 3)
 }
 
+function MaintenanceLine({ pass }: { pass: MaintenancePass }) {
+  const color = pass.state === 'error' || pass.state === 'lost' ? 'var(--red)' : pass.state === 'done' ? 'var(--green)' : 'var(--text-dim)'
+  let text: React.ReactNode
+  if (pass.state === 'running') {
+    text = <>Maintenance pass for {pass.workflow}: analysing the suite (started {fmtDay(pass.startedAt)}). Its proposals are filed as a backlog item when it finishes.</>
+  } else if (pass.state === 'filed') {
+    text = <>Maintenance pass filed as <b>{pass.itemId}</b>{pass.title ? ` — ${pass.title}` : ''}. Open it in the Backlog and click Draft to turn it into a PRD. The baseline restarts when it is implemented.</>
+  } else if (pass.state === 'done') {
+    text = <>{pass.itemId} was implemented: the CI runtime baseline restarted on {fmtDay(pass.doneAt || pass.startedAt)}. The next runs set the new size.</>
+  } else {
+    text = <>Maintenance pass for {pass.workflow} failed: {pass.error || 'unknown error'}. Start it again from the notice.</>
+  }
+  return (
+    <div style={{
+      fontFamily: 'var(--mono)', fontSize: 10, color, padding: '8px 12px',
+      border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface)',
+    }}>
+      {text}
+    </div>
+  )
+}
+
 export function CiRuntimePanel() {
   const api = useProjectApi()
   const [data, setData] = useState<CiRuntime | null>(null)
@@ -70,11 +103,11 @@ export function CiRuntimePanel() {
     return () => clearInterval(id)
   }, [load])
 
-  const accept = async (workflow: string) => {
-    setBusy(workflow)
+  const act = async (path: '/ci-runtime/accept' | '/ci-runtime/maintenance', workflow: string) => {
+    setBusy(`${path}:${workflow}`)
     setError(null)
     try {
-      const d = await api.post('/ci-runtime/accept', { workflow })
+      const d = await api.post(path, { workflow })
       if (d && d.error) setError(d.error)
       else if (d) setData(d)
     } catch (e) {
@@ -87,6 +120,9 @@ export function CiRuntimePanel() {
   if (!data || !data.configured || data.workflows.length === 0) return null
   const pct = Math.round((data.budget?.threshold ?? 0.1) * 100)
   const over = data.workflows.filter(w => w.flag)
+  const pass = data.maintenance || null
+  // One pass at a time: a running or filed one has to finish first.
+  const passOpen = pass?.state === 'running' || pass?.state === 'filed'
 
   return (
     <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -115,22 +151,41 @@ export function CiRuntimePanel() {
               </div>
             )}
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {!passOpen && (
+                <button
+                  onClick={() => act('/ci-runtime/maintenance', w.name)}
+                  disabled={busy !== null}
+                  title="One agent analyses the suite and files its proposals as a backlog item. Draft it into a PRD, which then runs through the normal pipeline."
+                  style={{
+                    padding: '4px 12px', borderRadius: 4, border: 'none', background: 'var(--accent)', color: '#fff',
+                    fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 600,
+                    cursor: busy !== null ? 'default' : 'pointer',
+                  }}
+                >
+                  {busy === `/ci-runtime/maintenance:${w.name}` ? 'Starting…' : 'Start a maintenance pass'}
+                </button>
+              )}
               <button
-                onClick={() => accept(w.name)}
-                disabled={busy === w.name}
+                onClick={() => act('/ci-runtime/accept', w.name)}
+                disabled={busy !== null}
                 title="The growth is intended: start a new baseline from this run."
                 style={{
                   padding: '4px 12px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent',
                   color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 10,
-                  cursor: busy === w.name ? 'default' : 'pointer',
+                  cursor: busy !== null ? 'default' : 'pointer',
                 }}
               >
-                {busy === w.name ? 'Accepting…' : 'Accept the new size'}
+                {busy === `/ci-runtime/accept:${w.name}` ? 'Accepting…' : 'Accept the new size'}
               </button>
             </div>
           </div>
         )
       })}
+
+      {/* A finished pass is news for a couple of weeks, then noise. */}
+      {pass && (pass.state !== 'done' || Date.now() - Date.parse(pass.doneAt || '') < 14 * 86400000) && (
+        <MaintenanceLine pass={pass} />
+      )}
 
       {error && (
         <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--red)' }}>{error}</div>
