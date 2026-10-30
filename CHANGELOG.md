@@ -21,6 +21,37 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-30 — The CI runtime Monitor row opens the CI/CD tab
+
+### Changed
+
+- **The Monitor row for a CI runtime notice now opens the project's CI/CD
+  tab**, where the notice's two actions (Start a maintenance pass, Accept the
+  new size) are. It used to open the latest run on GitHub, which shows the
+  numbers but offers nothing to act on. Other Monitor rows still link to
+  GitHub as before.
+
+### Upgrade steps
+
+**In Build Studio** — rebuild the hub, run the full inject, and restart the
+app:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+**In each managed project** — nothing to do.
+
+### Notes for forks
+
+- A Monitor row can carry `open: { fn, tab, label }`, which the row renders as
+  a link to `/projects/<name>?fn=<fn>&tab=<tab>`. The project dashboard applies
+  those two query parameters once on arrival and then removes them from the
+  URL, so the remembered per-project view is not overridden on a reload.
+
+---
+
 ## 2026-10-27 — Agents' E2E runs follow the ports the workflow's dev servers really use, and CI runtime drift gets a notice
 
 ### Added

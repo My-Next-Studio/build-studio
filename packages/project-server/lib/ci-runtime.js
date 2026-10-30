@@ -358,6 +358,8 @@ function createCiRuntime(config, deps = {}) {
       title: `${w.name} CI is ${w.flag.overPct}% over its baseline`,
       detail: `${fmtDuration(w.flag.latestSeconds)} of runner time against ${fmtDuration(w.flag.baselineSeconds)}. Open CI/CD to start a maintenance pass or accept the new size.`,
       url: w.latest && w.latest.url,
+      // The actions live in the CI/CD tab, not on GitHub, so the row links there.
+      open: { fn: 'operations', tab: 'cicd', label: 'CI/CD' },
       since: w.flag.since.createdAt,
     }));
   }

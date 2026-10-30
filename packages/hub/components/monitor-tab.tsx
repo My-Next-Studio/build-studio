@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 
 // The Monitor tab (Home): things that have rotted while nobody was looking.
 //
@@ -34,6 +35,8 @@ interface Alert {
   note?: string | null
   prNumber?: number | null
   prUrl?: string | null
+  /** A place inside the project to act on the row, preferred over `url`. */
+  open?: { fn: string; tab: string; label: string } | null
 }
 
 // A row that is one click apart from a row that is an hour of work must not
@@ -261,6 +264,11 @@ function AlertRow({ alert, color, enableState, onEnable }: {
   // advisory — the advisory describes the problem, the PR is the action.
   const href = alert.prUrl || alert.url
   const hrefLabel = alert.prUrl ? `PR #${alert.prNumber} ↗` : 'open ↗'
+  const linkStyle = {
+    flexShrink: 0, fontSize: 11, color: 'var(--text-dim)', textDecoration: 'none',
+    border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px',
+    fontFamily: 'var(--mono)', whiteSpace: 'nowrap' as const,
+  }
   return (
     <div style={{
       display: 'flex', alignItems: 'flex-start', gap: 12,
@@ -331,17 +339,16 @@ function AlertRow({ alert, color, enableState, onEnable }: {
         >
           {busy ? 'enabling…' : 'enable'}
         </button>
-      ) : href ? (
-        <a
-          href={href}
-          target="_blank"
-          rel="noreferrer"
-          style={{
-            flexShrink: 0, fontSize: 11, color: 'var(--text-dim)', textDecoration: 'none',
-            border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px',
-            fontFamily: 'var(--mono)', whiteSpace: 'nowrap',
-          }}
+      ) : alert.open ? (
+        // Read by the project dashboard on arrival — see linkedView() there.
+        <Link
+          href={`/projects/${encodeURIComponent(alert.project)}?fn=${encodeURIComponent(alert.open.fn)}&tab=${encodeURIComponent(alert.open.tab)}`}
+          style={linkStyle}
         >
+          {alert.open.label} →
+        </Link>
+      ) : href ? (
+        <a href={href} target="_blank" rel="noreferrer" style={linkStyle}>
           {hrefLabel}
         </a>
       ) : null}

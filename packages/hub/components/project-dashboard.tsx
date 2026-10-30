@@ -62,6 +62,27 @@ function loadViewState(projectName: string): Partial<PersistedViewState> {
   } catch { return {} }
 }
 
+/**
+ * `?fn=operations&tab=cicd` on arrival: a link from outside the dashboard (a
+ * Monitor row) naming where to land. It overrides the remembered view once;
+ * the dashboard then drops it from the URL, so a reload or a later visit
+ * returns to whatever tab the user moves on to.
+ */
+function withLinkedView(saved: Partial<PersistedViewState>): Partial<PersistedViewState> {
+  if (typeof window === 'undefined') return saved
+  const q = new URLSearchParams(window.location.search)
+  const fn = q.get('fn')
+  const tab = q.get('tab')
+  if (!fn || !tab) return saved
+  return {
+    ...saved,
+    activeFunction: fn,
+    view: 'overview',
+    tab,
+    tabByFunction: { ...(saved.tabByFunction || {}), [fn]: tab },
+  }
+}
+
 function saveViewState(projectName: string, state: PersistedViewState) {
   try {
     const raw = localStorage.getItem(VIEW_STATE_KEY)
@@ -76,7 +97,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
   initialPortalsConfig?: Array<{ name: string; url: string }>
 }) {
   const { name: projectName } = useProject()
-  const saved = useRef(loadViewState(projectName))
+  const saved = useRef(withLinkedView(loadViewState(projectName)))
   const [activeFunction, setActiveFunction] = useState<string>(saved.current.activeFunction || 'project')
   const [view, setView] = useState<View>(saved.current.view || 'overview')
   const [tab, setTab] = useState<Tab>(saved.current.tab || 'spec')
@@ -122,6 +143,16 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
   const [ciFailed, setCiFailed] = useState(false)
   const { agents, reload: reloadAgents } = useAgents()
   const api = useProjectApi()
+
+  // The linked view has been applied; see withLinkedView().
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    if (!q.has('fn') && !q.has('tab')) return
+    q.delete('fn')
+    q.delete('tab')
+    const rest = q.toString()
+    window.history.replaceState(window.history.state, '', window.location.pathname + (rest ? `?${rest}` : ''))
+  }, [])
 
   // Persist view state on change
   useEffect(() => {

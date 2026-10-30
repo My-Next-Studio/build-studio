@@ -216,6 +216,7 @@ test('an over-budget workflow becomes a Monitor alert, and accepting it starts a
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].id, 'ci-runtime:Web');
   assert.equal(alerts[0].severity, 'low');
+  assert.deepEqual(alerts[0].open, { fn: 'operations', tab: 'cicd', label: 'CI/CD' }, 'the row opens the tab with the actions');
 
   assert.throws(() => rt.accept('Docs'), /not over its runtime budget/);
   const after = rt.accept('Web');
