@@ -19,11 +19,13 @@ function createCiRuntimeRouter(config, ciRuntime, ciMaintenance) {
 
   // POST /api/ci-runtime/maintenance { workflow } — "Start a maintenance pass":
   // one analysis agent, whose result is filed as a backlog Task to Draft.
-  router.post('/ci-runtime/maintenance', (req, res) => {
+  router.post('/ci-runtime/maintenance', async (req, res) => {
     const workflow = req.body && req.body.workflow;
     if (!workflow || typeof workflow !== 'string') return res.status(400).json({ error: 'workflow required' });
     try {
       ciMaintenance.start(workflow);
+      // A retry of a failed filing is done here and now, not on the next tick.
+      await ciMaintenance.tick();
       res.json({ ok: true, ...view() });
     } catch (e) {
       res.status(e.status || 500).json({ error: e.message });

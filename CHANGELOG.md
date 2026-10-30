@@ -21,7 +21,19 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-10-30 — The CI runtime Monitor row opens the CI/CD tab
+## 2026-10-30 — The CI runtime Monitor row opens the CI/CD tab, and a maintenance pass can file its item
+
+### Fixed
+
+- **A CI maintenance pass could not file its backlog item.** The analysis ran
+  to the end and then failed with *"could not file the backlog item: a
+  release, or an item to place it after or before, is required"*. The item now
+  goes to the top of the backlog, before the first item of the first release
+  (or into a new "Maintenance" release when the backlog is empty). Drag it
+  elsewhere if you like.
+- **Retrying a pass whose filing failed no longer reruns the analysis.** If the
+  agent's result is still on disk, Start a maintenance pass files that result
+  straight away instead of starting another agent run of up to 40 minutes.
 
 ### Changed
 

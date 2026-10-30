@@ -124,6 +124,21 @@ function composeMaintenancePrompt({ repo, workflow, latestRun, resultFile }) {
 }
 
 /**
+ * Where the filed item goes: the top of the backlog, before the first item of
+ * the first release (owner decision, 2026-10-30). The backlog refuses an item
+ * with no position, and a pass has no owner to ask. An empty backlog gets a
+ * "Maintenance" release.
+ */
+function topOfBacklog(projectRoot, docsPath) {
+  try {
+    const content = fs.readFileSync(backlog.backlogIndexPath(projectRoot, docsPath), 'utf8');
+    const first = backlog.parseBacklogSection(content).find((g) => g.items.length > 0);
+    if (first) return { before: first.items[0] };
+  } catch (_) { /* no index yet: createItem reports that itself */ }
+  return { release: 'Maintenance' };
+}
+
+/**
  * @param {object} config     the loaded project config
  * @param {object} ciRuntime  from createCiRuntime
  * @param {object} [deps]     injectable runner, backlog, commit, state file, clock
@@ -157,6 +172,12 @@ function createCiMaintenance(config, ciRuntime, deps = {}) {
       throw Object.assign(new Error(cur.state === 'running'
         ? 'A maintenance pass is already running.'
         : `A maintenance pass is already filed as ${cur.itemId}. Draft and build that one first.`), { status: 409 });
+    }
+    // The analysis finished but filing it failed: file the result on disk
+    // (tick() picks it up) instead of spending another run on the same answer.
+    if (cur && cur.state === 'error' && cur.workflow === workflowName && cur.resultFile && fs.existsSync(cur.resultFile)) {
+      const { error: _error, ...rest } = cur;
+      return write({ ...rest, state: 'running' });
     }
     const workflow = ciRuntime.get().workflows.find((w) => w.name === workflowName);
     if (!workflow) throw Object.assign(new Error(`no CI runtime recorded for ${workflowName}`), { status: 404 });
@@ -206,7 +227,7 @@ function createCiMaintenance(config, ciRuntime, deps = {}) {
 
     let created;
     try {
-      created = createItem(projectRoot, docsPath, { title, type: 'Task', body, config });
+      created = createItem(projectRoot, docsPath, { title, type: 'Task', body, config, ...topOfBacklog(projectRoot, docsPath) });
     } catch (e) {
       return write({ ...cur, state: 'error', error: `could not file the backlog item: ${e.message}` });
     }

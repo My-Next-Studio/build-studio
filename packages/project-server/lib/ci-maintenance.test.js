@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createCiMaintenance, composeMaintenancePrompt, stateFileFor } = require('./ci-maintenance');
+const backlog = require('./backlog');
 
 const FLAG = {
   baselineSeconds: 6735, latestSeconds: 8778, overPct: 30,
@@ -135,6 +136,59 @@ test('an item deleted from the backlog ends the pass instead of blocking the but
   const s = await t.m.tick();
   assert.equal(s.state, 'error');
   assert.match(s.error, /no longer in the backlog/);
+});
+
+test('the item is filed at the top of the backlog, before the first item of the first release', async () => {
+  const t = setup();
+  const index = backlog.backlogIndexPath(t.root, './docs');
+  fs.mkdirSync(path.dirname(index), { recursive: true });
+  fs.writeFileSync(index, `# Backlog\n\n${backlog.BACKLOG_START}\n\n### Pilot\n- RS-040 — a\n- RS-041 — b\n\n### Later\n- RS-050 — c\n\n${backlog.BACKLOG_END}\n`);
+  t.m.start('Web');
+  t.finish({ title: 't', body: 'b' });
+  await t.m.tick();
+  assert.equal(t.calls.items[0].before, 'RS-040');
+  assert.equal(t.calls.items[0].release, undefined);
+});
+
+test('with nothing in the backlog the item opens a Maintenance release', async () => {
+  const t = setup();
+  t.m.start('Web');
+  t.finish({ title: 't', body: 'b' });
+  await t.m.tick();
+  assert.equal(t.calls.items[0].release, 'Maintenance');
+});
+
+test('a filing that failed is retried from the saved result, without a second analysis', async () => {
+  const t = setup();
+  let refuse = true;
+  const m = createCiMaintenance({ projectRoot: t.root, deployment: { repo: 'a/b' } }, {
+    enabled: true,
+    get: () => ({ workflows: [WEB] }),
+    run: () => null,
+    markBaseline: () => [],
+  }, {
+    stateFile: path.join(t.root, 'state2.json'),
+    runOneShot: ({ prompt }) => { t.calls.prompts.push(prompt); return { runId: 'r2' }; },
+    getOneShotStatus: () => null,
+    createItem: () => {
+      if (refuse) throw new Error('a release, or an item to place it after or before, is required');
+      return { id: 'RS-9' };
+    },
+    readItem: () => ({ id: 'RS-9', status: 'Backlog' }),
+    scopedCommit: async () => ({ committed: true }),
+  });
+  m.start('Web');
+  fs.writeFileSync(m.status().resultFile, JSON.stringify({ title: 't', body: 'b' }));
+  assert.equal((await m.tick()).state, 'error');
+  assert.ok(fs.existsSync(m.status().resultFile), 'the analysis is kept for the retry');
+
+  refuse = false;
+  m.start('Web');
+  const s = await m.tick();
+  assert.equal(s.state, 'filed');
+  assert.equal(s.itemId, 'RS-9');
+  assert.equal(s.error, undefined);
+  assert.equal(t.calls.prompts.length, 1, 'no second agent run');
 });
 
 test('the state file sits beside the runtime store', () => {

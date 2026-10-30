@@ -151,7 +151,10 @@ Two alternatives were rejected:
   catch a cut that loses coverage.
 
 The server files the item, not the agent, so the item's wording and its link
-back to the pass do not depend on an agent remembering them. One pass runs
+back to the pass do not depend on an agent remembering them. The item goes to
+the top of the backlog (owner request: the most visible place), and the owner
+moves it from there. If filing fails, the result stays on disk and a retry
+files it without running the analysis again. One pass runs
 at a time: a second is refused while one is analysing or filed and not yet
 implemented. **When the item reaches Implemented (its PRD merged), the
 baseline marker is set for every workflow**, since the PRD may touch any of
