@@ -16,6 +16,8 @@ interface RuntimeFlag {
   overPct: number
   since: { id: number; createdAt: string; sha: string | null; title: string | null }
   grownSteps: GrownStep[]
+  /** Set by "Keep watching": quiet until `grown`, measured from `seconds`. */
+  watching?: { seconds: number; at: string; grown: boolean; grownSeconds: number }
 }
 interface RuntimeWorkflow {
   name: string
@@ -103,7 +105,7 @@ export function CiRuntimePanel() {
     return () => clearInterval(id)
   }, [load])
 
-  const act = async (path: '/ci-runtime/accept' | '/ci-runtime/maintenance', workflow: string) => {
+  const act = async (path: '/ci-runtime/accept' | '/ci-runtime/maintenance' | '/ci-runtime/watch', workflow: string) => {
     setBusy(`${path}:${workflow}`)
     setError(null)
     try {
@@ -119,7 +121,8 @@ export function CiRuntimePanel() {
 
   if (!data || !data.configured || data.workflows.length === 0) return null
   const pct = Math.round((data.budget?.threshold ?? 0.1) * 100)
-  const over = data.workflows.filter(w => w.flag)
+  // A watched workflow stays quiet until it grows past the size you saw.
+  const over = data.workflows.filter(w => w.flag && !(w.flag.watching && !w.flag.watching.grown))
   const pass = data.maintenance || null
   // One pass at a time: a running or filed one has to finish first.
   const passOpen = pass?.state === 'running' || pass?.state === 'filed'
@@ -140,6 +143,11 @@ export function CiRuntimePanel() {
               {' '}CI is {f.overPct}% over its baseline ({fmtRunner(f.latestSeconds)} of runner time against {fmtRunner(f.baselineSeconds)}),
               since the push of {fmtDay(f.since.createdAt)}{f.since.title ? <span style={{ color: 'var(--muted)' }}> — {f.since.title}</span> : null}.
             </div>
+            {f.watching && (
+              <div style={{ color: 'var(--orange)', fontSize: 10 }}>
+                Up {fmtRunner(f.watching.grownSeconds)} since you chose to keep watching at {fmtRunner(f.watching.seconds)} on {fmtDay(f.watching.at)}.
+              </div>
+            )}
             {f.grownSteps.length > 0 && (
               <div style={{ color: 'var(--text-dim)', fontSize: 10, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {f.grownSteps.map(s => (
@@ -165,6 +173,18 @@ export function CiRuntimePanel() {
                   {busy === `/ci-runtime/maintenance:${w.name}` ? 'Starting…' : 'Start a maintenance pass'}
                 </button>
               )}
+              <button
+                onClick={() => act('/ci-runtime/watch', w.name)}
+                disabled={busy !== null}
+                title={`Hide this notice until CI grows 10% (and at least 2 minutes) past ${fmtRunner(f.latestSeconds)}. The baseline stays at ${fmtRunner(f.baselineSeconds)}.`}
+                style={{
+                  padding: '4px 12px', borderRadius: 4, border: '1px solid var(--border)', background: 'transparent',
+                  color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 10,
+                  cursor: busy !== null ? 'default' : 'pointer',
+                }}
+              >
+                {busy === `/ci-runtime/watch:${w.name}` ? 'Saving…' : 'Keep watching'}
+              </button>
               <button
                 onClick={() => act('/ci-runtime/accept', w.name)}
                 disabled={busy !== null}
@@ -223,7 +243,9 @@ export function CiRuntimePanel() {
               width: 90, textAlign: 'right',
               color: w.state === 'over' ? 'var(--orange)' : w.state === 'ok' ? 'var(--green)' : 'var(--muted)',
             }}>
-              {w.state === 'over' ? `${w.flag?.overPct}% over` : w.state === 'ok' ? 'within' : `${w.runs} run${w.runs === 1 ? '' : 's'}, too few`}
+              {w.state === 'over'
+                ? `${w.flag?.overPct}% over${w.flag?.watching && !w.flag.watching.grown ? ' · watching' : ''}`
+                : w.state === 'ok' ? 'within' : `${w.runs} run${w.runs === 1 ? '' : 's'}, too few`}
             </span>
           </div>
         ))}

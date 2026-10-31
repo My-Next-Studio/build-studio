@@ -21,6 +21,47 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-10-31 — Keep watching a CI runtime notice
+
+### Added
+
+- **Keep watching**, a third button on the CI runtime notice in the CI/CD tab,
+  between Start a maintenance pass and Accept the new size. It is for growth
+  you have seen and don't want to act on yet. The notice and its Monitor row
+  go quiet, but the baseline stays where it was, unlike Accept. The table
+  under the notice still shows the workflow as over budget, marked
+  "watching".
+  - The notice comes back when a run grows another 10%, and at least 2
+    minutes, past the size you saw. It then says how much it grew since you
+    chose to keep watching.
+  - If CI comes back within budget, the watch ends. A later breach is announced
+    as new.
+  - Accept, or a maintenance pass reaching Implemented, ends the watch along
+    with the old baseline.
+  - The choice is kept on this machine, in
+    `~/.build-studio/ci-runtime/<repo>.json`, like Accept.
+
+### Upgrade steps
+
+**In Build Studio** — rebuild the hub, run the full inject, and restart the
+app:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+**In each managed project** — nothing to do.
+
+### Notes for forks
+
+- A watch is tied to the over-budget episode it was made in (the flag's
+  `since.id`), and is applied after the replay, in `applyWatch()`. Keep it out
+  of `evaluateBudget()`: the replay stays a pure function of the runs and the
+  marker, and a watch only decides whether the notice shows.
+
+---
+
 ## 2026-10-30 — The CI runtime Monitor row opens the CI/CD tab, and a maintenance pass can file its item
 
 ### Fixed

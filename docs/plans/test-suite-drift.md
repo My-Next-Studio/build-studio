@@ -117,14 +117,35 @@ CI/CD tab, for example *"Web CI is 18% over its baseline (2h50 against
 2h24), since the push of 10-14"*, followed by the steps that grew most. It
 also appears as a low-severity row in the Monitor tab, so it is visible
 across projects. Below the notice, a table lists each workflow's median and
-latest runner time. The notice carries two actions:
+latest runner time. The notice carries three actions:
 
 - **Start a maintenance pass** (below).
+- **Keep watching**, for growth the owner has seen and does not want to act on
+  yet (added 2026-10-31).
 - **Accept the new size**, which sets a baseline marker.
 
 Nothing is filed automatically. A backlog item filed on every breach piles up
 when the first one is not acted on; the notice simply stays until one of the
-two actions is taken. To keep it for later, the owner asks the PM to file it.
+actions is taken. To keep it for later, the owner asks the PM to file it.
+
+**Keep watching** exists because the other two both commit to something. Accept
+moves the baseline, so the extra time becomes the new normal, and a pass costs
+an analysis and then a PRD. A plain dismiss would not work, because the flag is
+recomputed from the runs on every read and the next run would bring the
+notice back. Keep watching instead records the size the owner saw. The notice
+stays quiet until a run is over budget again measured from that size (10%, at
+least two minutes). The baseline does not move, and the table keeps reporting
+the workflow as over budget. Options considered:
+
+- **Hide for a fixed time.** Rejected: it returns when nothing has changed,
+  and stays silent if the suite doubles in the meantime.
+- **Both, growth or a time limit.** Rejected as two rules to explain on one
+  button.
+
+A watch belongs to the flag it was made on. When CI comes back within budget
+that flag closes, and the next breach opens a new flag, which is announced.
+It is kept per machine like the markers. Build Studio is built for one
+developer per repository, so there is no shared copy to keep in step.
 
 ## The maintenance pass: an analysis that ends in a PRD
 

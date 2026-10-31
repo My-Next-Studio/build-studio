@@ -180,6 +180,38 @@ function evaluateBudget(runs, marker, budget = {}) {
   };
 }
 
+/**
+ * "Keep watching": the owner has seen this size and keeps the old baseline.
+ * The flag stays (the table still reports it), but the notice is quiet until a
+ * run is over budget again measured from the size they saw. A watch belongs to
+ * one episode, the flag that opened with `sinceId`: once CI comes back within
+ * budget that flag closes, and the next one is new and is announced.
+ *
+ * Adds `flag.watching = {seconds, at, grown, grownSeconds}` when a watch applies.
+ */
+function applyWatch(evaluation, watch, budget = {}) {
+  const flag = evaluation.flag;
+  if (!flag || !watch || watch.sinceId !== flag.since.id) return evaluation;
+  const b = { ...DEFAULT_BUDGET, ...budget };
+  return {
+    ...evaluation,
+    flag: {
+      ...flag,
+      watching: {
+        seconds: watch.seconds,
+        at: watch.at,
+        grown: isOver(flag.latestSeconds, watch.seconds, b),
+        grownSeconds: flag.latestSeconds - watch.seconds,
+      },
+    },
+  };
+}
+
+/** Over budget and not being watched quietly: the notice and the Monitor row show. */
+function needsNotice(w) {
+  return !!(w && w.flag && !(w.flag.watching && !w.flag.watching.grown));
+}
+
 // ── the store ────────────────────────────────────────────────────────────────
 
 function storePath(repo, home = os.homedir()) {
@@ -189,9 +221,9 @@ function storePath(repo, home = os.homedir()) {
 function readStore(file) {
   try {
     const s = JSON.parse(fs.readFileSync(file, 'utf8')) || {};
-    return { runs: s.runs || {}, markers: s.markers || {} };
+    return { runs: s.runs || {}, markers: s.markers || {}, watching: s.watching || {} };
   } catch (_) {
-    return { runs: {}, markers: {} };
+    return { runs: {}, markers: {}, watching: {} };
   }
 }
 
@@ -208,15 +240,22 @@ function writeStore(file, store) {
     for (const r of list.slice(0, KEEP_RUNS)) runs[r.id] = r;
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ runs, markers: store.markers }, null, 2) + '\n');
+  fs.writeFileSync(file, JSON.stringify({ runs, markers: store.markers, watching: store.watching || {} }, null, 2) + '\n');
 }
 
-/** A marker per workflow; `all` sets one on every workflow seen so far. */
+/**
+ * A marker per workflow; `all` sets one on every workflow seen so far. A new
+ * baseline ends any watch on the old one.
+ */
 function setMarker(store, workflow, marker) {
   const names = workflow === '*'
     ? [...new Set(Object.values(store.runs).map((r) => r.workflow))]
     : [workflow];
-  for (const n of names) store.markers[n] = marker;
+  if (!store.watching) store.watching = {};
+  for (const n of names) {
+    store.markers[n] = marker;
+    delete store.watching[n];
+  }
   return names;
 }
 
@@ -311,7 +350,8 @@ function createCiRuntime(config, deps = {}) {
       const runs = Object.values(store.runs).filter((r) => r.workflow === name);
       if (runs.length === 0) continue;
       const marker = store.markers[name] || null;
-      workflows.push({ name, marker, ...evaluateBudget(runs, marker, budget) });
+      const judged = applyWatch(evaluateBudget(runs, marker, budget), (store.watching || {})[name], budget);
+      workflows.push({ name, marker, ...judged });
     }
     workflows.sort((a, b) => (b.medianSeconds || 0) - (a.medianSeconds || 0));
     return {
@@ -338,6 +378,20 @@ function createCiRuntime(config, deps = {}) {
     return get();
   }
 
+  /**
+   * "Keep watching": quiet the notice at the size the owner has seen, without
+   * moving the baseline. Throws when the workflow is not over budget.
+   */
+  function watch(workflow) {
+    const w = get().workflows.find((x) => x.name === workflow);
+    if (!w || !w.flag) throw new Error(`${workflow} is not over its runtime budget`);
+    const store = load();
+    if (!store.watching) store.watching = {};
+    store.watching[workflow] = { sinceId: w.flag.since.id, seconds: w.flag.latestSeconds, at: new Date(now()).toISOString() };
+    save(store);
+    return get();
+  }
+
   /** A marker from outside (the maintenance pass), applied to every workflow. */
   function markBaseline(at, reason) {
     const store = load();
@@ -346,17 +400,19 @@ function createCiRuntime(config, deps = {}) {
     return names;
   }
 
-  /** Monitor-tab rows: one per workflow over budget. */
+  /** Monitor-tab rows: one per workflow over budget, unless it is being watched quietly. */
   function alerts() {
     if (!enabled) return [];
-    return get().workflows.filter((w) => w.flag).map((w) => ({
+    return get().workflows.filter(needsNotice).map((w) => ({
       source: 'ci-runtime',
       kind: 'ci-runtime-over',
       project: (config && config.name) || 'project',
       id: `ci-runtime:${w.name}`,
       severity: 'low',
       title: `${w.name} CI is ${w.flag.overPct}% over its baseline`,
-      detail: `${fmtDuration(w.flag.latestSeconds)} of runner time against ${fmtDuration(w.flag.baselineSeconds)}. Open CI/CD to start a maintenance pass or accept the new size.`,
+      detail: `${fmtDuration(w.flag.latestSeconds)} of runner time against ${fmtDuration(w.flag.baselineSeconds)}`
+        + (w.flag.watching ? `, up ${fmtDuration(w.flag.watching.grownSeconds)} since you chose to keep watching` : '')
+        + '. Open CI/CD to start a maintenance pass, keep watching, or accept the new size.',
       url: w.latest && w.latest.url,
       // The actions live in the CI/CD tab, not on GitHub, so the row links there.
       open: { fn: 'operations', tab: 'cicd', label: 'CI/CD' },
@@ -371,7 +427,7 @@ function createCiRuntime(config, deps = {}) {
     return load().runs[id] || null;
   }
 
-  return { get, run, accept, markBaseline, alerts, prime, refresh: () => cache.refresh(), enabled, storeFile: file };
+  return { get, run, accept, watch, markBaseline, alerts, prime, refresh: () => cache.refresh(), enabled, storeFile: file };
 }
 
 function fmtDuration(secs) {
@@ -383,7 +439,7 @@ function fmtDuration(secs) {
 
 module.exports = {
   DEFAULT_BUDGET, KEEP_RUNS,
-  runnerSeconds, stepSeconds, median, evaluateBudget, grownSteps,
+  runnerSeconds, stepSeconds, median, evaluateBudget, grownSteps, applyWatch, needsNotice,
   storePath, readStore, writeStore, setMarker,
   createCiRuntime, fmtDuration,
 };

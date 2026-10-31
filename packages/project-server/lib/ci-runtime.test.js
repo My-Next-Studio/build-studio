@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  runnerSeconds, stepSeconds, median, evaluateBudget,
+  runnerSeconds, stepSeconds, median, evaluateBudget, applyWatch, needsNotice,
   storePath, readStore, writeStore, KEEP_RUNS, createCiRuntime,
 } = require('./ci-runtime');
 
@@ -164,7 +164,32 @@ test('the store keeps the newest runs per workflow and the markers', () => {
 });
 
 test('an unreadable store reads as empty', () => {
-  assert.deepEqual(readStore(path.join(tmp(), 'nope.json')), { runs: {}, markers: {} });
+  assert.deepEqual(readStore(path.join(tmp(), 'nope.json')), { runs: {}, markers: {}, watching: {} });
+});
+
+// ── keep watching ────────────────────────────────────────────────────────────
+
+test('keep watching quiets the notice at the size seen, and keeps the baseline', () => {
+  const judged = applyWatch(evaluateBudget(series([10, 10, 10, 10, 14, 15])), { sinceId: 5, seconds: 14 * 60, at: at(0) });
+  assert.equal(judged.state, 'over', 'still over the old baseline');
+  assert.equal(judged.flag.baselineSeconds, 600);
+  assert.equal(judged.flag.watching.grown, false, '15 min is within 10% of the 14 seen');
+  assert.equal(needsNotice(judged), false);
+});
+
+test('the notice comes back once it grows 10% and two minutes past the size seen', () => {
+  const judged = applyWatch(evaluateBudget(series([10, 10, 10, 10, 14, 17])), { sinceId: 5, seconds: 14 * 60, at: at(0) });
+  assert.equal(judged.flag.watching.grown, true);
+  assert.equal(judged.flag.watching.grownSeconds, 180);
+  assert.equal(needsNotice(judged), true);
+});
+
+test('a watch ends with its episode: back within budget, the next breach is announced', () => {
+  // Over at run 5, back within budget at run 6, over again at run 9.
+  const judged = applyWatch(evaluateBudget(series([10, 10, 10, 10, 14, 10, 10, 10, 14])), { sinceId: 5, seconds: 14 * 60, at: at(0) });
+  assert.equal(judged.flag.since.id, 9);
+  assert.equal(judged.flag.watching, undefined);
+  assert.equal(needsNotice(judged), true);
 });
 
 // ── fetching and the actions ─────────────────────────────────────────────────
@@ -224,6 +249,23 @@ test('an over-budget workflow becomes a Monitor alert, and accepting it starts a
   assert.equal(w.marker.reason, 'accepted');
   assert.equal(w.state, 'quiet');
   assert.deepEqual(rt.alerts(), []);
+});
+
+test('keep watching takes the row off the Monitor, and accepting later ends the watch', async () => {
+  const file = path.join(tmp(), 's.json');
+  const rt = createCiRuntime({ name: 'site', deployment: { repo: 'a/b' } }, {
+    execFileAsync: fakeGh({ Web: [100, 100, 100, 100, 130] }), storeFile: file,
+  });
+  await rt.refresh();
+  assert.throws(() => rt.watch('Docs'), /not over its runtime budget/);
+  const web = rt.watch('Web').workflows.find((w) => w.name === 'Web');
+  assert.equal(web.state, 'over');
+  assert.equal(web.flag.watching.seconds, 130 * 60);
+  assert.deepEqual(rt.alerts(), []);
+  assert.ok(readStore(file).watching.Web, 'kept on this machine');
+
+  rt.accept('Web');
+  assert.deepEqual(readStore(file).watching, {});
 });
 
 test('a maintenance marker applies to every workflow', async () => {

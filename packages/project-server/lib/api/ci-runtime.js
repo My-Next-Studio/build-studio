@@ -45,6 +45,19 @@ function createCiRuntimeRouter(config, ciRuntime, ciMaintenance) {
     }
   });
 
+  // POST /api/ci-runtime/watch { workflow } — "Keep watching": quiet the notice
+  // at the size seen, keep the baseline, speak up again if it grows further.
+  router.post('/ci-runtime/watch', (req, res) => {
+    const workflow = req.body && req.body.workflow;
+    if (!workflow || typeof workflow !== 'string') return res.status(400).json({ error: 'workflow required' });
+    try {
+      ciRuntime.watch(workflow);
+      res.json({ ok: true, ...view() });
+    } catch (e) {
+      res.status(409).json({ error: e.message });
+    }
+  });
+
   // POST /api/ci-runtime/refresh — fetch now rather than at the next refresh.
   router.post('/ci-runtime/refresh', async (req, res) => {
     await ciRuntime.refresh();
