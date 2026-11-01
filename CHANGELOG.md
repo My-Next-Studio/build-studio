@@ -21,6 +21,36 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-01 — A build that leaves its work uncommitted is sent back before QA
+
+### Changed
+
+- **Task execution now checks for uncommitted source changes before handing
+  over to QA** (bug-fix runs) or the merge for review (execution runs). QA's
+  test scoping and the review read the run branch's commits, so a fix left in
+  the working tree looked like no change at all. In one bug-fix run QA was told
+  to skip the iOS suite, ran it anyway on the uncommitted files for two hours,
+  and the review then failed the run for an uncommitted fix.
+  - The last task's builder is relaunched once, with the list of uncommitted
+    files and an instruction to commit them rather than redo the task.
+  - If files are still uncommitted after that, the task stops as an error that
+    names them. Commit them, or remove what does not belong, then click
+    Relaunch on the task.
+  - Changes under `docs/` don't count: workflow docs and QA evidence change in
+    every run, and the merge commits them itself.
+
+### Upgrade steps
+
+**In Build Studio** — sync the project-server and restart the app:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-10-31 — Keep watching a CI runtime notice
 
 ### Added

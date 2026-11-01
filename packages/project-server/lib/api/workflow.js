@@ -37,6 +37,7 @@ const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
 const lean = require('../lean-execution');
 const suiteGuardrail = require('../suite-guardrail');
+const uncommittedWork = require('../uncommitted-work');
 const { itemsFiledOnBranch } = require('../filed-on-branch');
 const qaUnchangedLib = require('../qa-unchanged');
 const awaitingOwner = require('../awaiting-owner');
@@ -5552,7 +5553,7 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       status: 'pending',
       reportFeedback: true,
       taskIndex: taskIdx,
-      instruction: `## REQUIRED FEEDBACK POST FORMAT — READ THIS FIRST
+      instruction: `${taskState.uncommittedLeftovers ? uncommittedWork.commitNote(taskState.uncommittedLeftovers, wf.branch) : ''}## REQUIRED FEEDBACK POST FORMAT — READ THIS FIRST
 
 The feedback POST at the end of this task is HOW THE WORKFLOW KNOWS YOU ARE DONE. If it fails silently the workflow stalls until a human intervenes.
 
@@ -5596,11 +5597,60 @@ Use the /${role.skill} skill. Commit your changes when done. ${COMMIT_ON_CURRENT
     return taskState.agents;
   }
 
+  /**
+   * Before task execution hands over: source changes still uncommitted mean
+   * the branch QA and the review will judge is missing the work (see
+   * lib/uncommitted-work.js). The last task's builder is sent back once, told
+   * which files to commit. If they are still uncommitted after that, the task
+   * stops as an error naming them; its Relaunch button (or a commit by hand,
+   * then Relaunch) resumes the run. Returns true when it held the step.
+   */
+  function holdForUncommittedWork(wf) {
+    const { execFileSync } = require('child_process');
+    let raw = '';
+    // Untrimmed: trimming drops the first line's leading status space.
+    try { raw = execFileSync('git', ['status', '--porcelain'], { cwd: projectRoot, encoding: 'utf8' }); } catch (_) { return false; }
+    const leftovers = uncommittedWork.sourceLeftovers(raw);
+    if (leftovers.length === 0) return false;
+
+    const states = wf.taskExecution.taskStates;
+    const done = Object.keys(states).map(Number).filter((i) => states[String(i)].status === 'done');
+    if (done.length === 0) return false;
+    const lastIdx = Math.max(...done);
+    const ts = states[String(lastIdx)];
+
+    if (!ts.uncommittedLeftovers) {
+      console.warn(`[workflow] Task ${lastIdx + 1} finished with ${leftovers.length} uncommitted source file(s); sending the builder back to commit them.`);
+      ts.uncommittedLeftovers = leftovers;
+      ts.agents = [];
+      ts.status = 'pending';
+      ts.startedAt = null;
+      ts.completedAt = null;
+      wf.steps.task_execution.status = 'running';
+      launchTaskImpl(wf, lastIdx);
+      updateStepAgents(wf);
+      state.saveWorkflow(wf);
+      return true;
+    }
+
+    const error = `Task ${lastIdx + 1} finished twice with source changes still uncommitted, so QA and the review would not see them: `
+      + `${leftovers.slice(0, 8).join(', ')}${leftovers.length > 8 ? ` (+${leftovers.length - 8} more)` : ''}. `
+      + 'Commit them (or remove what does not belong), then Relaunch the task.';
+    console.error(`[workflow] ${error}`);
+    ts.uncommittedLeftovers = leftovers;
+    ts.status = 'error';
+    for (const a of ts.agents || []) { a.status = 'error'; a.error = error; }
+    updateStepAgents(wf);
+    state.saveWorkflow(wf);
+    return true;
+  }
+
   function launchNextTask(wf) {
     const tasks = wf.taskPlan.tasks;
     const tex = wf.taskExecution;
     // Find first pending task
     const idx = tasks.findIndex((_, i) => tex.taskStates[String(i)]?.status === 'pending');
+    if (idx === -1 && holdForUncommittedWork(wf)) return;
     if (idx === -1) {
       wf.steps.task_execution.status = 'completed';
       const fakeRes = { json: () => {}, status: () => ({ json: () => {} }) };
