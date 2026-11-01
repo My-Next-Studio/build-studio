@@ -38,6 +38,31 @@ that move underneath you without your having edited anything.
   minutes. A step whose job is missing from the older runs is now compared
   with the same step name in the jobs that no longer exist.
 
+### Security
+
+- **Next.js 16.2 → 16.4.3 and a lockfile refresh**, clearing the critical
+  Dependabot alerts. Next.js 16.2 had unauthenticated remote code execution
+  bugs in its image optimisation endpoint, which every Next server exposes.
+  The hub only listens on `127.0.0.1`, but any web page open in a browser can
+  send requests to localhost. The refresh also brings Express 4.22.3 (with
+  `proxy-addr` 2.0.8 and `qs` 6.16.2) and patched transitive packages:
+  `fast-uri`, `undici`, `@xmldom/xmldom`, `js-yaml`, `nanoid` and others.
+  No `package.json` range changed.
+
+### Known issues
+
+- **Electron 39 is out of support** and carries open advisories (sandboxed
+  popups, `<webview>`, protocol handlers). The fixes exist only from Electron
+  41. Upgrading is several major versions and is left for a tested change of
+  its own. Build Studio's window loads only its own hub with
+  `nodeIntegration: false`, which limits the exposure.
+- `extract-zip` and `http-cache-semantics` have no fixed release. They reach
+  the repo only through Electron's installer at build time and are not in the
+  installed app.
+- `npm audit` also reports `minimatch` in the build and lint tooling
+  (electron-builder, ESLint). Fixing it needs major-version bumps of those
+  tools.
+
 ### Changed
 
 - **Task execution now checks for uncommitted source changes before handing
@@ -56,9 +81,14 @@ that move underneath you without your having edited anything.
 
 ### Upgrade steps
 
-**In Build Studio** — a full repackage and reinstall. The PID fix is in
-`@build-studio/shared`, and the copy the app's main process loads is packed
-into `app.asar`, which inject does not reach:
+**In Build Studio** — install the refreshed dependencies, then a full
+repackage and reinstall. The PID fix is in `@build-studio/shared`, and the
+copy the app's main process loads is packed into `app.asar`, which inject
+does not reach:
+
+```bash
+npm install
+```
 
 ```bash
 cd packages/desktop && npm run build
