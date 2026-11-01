@@ -49,11 +49,16 @@ const pill: CSSProperties = {
 }
 
 export function DemoRecordingControl({ projectName, port }: { projectName: string | null; port: number | null }) {
-  const [available] = useState(() => demoRecorderAvailable())
+  const [available, setAvailable] = useState(false)
   const [st, setSt] = useState<DemoState>({ recording: false })
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [micOn, setMicOn] = useState(true)
+
+  // Detected in an effect, not the useState initializer: the server render has
+  // no preload bridge, so seeding from it on the client would make Electron's
+  // first render disagree with the server markup (React hydration error #418).
+  useEffect(() => { setAvailable(demoRecorderAvailable()) }, [])
 
   useEffect(() => {
     if (!available) return

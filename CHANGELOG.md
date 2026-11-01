@@ -37,6 +37,11 @@ that move underneath you without your having edited anything.
   "+7 min Run npm run test:e2e (0s → 7 min)" when the step had grown by two
   minutes. A step whose job is missing from the older runs is now compared
   with the same step name in the jobs that no longer exist.
+- **The desktop app logged a React error on every load.** The hub's renderer
+  console showed "Minified React error #418" each time a page opened in the
+  desktop app. Nothing on screen was wrong, and a plain browser logged nothing.
+  The REC button in the status bar was drawn differently by the server and by
+  the first render in the app. Now it appears only after the page has loaded.
 
 ### Security
 
@@ -99,7 +104,8 @@ that move underneath you without your having edited anything.
 **In Build Studio** — install the refreshed dependencies, then a full
 repackage and reinstall. The Electron upgrade replaces the app's runtime, and
 the PID fix is in `@build-studio/shared`, whose copy the app's main process
-loads from `app.asar`. Inject reaches neither:
+loads from `app.asar`. Inject reaches neither. The build also rebuilds the hub
+and runs the full inject, which ships the React error fix:
 
 ```bash
 npm install
