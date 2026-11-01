@@ -21,7 +21,7 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-11-01 — A build that leaves its work uncommitted is sent back before QA, and projects start after a crash
+## 2026-11-01 — A build that leaves its work uncommitted is sent back before QA, projects start after a crash, and Electron 45
 
 ### Fixed
 
@@ -51,20 +51,35 @@ that move underneath you without your having edited anything.
 
 ### Known issues
 
-- **Electron 39 is out of support** and carries open advisories (sandboxed
-  popups, `<webview>`, protocol handlers). The fixes exist only from Electron
-  41. Upgrading is several major versions and is left for a tested change of
-  its own. Build Studio's window loads only its own hub with
-  `nodeIntegration: false`, which limits the exposure.
-- `extract-zip` and `http-cache-semantics` have no fixed release. They reach
-  the repo only through Electron's installer at build time and are not in the
-  installed app.
+- `http-cache-semantics` has no fixed release. It reaches the repo only
+  through electron-builder's Electron downloader at build time and is not in
+  the installed app. (`extract-zip`, the other one, left with Electron 39.)
 - `npm audit` also reports `minimatch` in the build and lint tooling
   (electron-builder, ESLint). Fixing it needs major-version bumps of those
   tools.
 
 ### Changed
 
+- **The desktop app now runs on Electron 45.2.1 (was 39.8.10).** Electron 39
+  gets no more fixes, and its open advisories (popups escaping the sandbox,
+  `<webview>` workers getting Node, cross-origin reads through `file:`/HTTP
+  protocol handlers, permission requests attributed to the wrong origin,
+  SameSite cookies on windows opened from links) are fixed only in 41.10.6+
+  and 42.11.9+. `npm audit` no longer lists Electron. The window, the
+  Demos recorder bridge, project start, external links and notifications work
+  as before.
+  - **macOS 13 (Ventura) or later is now required.** Electron 44 dropped
+    macOS 12.
+  - **Notifications need a code-signed app.** macOS notifications now go
+    through `UNNotification`, which refuses unsigned apps. The packaging step
+    already signs the bundle (with an Apple Development identity from your
+    keychain if there is one, ad-hoc otherwise). Verified with an Apple
+    Development identity; with only an ad-hoc signature, CI failure
+    notifications may not appear.
+  - **`npm install` no longer downloads the Electron binary.** `npm start` /
+    `npm run dev` in `packages/desktop` fetch it on first run, so the first
+    run needs network access. `npm run build` is unaffected: electron-builder
+    downloads its own copy.
 - **Task execution now checks for uncommitted source changes before handing
   over to QA** (bug-fix runs) or the merge for review (execution runs). QA's
   test scoping and the review read the run branch's commits, so a fix left in
@@ -82,9 +97,9 @@ that move underneath you without your having edited anything.
 ### Upgrade steps
 
 **In Build Studio** — install the refreshed dependencies, then a full
-repackage and reinstall. The PID fix is in `@build-studio/shared`, and the
-copy the app's main process loads is packed into `app.asar`, which inject
-does not reach:
+repackage and reinstall. The Electron upgrade replaces the app's runtime, and
+the PID fix is in `@build-studio/shared`, whose copy the app's main process
+loads from `app.asar`. Inject reaches neither:
 
 ```bash
 npm install

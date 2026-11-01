@@ -360,8 +360,8 @@ function createWindow(onboarding = false) {
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
     console.error(`Page load failed: ${errorDescription} (${errorCode}) at ${validatedURL}`);
   });
-  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-    if (level >= 2) console.error(`[renderer] ${message}`);
+  mainWindow.webContents.on('console-message', ({ level, message }) => {
+    if (level === 'warning' || level === 'error') console.error(`[renderer] ${message}`);
   });
   mainWindow.webContents.on('render-process-gone', (event, details) => {
     logCrash(`render-process-gone reason=${details.reason} exitCode=${details.exitCode}`);
