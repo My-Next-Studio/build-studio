@@ -21,7 +21,32 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-11-01 — A build that leaves its work uncommitted is sent back before QA, projects start after a crash, and Electron 45
+## 2026-11-01 — A build that leaves its work uncommitted is sent back before QA, projects start after a crash, Electron 45, and an intake for work built elsewhere
+
+### Added
+
+- **An intake for work built outside Build Studio**, the first part of a planned
+  reconcile workflow (`docs/plans/reconciliation-workflow.md`). The plan covers
+  a branch iterated freely in another tool, such as a new UI built in a chat
+  app, then brought home and reviewed like any other change.
+  - `packages/project-server/lib/reconcile-intake.js` takes a branch or commit,
+    from the project's repo or from another clone or worktree. It runs by hand
+    for now.
+    - It refuses a source with uncommitted or untracked files and lists them.
+    - Otherwise it pins the source commit in the project's repo on
+      `refs/build-studio/reconcile/<id>/source` and reports the merge-base and
+      a dry-run merge.
+    - It also reports every changed file with its class, a suggested risk tier
+      (Light, Standard or Sensitive) with what triggered it, binaries and large
+      files, and the backlog and PRD ids the branch allocated that the project
+      has also used since.
+    - It writes nothing but the pin and the fetched commits, never in the source
+      checkout.
+  - A template skill, `reconcile_interview`. The PM agrees with the owner what
+    the outside work was meant to do, keeping the branch's own documents apart
+    as claims. It records what comes home and the approved acceptance criteria
+    in a reconcile backlog item. The criteria come from the owner's answers,
+    never from the code.
 
 ### Fixed
 
@@ -122,7 +147,13 @@ rm -rf "/Applications/Build Studio.app"
 cp -R "packages/desktop/dist/mac-arm64/Build Studio.app" /Applications/
 ```
 
-**In each managed project** — nothing to do.
+**In each managed project** — nothing required. The `reconcile_interview`
+skill reaches projects at onboarding. To use it by hand in a project onboarded
+earlier, copy it in:
+
+```bash
+cp -R templates/default/.claude/skills/reconcile_interview <project>/.claude/skills/
+```
 
 ---
 
