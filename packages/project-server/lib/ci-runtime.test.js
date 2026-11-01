@@ -136,6 +136,28 @@ test('the notice names the steps that grew most', () => {
   ]);
 });
 
+test('a renamed job is compared with its steps under the old name, not reported as new', () => {
+  // launch-studio: "Build native · Unit · Electron smoke" became "Unit · Electron smoke".
+  const runs = series([10, 10, 10, 10, 14], {
+    steps: (i) => (i === 4
+      ? { 'Unit › Run npm run test:e2e': 420, 'Unit › Run npm run lint': 120, 'Lint › Run npm ci': 60 }
+      : { 'Build › Run npm run test:e2e': 360, 'Build › Run npm ci': 30, 'Lint › Run npm ci': 60 }),
+  });
+  const r = evaluateBudget(runs, null);
+  assert.deepEqual(r.flag.grownSteps.map((s) => [s.step, s.beforeSeconds, s.nowSeconds]), [
+    ['Unit › Run npm run lint', 0, 120], // genuinely new under the old job too
+    ['Unit › Run npm run test:e2e', 360, 420],
+  ]);
+});
+
+test('a new step in a job that already existed starts from zero', () => {
+  const runs = series([10, 10, 10, 10, 14], {
+    steps: (i) => (i === 4 ? { 'gates › npm test': 600, 'gates › a11y': 240 } : { 'gates › npm test': 600, 'other › a11y': 240 }),
+  });
+  const r = evaluateBudget(runs, null);
+  assert.deepEqual(r.flag.grownSteps.map((s) => [s.step, s.beforeSeconds]), [['gates › a11y', 0]]);
+});
+
 test('the threshold and floor come from config', () => {
   const runs = series([100, 100, 100, 100, 108]);
   assert.equal(evaluateBudget(runs, null).state, 'ok');

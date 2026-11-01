@@ -101,3 +101,26 @@ test('readOnDiskBundleVersion: empty file → null', () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+// ─── isProjectServer — a PID file outlives a crash, and macOS reuses the
+//     number. Only a process running project-server/index.js counts. ────────
+
+const { looksLikeProjectServer, isProjectServer } = require('./process-manager');
+
+test('looksLikeProjectServer: the installed and the bundled server paths match', () => {
+  assert.equal(looksLikeProjectServer('/opt/homebrew/bin/node /Applications/Build Studio.app/Contents/Resources/project-server/index.js --project /p --port 3002'), true);
+  assert.equal(looksLikeProjectServer('/opt/homebrew/bin/node /Applications/Build Studio.app/Contents/Resources/standalone/node_modules/@build-studio/project-server/index.js --project /p'), true);
+});
+
+test('looksLikeProjectServer: another process with the reused PID does not', () => {
+  assert.equal(looksLikeProjectServer('/System/Library/PrivateFrameworks/PhotoLibraryServices.framework/Versions/A/Support/photolibraryd'), false);
+  assert.equal(looksLikeProjectServer(''), false);
+});
+
+test('isProjectServer: a live process that is not a project-server is not one', () => {
+  assert.equal(isProjectServer(process.pid), false, 'the test runner is alive but is not a project-server');
+});
+
+test('isProjectServer: a dead PID is not one', () => {
+  assert.equal(isProjectServer(2 ** 22 + 12345), false);
+});

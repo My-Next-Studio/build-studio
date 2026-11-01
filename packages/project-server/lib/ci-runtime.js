@@ -103,16 +103,37 @@ function isOver(seconds, baseline, b) {
   return seconds > baseline * (1 + b.threshold) && seconds - baseline >= b.min_excess_seconds;
 }
 
+const jobOf = (key) => key.split(' › ')[0];
+const stepOf = (key) => key.split(' › ').slice(1).join(' › ');
+
+/**
+ * Seconds `prior` spent on the step `key` of `run`. When the step's job is not
+ * in `prior` at all, the job was renamed (or its steps moved to another job):
+ * the same step name in `prior`'s jobs that `run` no longer has is the same
+ * work. Without this a rename reports every step as new, "0s → 7 min".
+ */
+function priorStepSeconds(prior, key, runJobs) {
+  const steps = prior.steps || {};
+  if (steps[key] != null) return steps[key];
+  const job = jobOf(key);
+  if (Object.keys(steps).some((k) => jobOf(k) === job)) return 0; // same job, new step
+  const step = stepOf(key);
+  return Object.entries(steps)
+    .filter(([k]) => stepOf(k) === step && !runJobs.has(jobOf(k)))
+    .reduce((sum, [, s]) => sum + s, 0);
+}
+
 /**
  * The steps that grew most between the baseline runs and `run`, largest first.
  * Only growth of a minute or more is worth naming.
  */
 function grownSteps(baselineRuns, run, limit = 3) {
-  const keys = new Set(Object.keys(run.steps || {}));
-  for (const r of baselineRuns) for (const k of Object.keys(r.steps || {})) keys.add(k);
+  // A step only in the baseline cannot have grown.
+  const keys = Object.keys(run.steps || {});
+  const runJobs = new Set(keys.map(jobOf));
   const out = [];
   for (const k of keys) {
-    const before = median(baselineRuns.map((r) => (r.steps || {})[k] || 0)) || 0;
+    const before = median(baselineRuns.map((r) => priorStepSeconds(r, k, runJobs))) || 0;
     const now = (run.steps || {})[k] || 0;
     if (now - before >= 60) out.push({ step: k, beforeSeconds: before, nowSeconds: now, deltaSeconds: now - before });
   }

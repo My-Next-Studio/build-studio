@@ -21,7 +21,22 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-11-01 — A build that leaves its work uncommitted is sent back before QA
+## 2026-11-01 — A build that leaves its work uncommitted is sent back before QA, and projects start after a crash
+
+### Fixed
+
+- **A project could stay stopped after a crash or reboot, and Stop could
+  signal an unrelated process.** Build Studio keeps each project-server's PID
+  in `~/.build-studio/pids/`. After a reboot macOS can hand that number to
+  another process, and Build Studio took the project for running: its server
+  never started, the hub showed "Failed to fetch", and Stop would have sent
+  SIGTERM to whatever now held the PID (once, the Photos library service). A
+  PID now counts only when its process is running `project-server/index.js`.
+- **The CI runtime notice reported renamed jobs' steps as new.** After a CI
+  job was renamed, every step in it showed as growing from nothing, e.g.
+  "+7 min Run npm run test:e2e (0s → 7 min)" when the step had grown by two
+  minutes. A step whose job is missing from the older runs is now compared
+  with the same step name in the jobs that no longer exist.
 
 ### Changed
 
@@ -41,10 +56,19 @@ that move underneath you without your having edited anything.
 
 ### Upgrade steps
 
-**In Build Studio** — sync the project-server and restart the app:
+**In Build Studio** — a full repackage and reinstall. The PID fix is in
+`@build-studio/shared`, and the copy the app's main process loads is packed
+into `app.asar`, which inject does not reach:
 
 ```bash
-cd packages/desktop && node inject-resources.js --sync-only
+cd packages/desktop && npm run build
+```
+
+Then quit the app and replace it:
+
+```bash
+rm -rf "/Applications/Build Studio.app"
+cp -R "packages/desktop/dist/mac-arm64/Build Studio.app" /Applications/
 ```
 
 **In each managed project** — nothing to do.

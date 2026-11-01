@@ -119,6 +119,27 @@ function isProcessAlive(pid) {
   catch { return false; }
 }
 
+/** A project-server's command line runs `…/project-server/index.js`. */
+function looksLikeProjectServer(command) {
+  return /project-server[/\\]index\.js/.test(String(command || ''));
+}
+
+/**
+ * Whether the PID in a project's PID file is still that project-server. A PID
+ * file outlives a crash or a reboot, and macOS reuses the number: after one
+ * crash, valkomna's PID belonged to photolibraryd. The server was taken to be
+ * running and never started, and Stop would have sent SIGTERM to Photos.
+ */
+function isProjectServer(pid) {
+  if (!isProcessAlive(pid)) return false;
+  try {
+    const command = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8', timeout: 3000 });
+    return looksLikeProjectServer(command);
+  } catch {
+    return true; // ps failed on a live PID: keep the old answer rather than guess
+  }
+}
+
 /**
  * Find and kill any rogue project-server processes for a given project path.
  * Catches processes started outside the process-manager (e.g. from a dev terminal)
@@ -157,11 +178,11 @@ async function startProject(name) {
   // This prevents stale processes (e.g. from dev terminals) from sharing the workflow
   // state file and injecting outdated overseer data.
   const existing = readPidFile(name);
-  const keepPid = (existing && isProcessAlive(existing.pid)) ? existing.pid : null;
+  const keepPid = (existing && isProjectServer(existing.pid)) ? existing.pid : null;
   killStaleServers(project.path, keepPid);
 
   // Check if already running by PID
-  if (existing && isProcessAlive(existing.pid)) {
+  if (existing && isProjectServer(existing.pid)) {
     // Compare the running server's bundle version against the on-disk stamp.
     // Mismatch → freshly-injected code on disk; kill the running server and
     // fall through to spawn so it gets reloaded.
@@ -282,7 +303,8 @@ async function stopProject(name) {
   const info = readPidFile(name);
   if (!info) return { stopped: false, reason: 'no pid file' };
 
-  if (!isProcessAlive(info.pid)) {
+  // Never signal a PID that now belongs to some other process.
+  if (!isProjectServer(info.pid)) {
     removePidFile(name);
     return { stopped: true, reason: 'process already dead' };
   }
@@ -311,7 +333,7 @@ async function stopProject(name) {
 async function getStatus(name) {
   const info = readPidFile(name);
   if (!info) return { running: false, reason: 'no pid file' };
-  if (!isProcessAlive(info.pid)) {
+  if (!isProjectServer(info.pid)) {
     removePidFile(name);
     return { running: false, reason: 'process dead' };
   }
@@ -335,7 +357,7 @@ function reconcile() {
   for (const file of files) {
     const name = file.replace('.json', '');
     const info = readPidFile(name);
-    if (info && !isProcessAlive(info.pid)) {
+    if (info && !isProjectServer(info.pid)) {
       removePidFile(name);
       stale.push(name);
     }
@@ -359,7 +381,7 @@ function httpGet(url, timeoutMs) {
 }
 
 module.exports = {
-  startProject, stopProject, getStatus, reconcile, readPidFile, isProcessAlive,
+  startProject, stopProject, getStatus, reconcile, readPidFile, isProcessAlive, isProjectServer,
   // Exported for unit tests.
-  isBundleStale, readOnDiskBundleVersion, projectServerLibDir,
+  isBundleStale, readOnDiskBundleVersion, projectServerLibDir, looksLikeProjectServer,
 };
