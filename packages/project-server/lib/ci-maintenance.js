@@ -130,12 +130,7 @@ function composeMaintenancePrompt({ repo, workflow, latestRun, resultFile }) {
  * "Maintenance" release.
  */
 function topOfBacklog(projectRoot, docsPath) {
-  try {
-    const content = fs.readFileSync(backlog.backlogIndexPath(projectRoot, docsPath), 'utf8');
-    const first = backlog.parseBacklogSection(content).find((g) => g.items.length > 0);
-    if (first) return { before: first.items[0] };
-  } catch (_) { /* no index yet: createItem reports that itself */ }
-  return { release: 'Maintenance' };
+  return backlog.topOfBacklog(projectRoot, docsPath, 'Maintenance');
 }
 
 /**

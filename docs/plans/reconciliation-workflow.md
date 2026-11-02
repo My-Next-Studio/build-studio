@@ -281,6 +281,110 @@ Each one is useful alone, as with the kickoff interview:
 3. **The hub:** a Reconcile button under Project, with a picker for a branch or
    a worktree and a field for the brief.
 
+## Increments 2 and 3: technical design (2026-11-02)
+
+Two owner decisions shape it:
+
+- **The owner's decision step is an interactive session**, like the interview,
+  not a UI card. The PM presents pushback and owner-only questions one at a
+  time, bundles the rest, and writes each decision into the record as it is
+  made.
+- **The preparation runs alongside the project's ordinary runs.** The engine
+  allows one workflow per project, and a reconcile waits on the owner for days.
+  In the first case, four ordinary runs went through the same project while it
+  was open. So the steps up to a ready integration branch form a **reconcile
+  track** with its own state, outside the workflow slot. Only verification and
+  merge take the slot, as an ordinary run.
+
+### The reconcile track
+
+- **State:** one file per track, `<statePath>/reconcile/<record-id>.json`.
+  Several tracks can be open at once.
+- **Working copy:** each track works in its own git worktree,
+  `tmp/.worktrees/reconcile-<record-id>`, on `reconcile/<record-id>`. The main
+  checkout is never switched, so ordinary runs keep the default branch.
+- **Steps:**
+
+  | Step | Kind | What it does |
+  |---|---|---|
+  | `intake` | engine | `reconcile-intake.js`: refuse a dirty source, otherwise pin it; file the record |
+  | `intent_interview` | interactive | skill `reconcile_interview` |
+  | `integration` | engine | renumber on a branch cut from the pin, then one import commit holding only what comes home, LFS renormalised; a conflict stops for the owner |
+  | `align` | agents | the builder makes the code meet the approved ACs, and the PM copies the ACs verbatim into the PRDs |
+  | `team_review` | agents | roles by risk tier, each writing a review file; removals without an AC are the first check, and QA compares failures against the commit before |
+  | `owner_decision` | interactive | skill `reconcile_decisions` |
+  | `apply` | agents | the code fixes on the integration branch, and the document changes on a parallel branch merged afterwards |
+  | `ready` | handoff | starts the slot run below |
+
+  `align` is new compared with the flow above. In the first case, code that
+  contradicted the owner's decisions had to be fixed before review, so that the
+  reviewers reviewed the intended change.
+- **Records are machine-readable where the engine needs them.** The interview
+  writes what stays out as a fenced block in the record. The engine reads that
+  block; it never parses prose:
+
+  ````
+  ```reconcile-keep-out
+  PULS-HANDOVER.md
+  docs/project-state.md
+  ```
+  ````
+
+  A kept-out path ends up as it is on the target, or absent if the target
+  lacks it.
+- **The id floor.** While a track is open, every backlog item filed in the
+  project, through the API, drafting or a run, gets an id above the source's
+  newly allocated ids. The record is filed the same way. `createItem` takes a
+  floor, and the backlog route computes it from the open tracks.
+- **Agents in the track** use the same launcher as workflow agents, in the
+  track's worktree, with their own tmux session per track. They report to a
+  track feedback endpoint, not to the slot workflow.
+
+### Verification and merge in the slot
+
+`ready` starts a workflow of type `reconcile` on the existing branch:
+
+1. `qa_validation`;
+2. `security_audit` in the Sensitive tier;
+3. `owner_checks`, when owner checks are listed;
+4. `merge_to_main`;
+5. `capture_learnings`.
+
+It reuses the execution handlers. They are taught that a reconcile run, like a
+bugfix run, has no `merge_for_review`, so the hygiene and LLM scans run before
+the merge. They are also taught that it closes its record item, not a PRD. The
+spec handed to QA is the record. `merge_to_main` deletes `reconcile/<record-id>`
+and never touches the source.
+
+### Interactive sessions
+
+`kickoff-interview.js` is generalised into an interactive-session helper,
+parameterised by step key, window, skill, prompt, resume prompt, summary path
+and commit paths. The owner interview keeps its behaviour. Terminal resolution
+and the hub's interview card find any step that has a `session`.
+
+### Hub (increment 3)
+
+- A **Reconcile** tab under Project, next to Kickoff and Onboarding.
+- **The list of tracks**, and a start form: a source (a path to a clone or
+  worktree plus a branch, or a ref), and an optional brief.
+- **Per step:** the intake report, or the list of uncommitted files on a
+  refusal; the embedded terminal for the two interactive steps; links to the
+  review files; and **Start verification**, which hands the track to the slot.
+
+### Build order
+
+Each milestone is committed with its tests before the next:
+
+1. The track store and API (start or intake, status, list, cancel), the record,
+   and the id floor.
+2. Interactive sessions generalised; `reconcile_decisions`; the keep-out block
+   in `reconcile_interview`.
+3. The integration engine: renumber, import, LFS, conflicts.
+4. The agent steps: `align`, `team_review` and `apply`, with track feedback.
+5. Handoff to the slot run, and the execution handlers taught about `reconcile`.
+6. The hub tab.
+
 ## Out of scope
 
 - Partial take-home at hunk level.

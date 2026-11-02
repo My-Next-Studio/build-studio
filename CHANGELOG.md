@@ -23,6 +23,20 @@ that move underneath you without your having edited anything.
 
 ## 2026-11-02 — Owner interviews show the text they ask the owner to approve
 
+### Added
+
+- **Reconcile tracks, the first part of the reconcile workflow** (in progress;
+  plan: `docs/plans/reconciliation-workflow.md`). A track brings a branch built
+  outside Build Studio home. It runs beside the project's workflow slot, so
+  ordinary runs continue while it waits on the owner.
+  - `POST /api/reconcile/start` takes a clone or worktree (or a ref in the
+    project). It runs the intake, files the reconcile record at the top of the
+    backlog, and keeps the track's state, its intake report and later its reviews
+    in `tmp/reconcile/<record-id>/`, which every project already ignores.
+  - `GET /api/reconcile`, `GET /api/reconcile/:id` and
+    `POST /api/reconcile/:id/cancel`.
+  - There is no hub UI yet.
+
 ### Changed
 
 - **The `draft_prd`, `owner_interview` and `reconcile_interview` skills no longer
@@ -36,6 +50,11 @@ that move underneath you without your having edited anything.
 
   In `reconcile_interview`, a draft is also written into the reconcile record
   first, marked "not yet approved", and the question says where.
+- **New backlog ids skip the ids an open reconcile's branch allocated.** While a
+  reconcile track is open, the next id for an item filed in the project (by the
+  backlog API, a workflow or the support inbox) is above the highest id the
+  incoming branch gave its own items. Before, the next item filed collided with
+  the first item that came home. With no open track, nothing changes.
 
 ### Upgrade steps
 

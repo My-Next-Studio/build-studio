@@ -239,6 +239,10 @@ function refreshBacklogIndex(projectRoot, docsPath) {
  * Compute the next-available ID for `prefix`. Gaps are NEVER reused — we
  * always pick max(existing) + 1, so a deleted item's ID stays retired.
  * Looks at item filenames; doesn't load file contents.
+ *
+ * While a reconcile track is open, ids the incoming branch allocated on its own
+ * are also taken: the next id is above them, so an item filed here meanwhile
+ * never collides with one that comes home (reconcile-track.js idFloor).
  */
 function nextItemId(projectRoot, docsPath, prefix) {
   if (!/^[A-Z]{2,5}$/.test(prefix)) throw new Error(`Invalid prefix: ${prefix}`);
@@ -251,7 +255,22 @@ function nextItemId(projectRoot, docsPath, prefix) {
       if (m) max = Math.max(max, parseInt(m[1], 10));
     }
   }
+  // Required here, not at the top: reconcile-track requires this module.
+  max = Math.max(max, require('./reconcile-track').idFloor(projectRoot, prefix));
   return `${prefix}-${String(max + 1).padStart(3, '0')}`;
+}
+
+/**
+ * Placement for an item that belongs at the very top of the backlog: before
+ * the first item, or at the end of `fallbackRelease` when the backlog is empty.
+ */
+function topOfBacklog(projectRoot, docsPath, fallbackRelease = 'Maintenance') {
+  try {
+    const content = fs.readFileSync(backlogIndexPath(projectRoot, docsPath), 'utf8');
+    const first = parseBacklogSection(content).find((g) => g.items.length > 0);
+    if (first) return { before: first.items[0] };
+  } catch (_) { /* no index yet: createItem reports that itself */ }
+  return { release: fallbackRelease };
 }
 
 /**
@@ -693,6 +712,7 @@ module.exports = {
   renderBacklogSection,
   writeBacklogSection,
   nextItemId,
+  topOfBacklog,
   deriveItemPrefix,
   prefixFromName,
   insertIntoGroups,

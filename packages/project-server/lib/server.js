@@ -28,6 +28,7 @@ const { createRunbooksRouter } = require('./api/runbooks');
 const { createOpsUITestsRouter } = require('./api/ops-uitests');
 const { createDemoSetupRouter } = require('./api/demo-setup');
 const { createBacklogRouter } = require('./api/backlog');
+const { createReconcileRouter } = require('./api/reconcile');
 const { createHealthHandler } = require('./api/health');
 const { createLocalCiRouter } = require('./api/local-ci');
 const { createSupportRouter } = require('./api/support');
@@ -208,6 +209,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', opsUITestsRouter);
   app.use('/api', demoSetupRouter);
   app.use('/api', backlogRouter);
+  app.use('/api', createReconcileRouter(config));
   app.use('/api', supportRouter);
   app.use('/api', cliConfigRouter);
 
