@@ -1,8 +1,10 @@
 # Plan: bring work done outside Build Studio home (reconcile)
 
-> **Status: proposed 2026-11-01.** Increment 1 implemented 2026-11-01; the first
-> case ran by hand through all seven steps and merged 2026-11-02 (see *The first
-> case* at the end). Increments 2 and 3 are not built.
+> **Status: implemented 2026-11-02** (proposed 2026-11-01). Increment 1 was
+> implemented 2026-11-01; the first case ran by hand through all seven steps and
+> merged 2026-11-02 (see *The first case*). Increments 2 and 3 were built
+> 2026-11-02 to the technical design below, and the first workflow run has not
+> happened yet.
 >
 > Owner request: Build Studio is good at building one feature at a time and
 > keeping each true to the vision. The whole machinery exists to stop a project

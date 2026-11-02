@@ -20,6 +20,7 @@ import { UITestsTab } from './uitests-tab'
 import { PublishingTab } from './publishing-tab'
 import { BacklogTab } from './backlog-tab'
 import { QueueTab } from './queue-tab'
+import { ReconcileTab } from './reconcile-tab'
 import { SupportTab } from './support-tab'
 import { PRDViewerPanel } from './prd-viewer-panel'
 import { BUILTIN_FUNCTIONS, WORKFLOW_TYPE_TO_FUNCTION, resolveFunctions, type FunctionDefinition, type PortalConfig } from '@/lib/functions'
@@ -276,6 +277,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
     { key: 'status', label: 'Status' },
     { key: 'backlog', label: 'Backlog' },
     { key: 'queue', label: 'Queue' },
+    { key: 'reconcile', label: 'Reconcile' },
     { key: 'agents', label: 'Agents' },
     { key: 'model', label: 'Model' },
     { key: 'services', label: 'Services' },
@@ -442,6 +444,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
                 />
               )}
               {tab === 'queue' && <QueueTab />}
+              {tab === 'reconcile' && <ReconcileTab />}
               {tab === 'agents' && <AgentsTab agents={agents} />}
               {tab === 'model' && <ProjectModelTab />}
               {tab === 'services' && <ServicesTab />}

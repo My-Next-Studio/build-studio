@@ -223,6 +223,11 @@ async function startTrack({ projectRoot, docsRel = 'docs', config = null, source
   track = { ...track, id: recordId, pinId, record: path.join(docsRel, 'backlog', `${recordId}.md`) };
   saveTrack(projectRoot, track);
 
+  // The two skills the track's sessions run. Template skills reach a project at
+  // onboarding only, so a project onboarded earlier gets them here, committed
+  // with the record so they do not sit untracked on the default branch.
+  const skillsAdded = ensureSkills(projectRoot, deps.templateDir);
+
   let commit = null;
   if (fs.existsSync(path.join(projectRoot, '.git'))) {
     const doCommit = deps.commit || require('./scoped-commit').scopedCommit;
@@ -230,9 +235,33 @@ async function startTrack({ projectRoot, docsRel = 'docs', config = null, source
     commit = await doCommit(projectRoot, [
       rel(backlog.itemFilePath(projectRoot, docsRel, recordId)),
       rel(backlog.backlogIndexPath(projectRoot, docsRel)),
-    ], `docs(${recordId}): open the reconcile record for ${branch || ref}`);
+      ...skillsAdded,
+    ], `docs(${recordId}): open the reconcile record for ${branch || ref}${skillsAdded.length ? ', and add the reconcile skills' : ''}`);
   }
-  return { refused: false, track, recordId, commit };
+  return { refused: false, track, recordId, commit, skillsAdded };
+}
+
+const SKILLS = ['reconcile_interview', 'reconcile_decisions'];
+
+/**
+ * Copy each reconcile skill the project lacks from Build Studio's template. A
+ * skill the project already has is left alone: it may have been edited.
+ * Returns the repo-relative paths written.
+ */
+function ensureSkills(projectRoot, templateDir) {
+  const tpl = templateDir === undefined ? require('./agents-md').resolveTemplateDir() : templateDir;
+  if (!tpl) return [];
+  const added = [];
+  for (const name of SKILLS) {
+    const rel = path.join('.claude', 'skills', name, 'SKILL.md');
+    const src = path.join(tpl, rel);
+    const dst = path.join(projectRoot, rel);
+    if (fs.existsSync(dst) || !fs.existsSync(src)) continue;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.copyFileSync(src, dst);
+    added.push(rel);
+  }
+  return added;
 }
 
 /**
@@ -290,5 +319,5 @@ function cancelTrack(projectRoot, id, reason = null) {
 module.exports = {
   STEPS, OPEN, VERIFYING, MERGED,
   tracksRoot, trackDir, loadTrack, saveTrack, listTracks,
-  floorFromIds, idFloor, recordBody, startTrack, fileItemOnBranch, ensureWorktree, cancelTrack,
+  floorFromIds, idFloor, recordBody, startTrack, ensureSkills, fileItemOnBranch, ensureWorktree, cancelTrack,
 };

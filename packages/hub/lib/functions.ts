@@ -21,7 +21,7 @@ export const BUILTIN_FUNCTIONS: FunctionDefinition[] = [
     label: 'Project',
     views: ['overview', 'workflow'],
     workflowTypes: ['kickoff', 'onboarding'],
-    tabs: ['spec', 'status', 'backlog', 'queue', 'agents', 'model'],
+    tabs: ['spec', 'status', 'backlog', 'queue', 'reconcile', 'agents', 'model'],
     enabledByDefault: true,
   },
   {
@@ -55,6 +55,8 @@ export const WORKFLOW_TYPE_TO_FUNCTION: Record<string, string> = {
   review: 'development',
   execution: 'development',
   bugfix: 'development',
+  // The verify-and-merge half of a reconcile track, started from Project → Reconcile.
+  reconcile: 'project',
 }
 
 /** Short labels for notification badges */

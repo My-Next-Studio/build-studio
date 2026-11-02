@@ -62,6 +62,22 @@ function createReconcileRouter(config, tmuxOps = null, deps = {}) {
     res.json({ track, intake, live });
   });
 
+  // The role reviews the team_review step wrote, with each one's verdict line.
+  router.get('/reconcile/:id/reviews', (req, res) => {
+    const track = load(req, res);
+    if (!track) return;
+    const dir = agentSteps.reviewsDir(config, track);
+    let files = [];
+    try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort(); } catch (_) { /* none yet */ }
+    const reviews = files.map((f) => {
+      const content = fs.readFileSync(path.join(dir, f), 'utf8');
+      const verdict = (content.match(/\*\*Verdict:\*\*\s*([^\n]+)/) || [])[1] || null;
+      const counts = (content.match(/\*\*Blocking:\*\*[^\n]+/) || [])[0] || null;
+      return { file: f, role: f.replace(/\.md$/, ''), verdict, counts, content };
+    });
+    res.json({ reviews });
+  });
+
   router.post('/reconcile/:id/session/:step', async (req, res) => {
     const track = load(req, res);
     if (!track) return;

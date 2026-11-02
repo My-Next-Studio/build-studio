@@ -158,7 +158,7 @@ interface OverseerState {
 
 interface Workflow {
   id: string
-  type: 'review' | 'execution' | 'kickoff' | 'onboarding' | 'bugfix'
+  type: 'review' | 'execution' | 'kickoff' | 'onboarding' | 'bugfix' | 'reconcile'
   input: string
   currentStep: string
   round: number
@@ -237,6 +237,15 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
     { key: 'capture_learnings', name: 'Capture Learnings' },
     { key: 'owner_checks', name: 'Owner Checks' },
   ],
+  // The verify-and-merge half of a reconcile track (started from the Reconcile
+  // tab). Display names only; the order comes from projectWorkflowSteps.reconcile.
+  reconcile: [
+    { key: 'qa_validation', name: 'QA Validation' },
+    { key: 'security_audit', name: 'Security Audit' },
+    { key: 'merge_to_main', name: 'Merge to Main' },
+    { key: 'capture_learnings', name: 'Capture Learnings' },
+    { key: 'owner_checks', name: 'Owner Checks' },
+  ],
   // PRD-001 v1: onboarding workflow for existing projects.
   onboarding: [
     { key: 'discovery',          name: 'Discovery' },
@@ -266,6 +275,7 @@ const WORKFLOW_TYPE_TO_FUNCTION: Record<string, string> = {
   review: 'development',
   execution: 'development',
   bugfix: 'development',
+  reconcile: 'project',
 }
 
 export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: autoAdvanceProp, onAutoAdvanceChange }: WorkflowViewProps = {}) {

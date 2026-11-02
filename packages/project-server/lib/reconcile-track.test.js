@@ -107,6 +107,22 @@ test('while a track is open every new item skips the source\'s ids; cancelling l
   }
 });
 
+test('the reconcile skills are copied in when missing, and committed with the record', async () => {
+  const { dir, project, clone, g } = setup();
+  try {
+    commitAll(g, clone, 'new home');
+    const r = await track.startTrack({ projectRoot: project, sourcePath: clone });
+    assert.deepEqual(r.skillsAdded.sort(), ['.claude/skills/reconcile_decisions/SKILL.md', '.claude/skills/reconcile_interview/SKILL.md']);
+    assert.equal(g(project, 'status', '--porcelain'), '', 'committed, nothing left untracked');
+    // A project's own copy is never overwritten.
+    fs.writeFileSync(path.join(project, '.claude/skills/reconcile_interview/SKILL.md'), 'edited\n');
+    assert.deepEqual(track.ensureSkills(project), []);
+    assert.equal(fs.readFileSync(path.join(project, '.claude/skills/reconcile_interview/SKILL.md'), 'utf8'), 'edited\n');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('floorFromIds keeps the highest number per prefix', () => {
   assert.deepEqual(track.floorFromIds(['DR-148', 'DR-154', 'PRD-068', 'PRD-074', 'UX-070', 'junk']), { DR: 154, PRD: 74, UX: 70 });
   assert.deepEqual(track.floorFromIds([]), {});

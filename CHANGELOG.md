@@ -21,14 +21,27 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-11-02 — Owner interviews show the text they ask the owner to approve
+## 2026-11-02 — Reconcile: bring work built outside Build Studio home
 
 ### Added
 
-- **Reconcile tracks, the first part of the reconcile workflow** (in progress;
-  plan: `docs/plans/reconciliation-workflow.md`). A track brings a branch built
-  outside Build Studio home. It runs beside the project's workflow slot, so
-  ordinary runs continue while it waits on the owner.
+- **Project → Reconcile, a workflow for work built outside Build Studio**
+  (plan: `docs/plans/reconciliation-workflow.md`). Use it for a branch iterated
+  freely in Codex, Claude or a chat app, for example a new UI. It is reviewed
+  and integrated like any other change, not merged as it is. Point the new
+  Reconcile tab at the clone or worktree and its branch. The track runs beside
+  the project's workflow slot, so ordinary runs continue while it waits on you;
+  only its final verification and merge take the slot. The steps:
+  1. intake;
+  2. your intent interview;
+  3. the integration branch;
+  4. align;
+  5. role review;
+  6. your decisions;
+  7. apply;
+  8. verify and merge.
+
+  The pieces:
   - `POST /api/reconcile/start` takes a clone or worktree (or a ref in the
     project). It runs the intake, files the reconcile record at the top of the
     backlog, and keeps the track's state, its intake report and later its reviews
@@ -84,7 +97,18 @@ that move underneath you without your having edited anything.
     Fix rounds return to the step that sent them. After the merge, the record is
     Done and the track's id floor is lifted. Cancelling the run hands the branch
     back to the track instead of deleting it.
-  - There is no hub UI yet.
+  - **The Reconcile tab** under Project lists the tracks. It has a start form
+    (source path and branch, or a ref, plus an optional brief) that shows the
+    list of uncommitted files when the source is not committed. For each step
+    it shows:
+    - the embedded terminal for the two sessions;
+    - the conflict list with Continue and Abort for the integration;
+    - each agent with its terminal and report;
+    - the role reviews with their verdicts;
+    - **Start verification** once the track is ready.
+  - A project onboarded before these skills existed gets `reconcile_interview`
+    and `reconcile_decisions` when its first track starts, committed with the
+    record. A project's own edited copy is left alone.
 
 ### Changed
 
@@ -107,15 +131,25 @@ that move underneath you without your having edited anything.
 
 ### Upgrade steps
 
-**In Build Studio** — nothing to do. The skills are template files and reach new
-projects at onboarding.
-
-**In each managed project** — optional. Projects keep their own copies of these
-skills, and a project may have edited its copy. To take the change, copy the
-skills over a project's copies:
+**In Build Studio** — rebuild the hub and run the full inject, then restart the
+app. The project-servers pick up the new API on restart. `main.js` is
+unchanged, so no repackage is needed:
 
 ```bash
-cp -R templates/default/.claude/skills/draft_prd templates/default/.claude/skills/owner_interview templates/default/.claude/skills/reconcile_interview <project>/.claude/skills/
+cd packages/hub && npx next build
+```
+
+```bash
+cd packages/desktop && node inject-resources.js
+```
+
+**In each managed project** — nothing required. The reconcile skills are copied
+in when a project's first track starts. The changed `draft_prd` and
+`owner_interview` are optional: projects keep their own copies, which may have
+been edited. To take them, copy over a project's copies:
+
+```bash
+cp -R templates/default/.claude/skills/draft_prd templates/default/.claude/skills/owner_interview <project>/.claude/skills/
 ```
 
 ---
