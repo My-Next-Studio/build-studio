@@ -129,6 +129,17 @@ that move underneath you without your having edited anything.
   incoming branch gave its own items. Before, the next item filed collided with
   the first item that came home. With no open track, nothing changes.
 
+### Known issues
+
+- **A reconcile track's agents are not watched by the overseer.** The overseer
+  watches the workflow slot only, so a track agent that dies or stalls is not
+  noticed or nudged automatically. The Reconcile tab shows each agent's status
+  and terminal. From there, Relaunch agents, or Close step by hand when the work
+  is done but the report never came.
+- **The workflow has not run end to end yet.** Each step is tested on its own,
+  over real git repositories with the agent launcher faked. The first real run
+  is the next externally built branch.
+
 ### Upgrade steps
 
 **In Build Studio** — rebuild the hub and run the full inject, then restart the
