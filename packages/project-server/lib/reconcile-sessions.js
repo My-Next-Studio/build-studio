@@ -96,7 +96,8 @@ function specFor(config, track, stepKey) {
 }
 
 /** Start or resume a step's session; returns the updated track (saved). */
-function launch({ config, tmuxOps, track, stepKey, findSessionId }) {
+function launch({ config, tmuxOps, track: given, stepKey, findSessionId }) {
+  const track = stepKey === 'owner_decision' ? tracks.ensureWorktree(config.projectRoot, given) : given;
   const step = track.steps[stepKey] || {};
   const session = launchSession({ config, tmuxOps, spec: specFor(config, track, stepKey), prior: step.session || null, findSessionId });
   const next = {

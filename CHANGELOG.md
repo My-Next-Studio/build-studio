@@ -71,6 +71,19 @@ that move underneath you without your having edited anything.
 
     Document agents work on a parallel branch, which is merged back when every
     agent has reported, so two writers never share a worktree.
+  - **A new workflow type, `reconcile`, verifies and merges a ready track** in
+    the project's workflow slot. `POST /api/workflow/start` with
+    `type: reconcile` and the record id as `input` takes over the track's branch
+    in the main checkout. It then runs execution's own steps:
+    1. `qa_validation`;
+    2. `security_audit`, in the Sensitive tier only;
+    3. `merge_to_main`, with the hygiene and LLM-test gates;
+    4. `capture_learnings`;
+    5. `owner_checks`.
+
+    Fix rounds return to the step that sent them. After the merge, the record is
+    Done and the track's id floor is lifted. Cancelling the run hands the branch
+    back to the track instead of deleting it.
   - There is no hub UI yet.
 
 ### Changed

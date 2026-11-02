@@ -185,9 +185,9 @@ Report the commits and one line per document changed.`,
  * Launch a step's agents. `launchAgents` is the workflow router's launcher.
  * Returns the saved track.
  */
-function launchStep({ config, track, stepKey, launchAgents }) {
+function launchStep({ config, track: given, stepKey, launchAgents }) {
   if (!AGENT_STEPS[stepKey]) throw new Error(`not a reconcile agent step: ${stepKey}`);
-  if (!track.worktree || !fs.existsSync(track.worktree)) throw new Error('the track has no worktree; run integration first');
+  const track = tracks.ensureWorktree(config.projectRoot, given);
   if (stepKey === 'team_review') fs.mkdirSync(reviewsDir(config, track), { recursive: true });
 
   const prior = track.steps[stepKey] || {};

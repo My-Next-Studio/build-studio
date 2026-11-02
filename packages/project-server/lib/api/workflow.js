@@ -310,11 +310,34 @@ function bugfixSequence(config) {
   return withOwnerChecks((Array.isArray(configured) && configured.length) ? configured.slice() : DEFAULT_BUGFIX_STEPS.slice());
 }
 
+// A reconcile run is the second half of a reconcile track (lib/reconcile-track.js):
+// the track already aligned, reviewed and applied on the branch, so the slot
+// only verifies and merges. security_audit runs in the Sensitive tier only.
+const DEFAULT_RECONCILE_STEPS = ['qa_validation', 'security_audit', 'merge_to_main', 'capture_learnings'];
+
+function reconcileSequence(config, wf) {
+  const configured = config && config.workflow && config.workflow.reconcile;
+  const seq = (Array.isArray(configured) && configured.length) ? configured.slice() : DEFAULT_RECONCILE_STEPS.slice();
+  const tier = wf && wf.reconcileTier;
+  return withOwnerChecks(tier === 'sensitive' ? seq : seq.filter((s) => s !== 'security_audit'));
+}
+
+// Where a fix round returns once its fixes are in. A lean run returns to the
+// step that sent it; a reconcile run, which has no code_review, does the same;
+// a full execution run goes through code_review.
+function fixReturnStep(wf) {
+  if (wf.returnTo) return wf.returnTo;
+  if (lean.isLean(wf)) return lean.leanFixReturnStep(wf);
+  if (wf.type === 'reconcile') return wf.fixSource || 'qa_validation';
+  return 'code_review';
+}
+
 // The active step sequence for a workflow — bugfix uses its own list, everything
 // else uses the resolved execution list. Used by the step→step transitions so a
 // bugfix run advances by ITS dict order, not the (longer) execution order.
 function stepSequence(wf, config) {
   if (wf && wf.type === 'bugfix') return bugfixSequence(config);
+  if (wf && wf.type === 'reconcile') return reconcileSequence(config, wf);
   // Without this a kickoff was looked up in the EXECUTION sequence, where none
   // of its steps exist: every lookup returned null, so the kickoff's routing by
   // sequence silently fell back to its defaults.
@@ -3449,6 +3472,8 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       bugfix: bugfixSequence(config),
       // The lean trial preset's fixed sequence, for a run with preset: lean.
       lean: lean.LEAN_EXECUTION_STEPS.slice(),
+      // A reconcile run's verify-and-merge sequence, for the active run's tier.
+      reconcile: reconcileSequence(config, wf),
     } : null;
     // Owner-gated AC checklist — surfaced informationally in demo_review (not
     // persisted; recomputed on every fetch from ac_verification's feedback, so
@@ -3684,7 +3709,7 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
   function startWorkflow(body, { dryRun = false } = {}) {
     const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, builderRole: startBuilderRole, override: startOverride, preset: startPreset } = body || {};
     if (!type) return reply(400, { error: 'type required' });
-    if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix'].includes(type)) return reply(400, { error: 'type must be review, execution, kickoff, onboarding, or bugfix' });
+    if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix', 'reconcile'].includes(type)) return reply(400, { error: 'type must be review, execution, kickoff, onboarding, bugfix, or reconcile' });
     // Which execution chain: lean (the default, or asked for) or full. See lean-execution.js.
     const presetCheck = lean.validatePreset(type, startPreset);
     if (presetCheck.error) return reply(400, { error: presetCheck.error });
@@ -3746,8 +3771,26 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
     let itemId = null; // set when `input` named a backlog user story / task
     let steps, currentStep;
     let taskPlan = null; // bugfix synthesizes its single-task plan up front (no planning step)
+    let reconcileTrack = null; // the track a reconcile run verifies and merges
 
-    if (type === 'kickoff') {
+    if (type === 'reconcile') {
+      // `input` is the track's record id. The track must have finished its own
+      // steps (align, reviews, decisions, apply) on reconcile/<id>.
+      const tracksLib = require('../reconcile-track');
+      const recordId = String(input || '').trim();
+      try { reconcileTrack = tracksLib.loadTrack(projectRoot, recordId); } catch (_) { reconcileTrack = null; }
+      if (!reconcileTrack) return reply(404, { error: `No reconcile track ${recordId}.` });
+      if (reconcileTrack.status !== tracksLib.OPEN) return reply(409, { error: `Reconcile track ${recordId} is ${reconcileTrack.status}.` });
+      if (reconcileTrack.currentStep !== 'ready' || !reconcileTrack.branch) {
+        return reply(409, { error: `Reconcile track ${recordId} is at ${reconcileTrack.currentStep}, not ready: finish its steps first.` });
+      }
+      itemId = recordId;
+      prdPath = reconcileTrack.record;
+      const seq = reconcileSequence(config, { reconcileTier: reconcileTrack.tier });
+      steps = {};
+      for (const k of seq) steps[k] = k === 'merge_to_main' ? { status: 'pending' } : { status: 'pending', agents: [] };
+      currentStep = seq[0];
+    } else if (type === 'kickoff') {
       steps = {
         ceo_synthesis: { status: 'pending', agents: [] },
         pm_scoping: { status: 'pending', agents: [] },
@@ -4075,7 +4118,7 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
     // a run from stacking on a previous run's leftover branch / a dirty tree.
     let runBranch = null;
     let runDefaultBranch = 'main';
-    if (type === 'review' || type === 'execution' || type === 'bugfix') {
+    if (type === 'review' || type === 'execution' || type === 'bugfix' || type === 'reconcile') {
       const { execFileSync } = require('child_process');
       const g = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
       try { runDefaultBranch = (g(['rev-parse', '--abbrev-ref', 'origin/HEAD']) || '').replace(/^origin\//, '') || 'main'; } catch {}
@@ -4090,7 +4133,7 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       // dirty tree). Review creates no branch and commits to the default branch
       // directly, so working with uncommitted drafts present is fine (and matches
       // how the owner works — parallel PRD drafting).
-      if (type === 'execution' || type === 'bugfix') {
+      if (type === 'execution' || type === 'bugfix' || type === 'reconcile') {
         let dirty = '';
         try { dirty = g(['status', '--porcelain']); } catch {}
         if (dirty) {
@@ -4105,6 +4148,19 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
         runBranch = type === 'bugfix' ? `fix/${itemId.toLowerCase()}` : `exec/${input.replace(/\s+/g, '-')}`;
         try { g(['rev-parse', '--verify', runBranch]); return reply(409, { error: `Branch ${runBranch} already exists from a previous run. Merge or delete it first.` }); } catch (_) { /* good — does not exist */ }
       }
+      // A reconcile run takes over the track's existing branch. It is checked out
+      // in the track's worktree, which must be clean before it is given up.
+      if (type === 'reconcile') {
+        runBranch = reconcileTrack.branch;
+        try { g(['rev-parse', '--verify', `refs/heads/${runBranch}`]); } catch (_) {
+          return reply(409, { error: `Branch ${runBranch} of reconcile track ${itemId} is missing.` });
+        }
+        if (reconcileTrack.worktree && fs.existsSync(reconcileTrack.worktree)) {
+          let wtDirty = '';
+          try { wtDirty = execFileSync('git', ['status', '--porcelain'], { cwd: reconcileTrack.worktree, encoding: 'utf8' }).trim(); } catch {}
+          if (wtDirty) return reply(409, { error: `The track's worktree ${reconcileTrack.worktree} has uncommitted changes. Commit or discard them first.` });
+        }
+      }
     }
 
     // Every check has passed. A readiness check stops here, before the first
@@ -4115,7 +4171,21 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
         ...(runPreset ? { preset: runPreset } : {}) });
     }
 
-    if (runBranch) {
+    if (runBranch && type === 'reconcile') {
+      // The branch moves from the track's worktree to the main checkout, where
+      // the slot's agents work. The track hands over to this run.
+      const { execFileSync } = require('child_process');
+      const tracksLib = require('../reconcile-track');
+      try {
+        if (reconcileTrack.worktree && fs.existsSync(reconcileTrack.worktree)) {
+          execFileSync('git', ['worktree', 'remove', reconcileTrack.worktree], { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+        }
+        execFileSync('git', ['checkout', runBranch], { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+      } catch (e) {
+        return reply(500, { error: `Failed to check out ${runBranch}: ${e.message}` });
+      }
+      tracksLib.saveTrack(projectRoot, { ...reconcileTrack, status: tracksLib.VERIFYING, worktree: null, workflowId: `${type}-${timestamp}`, handedOverAt: new Date().toISOString() });
+    } else if (runBranch) {
       const { execFileSync } = require('child_process');
       try {
         execFileSync('git', ['checkout', '-b', runBranch, runDefaultBranch], { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -4145,7 +4215,10 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       // here; merge_to_main / review-end merges it to `defaultBranch` then deletes it.
       branch: runBranch,
       defaultBranch: runDefaultBranch,
-      reviewBranch: (type === 'execution' || type === 'bugfix') ? runBranch : null,
+      reviewBranch: (type === 'execution' || type === 'bugfix' || type === 'reconcile') ? runBranch : null,
+      // A reconcile run: which track it verifies, and its risk tier (which
+      // decides whether security_audit is in the sequence).
+      ...(reconcileTrack ? { reconcileId: reconcileTrack.id, reconcileTier: reconcileTrack.tier } : {}),
       returnTo: null,
       reviewMode: startReviewMode || config.review_mode || 'parallel',
       autoIterateRemaining: startAutoIterate || 0,
@@ -4417,11 +4490,19 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       } catch (e) { console.error('[bugfix] cancel status revert failed:', e.message); }
     }
     stopWorkflow(wf);
-    if (deleteWorktrees) {
+    // A reconcile run's branch is the track's work, built over days: cancelling
+    // the verification hands it back to the track (ready again), never deletes it.
+    if (wf.type === 'reconcile' && wf.reconcileId) {
+      try {
+        const tracksLib = require('../reconcile-track');
+        const t = tracksLib.loadTrack(projectRoot, wf.reconcileId);
+        if (t && t.status === tracksLib.VERIFYING) tracksLib.saveTrack(projectRoot, { ...t, status: tracksLib.OPEN, workflowId: null, currentStep: 'ready' });
+      } catch (e) { console.error('[reconcile] cancel hand-back failed:', e.message); }
+    } else if (deleteWorktrees) {
       try { cleanupBranches(wf); } catch (e) { console.error('[workflow] cancel cleanup error:', e.message); }
     }
     broadcast('worktrees-updated', {});
-    res.json({ ok: true, deletedBranches: deleteWorktrees, filedItems });
+    res.json({ ok: true, deletedBranches: deleteWorktrees && wf.type !== 'reconcile', filedItems });
   });
 
   router.post('/workflow/open', (req, res) => {
@@ -5344,7 +5425,9 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       // Bugfix reuses the execution engine (task_execution → qa_validation →
       // code_review → merge_to_main → capture_learnings); the handler branches on
       // wf.type where the bugfix step sequence diverges from execution's.
-      if (wf.type === 'execution' || wf.type === 'bugfix') {
+      // Reconcile is the verify-and-merge half of a reconcile track: execution's
+      // own qa_validation … capture_learnings handlers, by its own sequence.
+      if (wf.type === 'execution' || wf.type === 'bugfix' || wf.type === 'reconcile') {
         return handleExecutionAdvance(wf, effectiveAction, notes, res, req.body);
       }
 
@@ -6129,12 +6212,13 @@ Fix only the issues raised. Commit your changes.`,
   // owner runs them or not, and no proof is asked for. With none, it completes.
   function completeWithOwnerChecks(wf) {
     const checks = wf.ownerChecks || [];
-    if ((wf.type === 'execution' || wf.type === 'bugfix') && checks.length) {
+    const endsWithChecks = wf.type === 'execution' || wf.type === 'bugfix' || wf.type === 'reconcile';
+    if (endsWithChecks && checks.length) {
       wf.steps[OWNER_CHECKS_STEP] = { status: 'pending', agents: [], checks, reachedAt: new Date().toISOString() };
       wf.currentStep = OWNER_CHECKS_STEP;
       return;
     }
-    if (wf.type === 'execution' || wf.type === 'bugfix') {
+    if (endsWithChecks) {
       wf.steps[OWNER_CHECKS_STEP] = { status: 'completed', agents: [], checks, completedAt: new Date().toISOString() };
     }
     wf.currentStep = 'completed';
@@ -9573,7 +9657,8 @@ This is round ${wf.round}.`,
       // list. Mobile-app slots security_audit AFTER device_testing as the final
       // pre-demo gate; web-app slots it between ac_verification and demo_review.
       // Either way, follow whatever the preset configured.
-      const execSteps = (config.workflow && config.workflow.execution) || [];
+      // A reconcile run follows its own sequence (security_audit → merge_to_main).
+      const execSteps = wf.type === 'reconcile' ? stepSequence(wf, config) : ((config.workflow && config.workflow.execution) || []);
       const secIdx = execSteps.indexOf('security_audit');
       const nextStep = (secIdx >= 0 && secIdx < execSteps.length - 1)
         ? execSteps[secIdx + 1]
@@ -9759,8 +9844,9 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
         // real LLM API already billed tokens on life-graph). Failure blocks the merge
         // with the scan's error surfaced, same as execution — operator fixes or waives
         // (@llm-url-fixture / config.hygiene.allow) and retries. Guarded to bugfix so
-        // execution's path is byte-identical.
-        if (wf.type === 'bugfix') {
+        // execution's path is byte-identical. A reconcile run has no
+        // merge_for_review either, so it gets the same gates.
+        if (wf.type === 'bugfix' || wf.type === 'reconcile') {
           const llmScan = scanTestFilesForLlmViolations(projectRoot, def);
           if (llmScan.violations.length > 0) {
             wf.steps.merge_to_main = { status: 'error', error: `${llmScan.violations.length} test file(s) on ${wf.branch} would call real LLM APIs. Fix them (or, for a file that never requests the URL, tag it @llm-url-fixture), commit, and retry the merge.\n\n${llmScan.violations.join('\n')}`, violations: llmScan.violations };
@@ -9777,8 +9863,12 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
         // Apply the backlog status transition BEFORE the merge so these doc edits are
         // captured by the pre-merge docs auto-commit below and land inside the merge
         // commit — instead of being written to main post-merge and left uncommitted.
-        markPrdDone(wf.input);
-        advanceLinkedFeatures(wf.prdPath, 'Implemented');
+        // A reconcile run's input is its record, not a PRD, and the track's
+        // document pass already rewrote project-state.md for the merge.
+        if (wf.type !== 'reconcile') {
+          markPrdDone(wf.input);
+          advanceLinkedFeatures(wf.prdPath, 'Implemented');
+        }
         // Read RAW (untrimmed) porcelain output. The `run()` helper trims the whole
         // string, which strips the leading status-column space of the FIRST line only
         // (" M path" → "M path"), shifting it one char so slice(3) drops the path's
@@ -9865,6 +9955,20 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
             setBugItemStatus(wf.itemId, 'Done', { fixed_in: mergeSha });
             commitWorkflowDocs(`docs(${wf.itemId}): mark Done (fixed_in ${mergeSha.slice(0, 7)})`);
           } catch (e) { console.error(`[bugfix] finalize ${wf.itemId} → Done failed:`, e.message); }
+        }
+        // Reconcile: the record is Done and the track is merged, which lifts its
+        // id floor. The incoming (renumbered) branch has served its purpose; the
+        // pin and the source checkout stay (owner decision: never clean the source).
+        if (wf.type === 'reconcile' && wf.itemId) {
+          try {
+            const mergeSha = run(['rev-parse', 'HEAD']);
+            setBugItemStatus(wf.itemId, 'Done');
+            commitWorkflowDocs(`docs(${wf.itemId}): reconcile merged (${mergeSha.slice(0, 7)})`);
+            const tracksLib = require('../reconcile-track');
+            const t = tracksLib.loadTrack(projectRoot, wf.reconcileId || wf.itemId);
+            if (t) tracksLib.saveTrack(projectRoot, { ...t, status: tracksLib.MERGED, mergedAt: new Date().toISOString(), mergeCommit: mergeSha });
+            try { run(['branch', '-D', `${wf.branch}-incoming`]); } catch { /* none */ }
+          } catch (e) { console.error(`[reconcile] finalize ${wf.itemId} failed:`, e.message); }
         }
         // cleanupBranches removes fix worktrees + deletes wf.reviewBranch (= wf.branch) locally.
         try { cleanupBranches(wf); } catch (e) { console.error('[workflow] cleanupBranches:', e.message); }
@@ -10678,7 +10782,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
             broadcast('workflow-updated', {});
             return res.json({ workflow: wf, warning: `Fix loop reached ${MAX_REVIEW_ROUNDS} rounds.` });
           }
-          const returnTo = wf.returnTo || (lean.isLean(wf) ? lean.leanFixReturnStep(wf) : 'code_review');
+          const returnTo = fixReturnStep(wf);
           wf.currentStep = returnTo;
           wf.steps[returnTo] = { status: 'pending', agents: [] };
           state.saveWorkflow(wf);
@@ -10701,7 +10805,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
           return res.json({ workflow: wf, warning: `Fix loop reached ${MAX_REVIEW_ROUNDS} rounds. Choose: advance anyway or cancel.` });
         }
 
-        const returnTo = wf.returnTo || (lean.isLean(wf) ? lean.leanFixReturnStep(wf) : 'code_review');
+        const returnTo = fixReturnStep(wf);
         wf.currentStep = returnTo;
         wf.steps[returnTo] = { status: 'pending', agents: [] };
         state.saveWorkflow(wf);
@@ -10804,7 +10908,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
             return res.json({ workflow: wf, warning: `Fix loop reached ${MAX_REVIEW_ROUNDS} rounds.` });
           }
 
-          const returnTo2 = wf.returnTo || (lean.isLean(wf) ? lean.leanFixReturnStep(wf) : 'code_review');
+          const returnTo2 = fixReturnStep(wf);
           wf.currentStep = returnTo2;
           wf.steps[returnTo2] = { status: 'pending', agents: [] };
           state.saveWorkflow(wf);
@@ -10824,7 +10928,7 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
       if (action === 'approve' || action === 'skip' || action === 'another_round') {
         wf.steps.review_cap_reached.status = 'skipped';
         restartCapBudget(wf);
-        const capReturnTo = wf.returnTo || (lean.isLean(wf) ? lean.leanFixReturnStep(wf) : 'code_review');
+        const capReturnTo = fixReturnStep(wf);
         wf.currentStep = capReturnTo;
         wf.steps[capReturnTo] = { status: 'pending', agents: [] };
         state.saveWorkflow(wf);
@@ -10953,6 +11057,9 @@ module.exports = {
   DEFAULT_BUGFIX_STEPS,
   bugfixDisciplineBlock,
   bugfixSequence,
+  DEFAULT_RECONCILE_STEPS,
+  reconcileSequence,
+  fixReturnStep,
   stepSequence,
   nextStepInSequence,
   sequenceNextStep,

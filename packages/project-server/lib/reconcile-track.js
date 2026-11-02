@@ -24,7 +24,10 @@ const { execFileSync } = require('child_process');
 const intakeLib = require('./reconcile-intake');
 
 const STEPS = ['intake', 'intent_interview', 'integration', 'align', 'team_review', 'owner_decision', 'apply', 'ready'];
+// open → verifying (handed to the workflow slot) → merged; or cancelled.
 const OPEN = 'open';
+const VERIFYING = 'verifying';
+const MERGED = 'merged';
 
 function tracksRoot(projectRoot) {
   return path.join(projectRoot, 'tmp', 'reconcile');
@@ -80,7 +83,8 @@ function idFloor(projectRoot, prefix) {
   let max = 0;
   try {
     for (const t of listTracks(projectRoot)) {
-      if (t.status === OPEN && t.floor && Number(t.floor[prefix]) > max) max = Number(t.floor[prefix]);
+      // Held until the merge: a track being verified in the slot has not landed yet.
+      if ((t.status === OPEN || t.status === VERIFYING) && t.floor && Number(t.floor[prefix]) > max) max = Number(t.floor[prefix]);
     }
   } catch (_) { /* no floor */ }
   return max;
@@ -260,6 +264,20 @@ async function fileItemOnBranch({ projectRoot, docsRel = 'docs', config = null, 
   return { ...created, commit };
 }
 
+/**
+ * The track's worktree, recreated from its branch when it is gone (a cancelled
+ * verification hands the branch back without one). Saves and returns the track.
+ */
+function ensureWorktree(projectRoot, track) {
+  if (track.worktree && fs.existsSync(track.worktree)) return track;
+  if (!track.branch) throw new Error(`reconcile track ${track.id} has no branch yet; run integration first`);
+  const wt = path.join(projectRoot, 'tmp', '.worktrees', `reconcile-${track.id}`);
+  execFileSync('git', ['worktree', 'add', '-q', wt, track.branch], { cwd: projectRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+  const next = { ...track, worktree: wt };
+  saveTrack(projectRoot, next);
+  return next;
+}
+
 /** Close a track without merging. Its floor is lifted; the pin stays. */
 function cancelTrack(projectRoot, id, reason = null) {
   const track = loadTrack(projectRoot, id);
@@ -270,7 +288,7 @@ function cancelTrack(projectRoot, id, reason = null) {
 }
 
 module.exports = {
-  STEPS, OPEN,
+  STEPS, OPEN, VERIFYING, MERGED,
   tracksRoot, trackDir, loadTrack, saveTrack, listTracks,
-  floorFromIds, idFloor, recordBody, startTrack, fileItemOnBranch, cancelTrack,
+  floorFromIds, idFloor, recordBody, startTrack, fileItemOnBranch, ensureWorktree, cancelTrack,
 };
