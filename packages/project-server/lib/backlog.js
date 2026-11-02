@@ -244,10 +244,12 @@ function refreshBacklogIndex(projectRoot, docsPath) {
  * are also taken: the next id is above them, so an item filed here meanwhile
  * never collides with one that comes home (reconcile-track.js idFloor).
  */
-function nextItemId(projectRoot, docsPath, prefix) {
+function nextItemId(projectRoot, docsPath, prefix, floor = 0) {
   if (!/^[A-Z]{2,5}$/.test(prefix)) throw new Error(`Invalid prefix: ${prefix}`);
   const dir = backlogDir(projectRoot, docsPath);
-  let max = 0;
+  // `floor`: a number the caller knows is taken elsewhere (an item filed on a
+  // reconcile branch must clear the default branch's ids too).
+  let max = Number(floor) || 0;
   if (fs.existsSync(dir)) {
     const re = new RegExp(`^${prefix}-(\\d{1,5})\\.md$`);
     for (const f of fs.readdirSync(dir)) {
@@ -356,7 +358,7 @@ function insertIntoGroups(groups, id, { release = null, after = null, before = n
  */
 function createItem(projectRoot, docsPath, {
   title, type = 'Feature', body = '', depends_on = [], release = null, after = null, before = null,
-  config = null, today = new Date().toISOString().slice(0, 10),
+  config = null, today = new Date().toISOString().slice(0, 10), idFloor = 0,
 } = {}) {
   const cleanTitle = String(title || '').replace(/\s+/g, ' ').trim();
   if (!cleanTitle) throw new Error('title is required');
@@ -374,7 +376,7 @@ function createItem(projectRoot, docsPath, {
     throw new Error(`${path.basename(indexPath)} is missing BACKLOG-START/END markers`);
   }
 
-  const id = nextItemId(projectRoot, docsPath, deriveItemPrefix(projectRoot, docsPath, config));
+  const id = nextItemId(projectRoot, docsPath, deriveItemPrefix(projectRoot, docsPath, config), idFloor);
   const placed = insertIntoGroups(parseBacklogSection(content), id, { release, after, before });
   const item = {
     id, title: cleanTitle, type, status: 'Backlog', release: placed.release,

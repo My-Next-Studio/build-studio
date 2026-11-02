@@ -39,8 +39,10 @@ never filled in.
 
 ## 1. Start from the intake
 
-The intake inventory is the input. If this is a reconcile run, it is in the
-prompt. By hand, run it from the project root with Build Studio's
+The intake inventory is the input. **In a reconcile track** (started from the
+hub's Reconcile tab), intake has already run and the record is already filed:
+the prompt names the report (`tmp/reconcile/<record-id>/intake.md`) and the
+record. Skip to step 2. **By hand**, run it from the project root with Build Studio's
 `project-server/lib/reconcile-intake.js`. That is `packages/project-server/lib/`
 in a Build Studio checkout, and
 `/Applications/Build Studio.app/Contents/Resources/project-server/lib/` in the
@@ -158,11 +160,12 @@ images and clips. Coming home as they are unless you say otherwise").
 Write each answer when it is given, so an interrupted interview loses nothing.
 
 **The reconcile record** is one backlog item of type `Task`, titled
-`Reconcile <branch>`. A reconcile run creates it. By hand, file it through
-Build Studio's backlog API, as the `create_story` skill describes (never by
-editing backlog files). Its body has these sections, filled in as you go:
+`Reconcile <branch>`. A reconcile track creates it with *Source* and *Intake*
+already filled in. By hand, file it through Build Studio's backlog API, as the
+`create_story` skill describes (never by editing backlog files). Its body has
+these sections, filled in as you go:
 
-```markdown
+````markdown
 ## Source
 <path or ref>, branch <name>, pinned on <pin> at <sha>; target <ref> at <sha>; merge-base <sha>.
 
@@ -171,6 +174,12 @@ editing backlog files). Its body has these sections, filled in as you go:
 
 ## What comes home
 All | All except: <path groups or commits, and why>
+
+```reconcile-keep-out
+PULS-HANDOVER.md
+docs/project-state.md
+docs/ux/puls-companion/reference/DeskRhythm.zip
+```
 
 ## Change groups
 | Group | Branch claims | Owner's decision |
@@ -191,7 +200,14 @@ Changes to the branch's PRD: <confirmed as is | these ACs replace §4 | new PRD 
 
 ## Open questions
 - <question> → <owner | role>
-```
+````
+
+**The `reconcile-keep-out` block is what the integration reads.** List every
+path that stays out, one per line. A kept-out path ends up as it is on the
+target, or absent if the target lacks it. That covers both a file the branch
+added that should not come home and a file whose edits on the branch are
+dropped. The prose under *What comes home* says why; the block says what. Use
+paths, not descriptions. Lines starting with `#` are comments.
 
 Also:
 
@@ -212,9 +228,10 @@ Summarise in a few lines:
 - the risk tier, and why if lowered;
 - what is still open, and for whom.
 
-Then tell the owner the interview is complete. In a reconcile run, the next
-step builds the integration branch from this record and the reviewers start
-from it.
+Then tell the owner the interview is complete and, in a reconcile track, to
+click **Finish interview**. Finish commits the record and the decisions log,
+and the integration step builds the branch from the record, using the
+`reconcile-keep-out` block.
 
 ## Anti-patterns
 

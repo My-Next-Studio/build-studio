@@ -10,7 +10,7 @@ const { stripAnsi, renderPipePaneLog } = require('../tmux');
  * live-terminal attach in server.js — the client only ever names an
  * agent; the tmux target is always resolved server-side from state.
  */
-function resolveAgentTarget(state, roleOrWindow, draftStatePath = null) {
+function resolveAgentTarget(state, roleOrWindow, draftStatePath = null, projectRoot = null) {
   const key = String(roleOrWindow || '').toLowerCase();
   const match = (a) => a && (a.window === roleOrWindow || (a.role || '').toLowerCase() === key);
   const wf = state.loadWorkflow();
@@ -63,6 +63,20 @@ function resolveAgentTarget(state, roleOrWindow, draftStatePath = null) {
       const entry = candidates.find((d) => d && d.window === roleOrWindow);
       if (entry && draft.sessionName) return { sessionName: draft.sessionName, window: entry.window };
     } catch (_) { /* advisory — a missing drafting state is not an error here */ }
+  }
+  // Reconcile tracks run beside the workflow slot (lib/reconcile-track.js), so
+  // their sessions and agents are invisible to the lookups above.
+  if (projectRoot) {
+    try {
+      for (const t of require('../reconcile-track').listTracks(projectRoot)) {
+        for (const step of Object.values(t.steps || {})) {
+          const s = step && step.session;
+          if (s && s.window === roleOrWindow && s.sessionName) return { sessionName: s.sessionName, window: s.window };
+          const agent = ((step && step.agents) || []).find((a) => a && a.window === roleOrWindow);
+          if (agent && t.sessionName) return { sessionName: t.sessionName, window: agent.window };
+        }
+      }
+    } catch (_) { /* advisory — an unreadable track is not an error here */ }
   }
   return null;
 }

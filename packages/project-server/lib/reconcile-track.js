@@ -231,6 +231,35 @@ async function startTrack({ projectRoot, docsRel = 'docs', config = null, source
   return { refused: false, track, recordId, commit };
 }
 
+/**
+ * File a backlog item on the track's integration branch (the owner's decisions,
+ * the apply step). Its id clears the project's own ids and the floor, and the
+ * floor is raised to it, so the project does not hand the same id out
+ * meanwhile. Committed in the worktree.
+ *
+ * deps (for tests): { commit(cwd, paths, message) → Promise<{committed}> }
+ */
+async function fileItemOnBranch({ projectRoot, docsRel = 'docs', config = null, id, item }, deps = {}) {
+  const backlog = require('./backlog');
+  const track = loadTrack(projectRoot, id);
+  if (!track) throw new Error(`no reconcile track ${id}`);
+  if (track.status !== OPEN) throw new Error(`reconcile track ${id} is ${track.status}`);
+  if (!track.worktree || !fs.existsSync(track.worktree)) throw new Error(`reconcile track ${id} has no worktree yet; run integration first`);
+  const prefix = backlog.deriveItemPrefix(projectRoot, docsRel, config);
+  const projectNext = Number(backlog.nextItemId(projectRoot, docsRel, prefix).split('-')[1]);
+  const created = backlog.createItem(track.worktree, docsRel, { ...item, config, idFloor: projectNext - 1 });
+  const num = Number(created.id.split('-')[1]);
+  const fresh = loadTrack(projectRoot, id);
+  saveTrack(projectRoot, { ...fresh, floor: { ...(fresh.floor || {}), [prefix]: Math.max(Number((fresh.floor || {})[prefix]) || 0, num) } });
+  const doCommit = deps.commit || require('./scoped-commit').scopedCommit;
+  const rel = (p) => path.relative(track.worktree, p);
+  const commit = await doCommit(track.worktree, [
+    rel(backlog.itemFilePath(track.worktree, docsRel, created.id)),
+    rel(backlog.backlogIndexPath(track.worktree, docsRel)),
+  ], `docs(${created.id}): add to the backlog (${id})`);
+  return { ...created, commit };
+}
+
 /** Close a track without merging. Its floor is lifted; the pin stays. */
 function cancelTrack(projectRoot, id, reason = null) {
   const track = loadTrack(projectRoot, id);
@@ -243,5 +272,5 @@ function cancelTrack(projectRoot, id, reason = null) {
 module.exports = {
   STEPS, OPEN,
   tracksRoot, trackDir, loadTrack, saveTrack, listTracks,
-  floorFromIds, idFloor, recordBody, startTrack, cancelTrack,
+  floorFromIds, idFloor, recordBody, startTrack, fileItemOnBranch, cancelTrack,
 };

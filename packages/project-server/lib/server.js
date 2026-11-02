@@ -209,7 +209,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', opsUITestsRouter);
   app.use('/api', demoSetupRouter);
   app.use('/api', backlogRouter);
-  app.use('/api', createReconcileRouter(config));
+  app.use('/api', createReconcileRouter(config, tmuxOps));
   app.use('/api', supportRouter);
   app.use('/api', cliConfigRouter);
 
@@ -396,7 +396,7 @@ function startServer(projectRoot, opts = {}) {
 
   function handleAgentTerminal(ws, agentWindow) {
     const { resolveAgentTarget } = require('./api/terminal');
-    const target = resolveAgentTarget(state, agentWindow, config.statePath);
+    const target = resolveAgentTarget(state, agentWindow, config.statePath, config.projectRoot);
     if (!target) {
       ws.send(JSON.stringify({ type: 'error', data: `No agent "${agentWindow}" found in the active workflow or run` }));
       ws.close();

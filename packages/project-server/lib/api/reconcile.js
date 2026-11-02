@@ -7,6 +7,10 @@
  *        body: { sourcePath?, branch?, ref?, brief? }    one of sourcePath / ref
  *        409 { refused: true, markdown, status } when the source has uncommitted work
  *   POST /api/reconcile/:id/cancel    → { track }   body: { reason? }
+ *   POST /api/reconcile/:id/session/:step → { track }  body: { action: launch | end | finish }
+ *        for the interactive steps intent_interview and owner_decision
+ *   POST /api/reconcile/:id/items     → 201 { id, release, commit }
+ *        a backlog item filed on the track's integration branch (createItem's body)
  *
  * A track runs beside the workflow slot, so none of these touch the active
  * workflow, and a track can start while a run is in progress.
@@ -15,22 +19,75 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const tracks = require('../reconcile-track');
+const sessions = require('../reconcile-sessions');
 
-function createReconcileRouter(config) {
+function createReconcileRouter(config, tmuxOps = null) {
   const router = express.Router();
   const docsRel = String(config.docs_path || './docs').replace(/^\.\//, '').replace(/\/$/, '');
+
+  function load(req, res) {
+    let track;
+    try { track = tracks.loadTrack(config.projectRoot, req.params.id); } catch (err) { res.status(400).json({ error: err.message }); return null; }
+    if (!track) { res.status(404).json({ error: `no reconcile track ${req.params.id}` }); return null; }
+    return track;
+  }
 
   router.get('/reconcile', (req, res) => {
     res.json({ tracks: tracks.listTracks(config.projectRoot) });
   });
 
   router.get('/reconcile/:id', (req, res) => {
-    let track;
-    try { track = tracks.loadTrack(config.projectRoot, req.params.id); } catch (err) { return res.status(400).json({ error: err.message }); }
-    if (!track) return res.status(404).json({ error: `no reconcile track ${req.params.id}` });
+    const track = load(req, res);
+    if (!track) return;
     let intake = null;
     try { intake = fs.readFileSync(path.join(tracks.trackDir(config.projectRoot, track.id), 'intake.md'), 'utf8'); } catch (_) { /* not written yet */ }
-    res.json({ track, intake });
+    // Whether each interactive step's agent is still running, for the hub's
+    // Start / Resume / Finish buttons.
+    const live = {};
+    if (tmuxOps) for (const k of Object.keys(sessions.KINDS)) live[k] = sessions.live(track, k, tmuxOps);
+    res.json({ track, intake, live });
+  });
+
+  router.post('/reconcile/:id/session/:step', async (req, res) => {
+    const track = load(req, res);
+    if (!track) return;
+    const stepKey = req.params.step;
+    const action = (req.body && req.body.action) || '';
+    if (!sessions.KINDS[stepKey]) return res.status(400).json({ error: `${stepKey} is not an interactive step` });
+    if (track.status !== tracks.OPEN) return res.status(409).json({ error: `track ${track.id} is ${track.status}` });
+    if (!tmuxOps) return res.status(503).json({ error: 'no tmux available' });
+    try {
+      if (action === 'launch') return res.json({ track: sessions.launch({ config, tmuxOps, track, stepKey }) });
+      if (action === 'end') return res.json({ track: sessions.end({ config, tmuxOps, track, stepKey }) });
+      if (action === 'finish') return res.json({ track: await sessions.finish({ config, tmuxOps, track, stepKey, docsRel }) });
+      return res.status(400).json({ error: 'action must be launch, end or finish' });
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/reconcile/:id/items', async (req, res) => {
+    const b = req.body || {};
+    try {
+      const created = await tracks.fileItemOnBranch({
+        projectRoot: config.projectRoot,
+        docsRel,
+        config,
+        id: req.params.id,
+        item: {
+          title: b.title,
+          type: b.type || 'Task',
+          body: String(b.body || ''),
+          depends_on: b.depends_on || [],
+          release: b.release || null,
+          after: b.after || null,
+          before: b.before || null,
+        },
+      });
+      res.status(201).json({ id: created.id, release: created.release, commit: created.commit });
+    } catch (err) {
+      res.status(/no reconcile track/.test(err.message) ? 404 : 400).json({ error: err.message });
+    }
   });
 
   router.post('/reconcile/start', async (req, res) => {

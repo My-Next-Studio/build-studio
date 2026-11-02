@@ -35,6 +35,20 @@ that move underneath you without your having edited anything.
     in `tmp/reconcile/<record-id>/`, which every project already ignores.
   - `GET /api/reconcile`, `GET /api/reconcile/:id` and
     `POST /api/reconcile/:id/cancel`.
+  - **The two interactive steps,** the intent interview and the owner's review
+    decisions (`POST /api/reconcile/:id/session/:step`, with launch, end or
+    finish). Each runs as a resumable session in its own tmux window, as the
+    kickoff interview does, and the embedded terminal can attach to it. Finish
+    commits what the session wrote and moves the track on.
+  - **A new template skill, `reconcile_decisions`.** The PM verifies each
+    blocking finding against the code before presenting it, asks the owner one
+    question at a time, bundles the clear fixes into one approval, and records
+    every decision in the record.
+  - **`reconcile_interview`** now writes what stays out into a machine-readable
+    `reconcile-keep-out` block in the record, which the integration reads.
+  - **`POST /api/reconcile/:id/items`** files a backlog item on the track's
+    integration branch, with an id that clears both the branch's and the
+    project's.
   - There is no hub UI yet.
 
 ### Changed
