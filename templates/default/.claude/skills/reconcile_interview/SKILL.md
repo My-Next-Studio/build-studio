@@ -129,6 +129,26 @@ Each question carries:
   `(Recommended)`, plus "Not decided yet"
 - **one line of rationale** per option: the consequence, not the reasoning
 
+**Never ask the owner to approve text they cannot read in the question.** A
+question card covers the messages above it, so "approve O1–O5 as written
+above" is a question about text the owner cannot see. Ids like `AC-O3` mean
+nothing to them yet. When you ask for approval of drafted criteria or copy:
+
+1. **Write the draft into the record first**, under its group in *Approved
+   behaviour*, headed `Draft — not yet approved`. Name the file in the question
+   ("the draft is in `docs/backlog/XX-NNN.md`, under Onboarding"), so the owner
+   can open it. On approval, remove the heading. On changes, edit the text there
+   before moving on.
+2. **Put the full text in the question itself.** With `AskUserQuestion`, set it
+   as the `preview` of the approve option, so focusing that option shows every
+   criterion in full. In plain text, list every criterion in the same message as
+   the question.
+3. **Name criteria by what they say, not only by id**: "five onboarding rules
+   (order of screens, saving the desk answers, the ready screen, replay and
+   existing users, accessibility)", then the full text.
+4. **More than about six criteria is two questions.** Split them by topic, so
+   each one fits on a screen.
+
 Large work has many groups. Go group by group. Confirm a group whose intent is
 plain in one line rather than a question ("Assets for the mascot: shipped
 images and clips. Coming home as they are unless you say otherwise").
@@ -206,4 +226,6 @@ from it.
   added.
 - **Asking engineering questions.** They go to the Architect as open questions.
 - **A wall of questions.** One at a time, group by group.
+- **Asking to approve what the owner cannot see.** "As written above" behind a
+  question card, or bare ids. Put the full text in the question and in the record.
 - **Writing in the source checkout.** Read it through the pin.

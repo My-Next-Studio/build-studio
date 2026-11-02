@@ -1,6 +1,8 @@
 # Plan: bring work done outside Build Studio home (reconcile)
 
-> **Status: proposed 2026-11-01.**
+> **Status: proposed 2026-11-01.** Increment 1 implemented 2026-11-01; the first
+> case ran by hand through all seven steps and merged 2026-11-02 (see *The first
+> case* at the end). Increments 2 and 3 are not built.
 >
 > Owner request: Build Studio is good at building one feature at a time and
 > keeping each true to the vision. The whole machinery exists to stop a project
@@ -144,7 +146,10 @@ The skill `reconcile_interview` is a sibling of `owner_interview` and
    and a recommendation; "not decided yet" is always an answer. When the
    branch brought PRDs of its own, confirm or edit those rather than rewrite
    them. Otherwise write a PRD. Either way the acceptance criteria come from
-   the owner's answers.
+   the owner's answers. The owner must be able to read what they approve. A
+   draft goes into the record first, marked as not yet approved, and its full
+   text is in the question itself. "Approve O1–O5 as written above" behind a
+   question card was unreadable in the first hand-run case.
 5. **Confirm the risk tier.** The owner may always raise it. To lower it, the
    owner sees what triggered it and gives a reason, which is logged.
 6. **Record:** the PRDs; the record item (below); and the Key Decisions Log
@@ -152,9 +157,18 @@ The skill `reconcile_interview` is a sibling of `owner_interview` and
 
 ### 3. Integration branch
 
-`reconcile/<ID>` is cut from the current default branch, and the pinned
-source is merged into it without the excluded parts. Colliding ids are
-renumbered on the incoming side, because the default branch wins. A conflict
+`reconcile/<ID>` is cut from the current default branch. The source comes in
+as **one import commit** holding the source's final tree, without the excluded
+parts. Its history is not merged (owner decision 2026-11-01). A merge brings
+every commit of the source, and with them every version of every file it ever
+held, excluded ones included. In the first hand-run case that was 57 MB of
+history for a 21 MB result, including three versions of a scene archive and
+the very files the owner had left out. The source's own history stays
+traceable on the pinned ref and in the source checkout, and the record names
+both.
+
+Colliding ids are renumbered on the incoming side, because the default branch
+wins. A conflict
 stops the step for the owner, or for a dev agent if the owner asks for one.
 Every later check runs against this branch: the result as it will be, not the
 source as it was.
@@ -252,6 +266,18 @@ Each one is useful alone, as with the kickoff interview:
 2. **The workflow type `reconcile`:** steps 1–6, handing over to the execution
    run's second half on the integration branch. An `ensure…Skill` copies the
    skill into projects onboarded before it existed.
+   - **The record item must not take an id the source allocated.** In the
+     first hand-run case the backlog API gave the record the next free id on
+     the default branch, which was the source's first new item. One collision
+     then had to be renumbered at integration. Filing the record needs a
+     floor above the ids in the intake's `ids.added`. The floor holds for
+     every item filed on the default branch while the reconcile is open, not
+     only the record: in the same case, a cleanup task decided during
+     integration would otherwise have taken an id the integration branch
+     already used.
+   - **Renumber on a branch cut from the pin, before the import.** That branch
+     carries only the id changes, so the renumbering can be reviewed alone. The
+     import commit then takes its tree, without the excluded parts.
 3. **The hub:** a Reconcile button under Project, with a picker for a branch or
    a worktree and a field for the brief.
 
@@ -283,6 +309,8 @@ Each one is useful alone, as with the kickoff interview:
 
 ## Decisions taken (2026-11-01)
 
+Decisions 1–6 were taken before the first case ran. Decision 7 came out of it.
+
 1. **Approved behaviour lives in PRDs**, so the execution run's second half and
    later drafting read it like everything else.
 2. **The source must be committed.** Intake refuses a dirty source and lists
@@ -295,6 +323,9 @@ Each one is useful alone, as with the kickoff interview:
 5. **Build Studio never cleans up the source.** It reports where the source is.
 6. **The first case runs by hand** on increment 1, before the workflow type and
    the UI are built.
+7. **The source comes in as one import commit**, holding only what comes home.
+   Its history is not merged, so excluded files never enter the default branch's
+   history.
 
 ## Verification
 
@@ -309,3 +340,42 @@ Each one is useful alone, as with the kickoff interview:
 - The interview opens by separating what the branch claims from what the code
   shows, and writes acceptance criteria only from the owner's answers.
 - `merge_to_main` deletes `reconcile/<ID>`, never the source branch.
+
+## The first case (2026-11-01 – 2026-11-02)
+
+A new user experience for a managed iOS app, iterated in another agent tool in a
+separate clone, ran through every step by hand on increment 1.
+
+**The run:**
+- **Intake:** 260 files, a clean dry-run merge, the Sensitive tier (CI, payments,
+  analytics consent), and 21 ids the branch had allocated itself.
+- **The interview** found what the code alone would have made a requirement:
+  - a change from opt-out to opt-in analytics consent for existing users, with
+    the test that pinned opt-out deleted;
+  - a removed Skip.
+
+  The owner withdrew both.
+- **Two fix rounds** and **six role reviews**: five accepts with document
+  changes, plus one pushback on two removals that no criterion approved. The
+  owner decided the pushback and every finding in about ten questions, then the
+  roles applied their document changes.
+- **The merge:** about 9 MB of history plus about 11 MB of design sources in LFS,
+  instead of 57 MB.
+
+**What it changed in this plan** (already folded in above):
+- decision 7, the import commit;
+- the id floor for every item filed while a reconcile is open;
+- renumbering on a branch cut from the pin;
+- the rule that the owner reads in full what they approve.
+
+**Also learned, for increment 2:**
+- **Removals are what reviews catch.** Both blocking findings were 1.0 behaviour
+  the branch quietly dropped, mentioned in no document. The reviewer brief should
+  name "compare against the target for removals no criterion approves" as its
+  first check, as it did here.
+- **Document and code changes can run in parallel** on two branches cut from the
+  integration branch, because their files do not overlap. Merging them afterwards
+  was trivial.
+- **Every run needs a "flaky versus caused by us" step.** A failing locale test
+  that also fails on the commit before the fix round is not a finding about the
+  fix. The QA brief should require that comparison before a failure counts.

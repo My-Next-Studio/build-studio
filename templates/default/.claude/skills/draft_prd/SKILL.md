@@ -89,6 +89,17 @@ Each question carries:
 A question the owner can answer by picking is worth ten they have to compose an
 answer to. If you cannot name the options, you have not finished step 1.
 
+**Every question stands on its own.** The question card covers the messages
+above it, so the owner sees only the card:
+
+- No "as written above", and no bare ids such as `AC-3`, `§2.1` or `OQ-2`. Say
+  what the thing is: "the rule that a missed day only reduces the streak".
+- When you ask the owner to approve text you drafted (criteria, copy, a scope
+  list), put the full text in the approve option's `preview`, so focusing the
+  option shows all of it. Without `AskUserQuestion`, put it in the same message
+  as the question.
+- More than about six items is two questions, split by topic.
+
 **Cap: about four owner questions.** If you have more, the story is
 under-specified or too large. Stop and say so — propose splitting it, or ask the
 one question that unblocks the rest. An interrogation is a failure of this

@@ -93,6 +93,16 @@ Each question carries:
   `(Recommended)`, plus "Not decided yet"
 - **one line of rationale** per option — the consequence, not the reasoning
 
+**Every question stands on its own.** The question card covers the messages
+above it, so the owner sees only the card:
+
+- No "as written above", and no bare ids such as `XX-004` or a section number.
+  Say what the thing is: "the backlog's monthly subscription (XX-004, XX-007)".
+- When you ask the owner to approve text you drafted, such as a vision line or a
+  positioning statement, put the full text in the approve option's `preview`, so
+  focusing the option shows all of it. Without `AskUserQuestion`, put it in the
+  same message as the question.
+
 Follow-ups are welcome: this is a conversation, and "that depends — what would
 it mean for pricing?" deserves an answer before the next topic.
 

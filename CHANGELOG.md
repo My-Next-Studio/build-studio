@@ -21,6 +21,37 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-02 — Owner interviews show the text they ask the owner to approve
+
+### Changed
+
+- **The `draft_prd`, `owner_interview` and `reconcile_interview` skills no longer
+  ask the owner to approve text the owner cannot see.** A question card covers the
+  messages above it, so "approve O1–O5 as written above" asked about text that was
+  out of sight, named only by ids. Now each question stands on its own:
+  - no "as above" and no bare ids;
+  - drafted criteria or copy go in full into the approve option's preview, or
+    into the same message when there is no question tool;
+  - more than about six items become two questions.
+
+  In `reconcile_interview`, a draft is also written into the reconcile record
+  first, marked "not yet approved", and the question says where.
+
+### Upgrade steps
+
+**In Build Studio** — nothing to do. The skills are template files and reach new
+projects at onboarding.
+
+**In each managed project** — optional. Projects keep their own copies of these
+skills, and a project may have edited its copy. To take the change, copy the
+skills over a project's copies:
+
+```bash
+cp -R templates/default/.claude/skills/draft_prd templates/default/.claude/skills/owner_interview templates/default/.claude/skills/reconcile_interview <project>/.claude/skills/
+```
+
+---
+
 ## 2026-11-01 — A build that leaves its work uncommitted is sent back before QA, projects start after a crash, Electron 45, and an intake for work built elsewhere
 
 ### Added
