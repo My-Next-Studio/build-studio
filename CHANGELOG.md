@@ -49,6 +49,16 @@ that move underneath you without your having edited anything.
   - **`POST /api/reconcile/:id/items`** files a backlog item on the track's
     integration branch, with an id that clears both the branch's and the
     project's.
+  - **The integration step** (`POST /api/reconcile/:id/integrate`, with run,
+    continue or abort) builds `reconcile/<record-id>` in its own worktree. The
+    project checkout is never switched. The steps:
+    - Ids that both sides allocated are renumbered on the incoming side, as a
+      commit of their own.
+    - The source comes in as one import commit, without its history.
+    - What the record keeps out is restored to the target's version.
+    - Design sources go through LFS.
+    - A conflict stops the step with the conflicting paths until they are
+      resolved.
   - There is no hub UI yet.
 
 ### Changed

@@ -11,6 +11,9 @@
  *        for the interactive steps intent_interview and owner_decision
  *   POST /api/reconcile/:id/items     → 201 { id, release, commit }
  *        a backlog item filed on the track's integration branch (createItem's body)
+ *   POST /api/reconcile/:id/integrate → { track }  body: { action: run | continue | abort }
+ *        builds reconcile/<id> with one import commit; a conflict leaves the
+ *        step at `conflict` with the paths, for `continue` once resolved
  *
  * A track runs beside the workflow slot, so none of these touch the active
  * workflow, and a track can start while a run is in progress.
@@ -20,6 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const tracks = require('../reconcile-track');
 const sessions = require('../reconcile-sessions');
+const integration = require('../reconcile-integration');
 
 function createReconcileRouter(config, tmuxOps = null) {
   const router = express.Router();
@@ -63,6 +67,21 @@ function createReconcileRouter(config, tmuxOps = null) {
       return res.status(400).json({ error: 'action must be launch, end or finish' });
     } catch (err) {
       return res.status(400).json({ error: err.message });
+    }
+  });
+
+  router.post('/reconcile/:id/integrate', (req, res) => {
+    const track = load(req, res);
+    if (!track) return;
+    const action = (req.body && req.body.action) || 'run';
+    try {
+      const args = { projectRoot: config.projectRoot, docsRel, id: track.id };
+      if (action === 'run') return res.json({ track: integration.integrate(args) });
+      if (action === 'continue') return res.json({ track: integration.continueIntegration(args) });
+      if (action === 'abort') return res.json({ track: integration.abortIntegration(args) });
+      return res.status(400).json({ error: 'action must be run, continue or abort' });
+    } catch (err) {
+      return res.status(409).json({ error: (err.stderr && String(err.stderr).trim()) || err.message });
     }
   });
 
