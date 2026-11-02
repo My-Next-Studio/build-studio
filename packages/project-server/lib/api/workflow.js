@@ -2163,7 +2163,7 @@ ${EFFICIENCY_INSTRUCTIONS}`,
     }
   }
 
-  function launchWorkflowAgents(wf, agents, { useWorktrees = false, allowAll = true, cwd = projectRoot, stepKey = null } = {}) {
+  function launchWorkflowAgents(wf, agents, { useWorktrees = false, allowAll = true, cwd = projectRoot, stepKey = null, feedbackPath = '/api/workflow/feedback' } = {}) {
     // Needed before the CLI probe below, which now checks the one CLI this
     // step resolves to rather than one per agent role.
     const resolvedStep = stepKey || wf.currentStep;
@@ -2321,8 +2321,8 @@ ${EFFICIENCY_INSTRUCTIONS}`,
         : `the feedback field must contain your FULL task plan output — either the complete \`\`\`json code block OR the full markdown task list with ### Role headers and numbered tasks. Do NOT summarise — paste the actual plan`;
       const feedbackCurl = agent.reportFeedback
         ? isPlanner
-          ? `\n\nWhen you are done, report your feedback by running (${plannerFeedbackHint}):\ncurl -s -X POST http://localhost:${dashboardPort}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"${agent.role}","step":"${resolvedStep}"${taskIndexParam},"feedback":"<paste full plan here>"}'`
-          : `\n\nWhen you are done, report your feedback by running:\ncurl -s -X POST http://localhost:${dashboardPort}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"${agent.role}","step":"${resolvedStep}"${taskIndexParam},"feedback":"<your structured feedback here>"}'`
+          ? `\n\nWhen you are done, report your feedback by running (${plannerFeedbackHint}):\ncurl -s -X POST http://localhost:${dashboardPort}${feedbackPath} -H 'Content-Type: application/json' -d '{"role":"${agent.role}","step":"${resolvedStep}"${taskIndexParam},"feedback":"<paste full plan here>"}'`
+          : `\n\nWhen you are done, report your feedback by running:\ncurl -s -X POST http://localhost:${dashboardPort}${feedbackPath} -H 'Content-Type: application/json' -d '{"role":"${agent.role}","step":"${resolvedStep}"${taskIndexParam},"feedback":"<your structured feedback here>"}'`
         : '';
       // Agents with long feedback write the JSON body to a file and post that —
       // the right call, inline quoting has destroyed payloads before. Left to
@@ -10841,6 +10841,9 @@ ${FIX_EXECUTION_EFFICIENCY_INSTRUCTIONS}${STRUCTURED_FEEDBACK_INSTRUCTIONS}`,
   // checks without starting, as POST /workflow/start.
   router.startWorkflow = startWorkflow;
   router.workflowReadiness = (body) => startWorkflow(body, { dryRun: true });
+  // For reconcile tracks (lib/api/reconcile.js), which run their agents beside
+  // the workflow slot: the same launcher, reporting to the track's endpoint.
+  router.launchAgents = launchWorkflowAgents;
 
   return router;
 }

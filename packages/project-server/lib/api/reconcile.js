@@ -14,6 +14,11 @@
  *   POST /api/reconcile/:id/integrate → { track }  body: { action: run | continue | abort }
  *        builds reconcile/<id> with one import commit; a conflict leaves the
  *        step at `conflict` with the paths, for `continue` once resolved
+ *   POST /api/reconcile/:id/step/:step → { track }  body: { action: launch | complete }
+ *        the agent steps align, team_review and apply; `complete` closes a step
+ *        by hand (an agent that will not report)
+ *   POST /api/reconcile/:id/feedback  → { ok, track }  body: { role, step, feedback }
+ *        where the track's agents report, as workflow agents do to /workflow/feedback
  *
  * A track runs beside the workflow slot, so none of these touch the active
  * workflow, and a track can start while a run is in progress.
@@ -24,8 +29,13 @@ const path = require('path');
 const tracks = require('../reconcile-track');
 const sessions = require('../reconcile-sessions');
 const integration = require('../reconcile-integration');
+const agentSteps = require('../reconcile-agents');
 
-function createReconcileRouter(config, tmuxOps = null) {
+/**
+ * @param {object} [deps]
+ * @param {Function} [deps.launchAgents]  the workflow router's agent launcher
+ */
+function createReconcileRouter(config, tmuxOps = null, deps = {}) {
   const router = express.Router();
   const docsRel = String(config.docs_path || './docs').replace(/^\.\//, '').replace(/\/$/, '');
 
@@ -82,6 +92,36 @@ function createReconcileRouter(config, tmuxOps = null) {
       return res.status(400).json({ error: 'action must be run, continue or abort' });
     } catch (err) {
       return res.status(409).json({ error: (err.stderr && String(err.stderr).trim()) || err.message });
+    }
+  });
+
+  router.post('/reconcile/:id/step/:step', (req, res) => {
+    const track = load(req, res);
+    if (!track) return;
+    const stepKey = req.params.step;
+    const action = (req.body && req.body.action) || 'launch';
+    if (!agentSteps.AGENT_STEPS[stepKey]) return res.status(400).json({ error: `${stepKey} is not an agent step` });
+    if (track.status !== tracks.OPEN) return res.status(409).json({ error: `track ${track.id} is ${track.status}` });
+    try {
+      if (action === 'launch') {
+        if (!deps.launchAgents) return res.status(503).json({ error: 'the agent launcher is not available' });
+        return res.json({ track: agentSteps.launchStep({ config, track, stepKey, launchAgents: deps.launchAgents }) });
+      }
+      if (action === 'complete') return res.json({ track: agentSteps.completeStep({ config, track, stepKey }) });
+      return res.status(400).json({ error: 'action must be launch or complete' });
+    } catch (err) {
+      return res.status(409).json({ error: (err.stderr && String(err.stderr).trim()) || err.message });
+    }
+  });
+
+  router.post('/reconcile/:id/feedback', (req, res) => {
+    const b = req.body || {};
+    if (!b.role || !b.step) return res.status(400).json({ error: 'role and step are required' });
+    try {
+      const track = agentSteps.recordFeedback({ config, id: req.params.id, role: b.role, step: b.step, feedback: b.feedback });
+      return res.json({ ok: true, track });
+    } catch (err) {
+      return res.status(409).json({ error: err.message });
     }
   });
 

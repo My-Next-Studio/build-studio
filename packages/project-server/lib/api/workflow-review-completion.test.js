@@ -145,7 +145,9 @@ test('feedback naming a closed step is refused, not misfiled', () => {
 
 test('the generated feedback curl carries the step it belongs to', () => {
   // The guard only works if agents actually send it.
-  const curls = SRC.match(/api\/workflow\/feedback[^`]*?feedback":"<[^`]*?'/g) || [];
+  // The launcher's curls take the path as `${feedbackPath}` (reconcile tracks
+  // report elsewhere); the step stamp is required either way.
+  const curls = SRC.match(/(api\/workflow\/feedback|\$\{feedbackPath\})[^`]*?feedback":"<[^`]*?'/g) || [];
   assert.ok(curls.length >= 4, `expected every agent feedback curl, found ${curls.length}`);
   for (const c of curls) {
     assert.match(c, /"step":"\$\{(resolvedStep|wf\.currentStep)\}"/, `curl without a step stamp: ${c.slice(0, 120)}`);

@@ -209,7 +209,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', opsUITestsRouter);
   app.use('/api', demoSetupRouter);
   app.use('/api', backlogRouter);
-  app.use('/api', createReconcileRouter(config, tmuxOps));
+  app.use('/api', createReconcileRouter(config, tmuxOps, { launchAgents: workflowRouter.launchAgents }));
   app.use('/api', supportRouter);
   app.use('/api', cliConfigRouter);
 

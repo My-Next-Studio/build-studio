@@ -59,6 +59,18 @@ that move underneath you without your having edited anything.
     - Design sources go through LFS.
     - A conflict stops the step with the conflicting paths until they are
       resolved.
+  - **The agent steps** (`POST /api/reconcile/:id/step/:step`, with launch or
+    complete) launch through the workflow engine's own agent launcher and report
+    to `POST /api/reconcile/:id/feedback`:
+    - **align:** the builder makes the imported code meet the approved criteria,
+      and the PM copies the criteria verbatim into the PRDs.
+    - **team_review:** the review roster follows the risk tier. Each reviewer
+      writes a review file, checks removals first, and QA compares a failure
+      against the commit before.
+    - **apply:** the owner's decided fixes, and the document updates.
+
+    Document agents work on a parallel branch, which is merged back when every
+    agent has reported, so two writers never share a worktree.
   - There is no hub UI yet.
 
 ### Changed
