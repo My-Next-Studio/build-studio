@@ -99,6 +99,9 @@ test('when both have reported, the docs branch is merged back and the track move
     assert.ok(fs.existsSync(path.join(wt, 'docs/prds/PRD-001.md')));
     assert.equal(fs.readFileSync(path.join(wt, 'app/a.txt'), 'utf8'), 'a, aligned\n');
     assert.equal(fs.existsSync(path.join(root, 'tmp/.worktrees/reconcile-EX-004-docs')), false);
+    // Deleted although the project checkout is on main, not the integration branch.
+    assert.equal(g(root, 'rev-parse', '--abbrev-ref', 'HEAD').trim(), 'main');
+    assert.equal(g(root, 'branch', '--list', 'reconcile/EX-004-docs').trim(), '');
     assert.throws(() => agents.recordFeedback({ config, id: 'EX-004', role: 'PM', step: 'align', feedback: 'again' }), /not running/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

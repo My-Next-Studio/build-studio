@@ -233,7 +233,10 @@ function mergeDocsBranch(config, track, step) {
   const msg = `Merge ${step.docsBranch}: document updates for ${track.id}`;
   git(track.worktree, ['merge', '--no-ff', '-q', '-m', msg, step.docsBranch]);
   try { git(config.projectRoot, ['worktree', 'remove', '--force', step.docsWorktree]); } catch (_) { /* gone */ }
-  try { git(config.projectRoot, ['branch', '-d', step.docsBranch]); } catch (_) { /* kept if unmerged */ }
+  // -D, not -d: the merge above put it in the integration branch, but -d checks
+  // against the project checkout's HEAD (the default branch), and refused, leaving
+  // the docs branch behind in the first real run.
+  try { git(config.projectRoot, ['branch', '-D', step.docsBranch]); } catch (_) { /* already gone */ }
   return git(track.worktree, ['rev-parse', 'HEAD']).trim();
 }
 

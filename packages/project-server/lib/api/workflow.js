@@ -9966,7 +9966,12 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
             commitWorkflowDocs(`docs(${wf.itemId}): reconcile merged (${mergeSha.slice(0, 7)})`);
             const tracksLib = require('../reconcile-track');
             const t = tracksLib.loadTrack(projectRoot, wf.reconcileId || wf.itemId);
-            if (t) tracksLib.saveTrack(projectRoot, { ...t, status: tracksLib.MERGED, mergedAt: new Date().toISOString(), mergeCommit: mergeSha });
+            if (t) {
+              tracksLib.saveTrack(projectRoot, {
+                ...t, status: tracksLib.MERGED, mergedAt: new Date().toISOString(), mergeCommit: mergeSha,
+                currentStep: 'ready', steps: { ...t.steps, ready: { ...(t.steps.ready || {}), status: 'done', completedAt: new Date().toISOString(), workflowId: wf.id } },
+              });
+            }
             try { run(['branch', '-D', `${wf.branch}-incoming`]); } catch { /* none */ }
           } catch (e) { console.error(`[reconcile] finalize ${wf.itemId} failed:`, e.message); }
         }

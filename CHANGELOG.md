@@ -34,10 +34,27 @@ that move underneath you without your having edited anything.
   - number the options in the same message, the recommended one first;
   - end with "Reply with a number, or in your own words";
   - never mention a card.
+- **A reconcile left its document branch behind.** After the merge,
+  `reconcile/<id>-docs` was kept, because the delete checked against the
+  project checkout instead of the integration branch it had been merged into.
+  It is now deleted once merged.
+- **A merged reconcile track still showed "Verify and merge" as pending.** The
+  step is now marked done when the merge lands.
+
+The first reconcile ran end to end on a real branch: App Store panels, icon and
+preview built in Codex. It went through intake, interview, integration, align,
+a Light-tier review, decisions, apply, and verification in the slot. The source's
+history stayed out, the kept-out drafts are absent, and the videos are in LFS.
+These two defects and the question-card wording were all it turned up.
 
 ### Upgrade steps
 
-**In Build Studio** — nothing to do: these are template skills.
+**In Build Studio** — the skills need nothing. The two reconcile fixes are
+project-server code. Sync them and restart the app when convenient:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
 
 **In each managed project** — optional. Projects keep their own copies of the
 skills. To take the fix, copy over a project's copies:
