@@ -21,6 +21,33 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-03 — Owner sessions on Codex no longer point at a question card that is not there
+
+### Fixed
+
+- **On Codex or OpenCode, the owner sessions referred to a "question card".**
+  The sessions are the kickoff and onboarding interview, drafting, Create story,
+  and the reconcile interview and decisions. They ended a question with
+  "Options are in the question card", but only Claude Code has a question tool.
+  The options were in the terminal above, as plain text, and nothing said how
+  to answer. Without a question tool the skills now:
+  - number the options in the same message, the recommended one first;
+  - end with "Reply with a number, or in your own words";
+  - never mention a card.
+
+### Upgrade steps
+
+**In Build Studio** — nothing to do: these are template skills.
+
+**In each managed project** — optional. Projects keep their own copies of the
+skills. To take the fix, copy over a project's copies:
+
+```bash
+cp -R templates/default/.claude/skills/{owner_interview,draft_prd,create_story,reconcile_interview,reconcile_decisions} <project>/.claude/skills/
+```
+
+---
+
 ## 2026-11-02 — Reconcile: bring work built outside Build Studio home
 
 ### Added

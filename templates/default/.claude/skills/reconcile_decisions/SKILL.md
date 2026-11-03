@@ -30,6 +30,11 @@ nobody wrote down is asked again.
   thing, say what the reviewer found, and give the consequence. Text the owner
   approves (copy, an amended criterion) goes in full into the approve option's
   `preview`, or into the same message when there is no question tool.
+- **Without a question tool** (Codex, OpenCode, or any CLI without `AskUserQuestion`):
+  write the question and its options in the same message, numbered, with the one you
+  recommend first, and end with "Reply with a number, or in your own words." Never refer
+  to a question card, a form or "the options above": there is none, and the owner reads
+  only what you wrote in that message.
 - **Never paraphrase an owner-approved criterion or string.** Copy it. An
   amendment the owner makes is recorded word for word.
 - **Do not commit.** Finish commits the record, the decisions log and the items

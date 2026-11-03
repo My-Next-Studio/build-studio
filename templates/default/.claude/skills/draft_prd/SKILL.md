@@ -79,6 +79,12 @@ it yourself and note the assumption. Expensive or user-facing → ask.
 
 **Use `AskUserQuestion`. One question per call. Never a list.**
 
+**Without a question tool** (Codex, OpenCode, or any CLI without `AskUserQuestion`):
+write the question and its options in the same message, numbered, with the one you
+recommend first, and end with "Reply with a number, or in your own words." Never refer
+to a question card, a form or "the options above": there is none, and the owner reads
+only what you wrote in that message.
+
 Each question carries:
 
 - the decision in **one sentence** — no preamble, no restating the story

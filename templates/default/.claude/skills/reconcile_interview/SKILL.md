@@ -123,6 +123,12 @@ Do **not** ask about:
 **One topic at a time, one question per turn.** Use `AskUserQuestion` when your
 CLI has it; otherwise ask in plain text with numbered options.
 
+**Without a question tool** (Codex, OpenCode, or any CLI without `AskUserQuestion`):
+write the question and its options in the same message, numbered, with the one you
+recommend first, and end with "Reply with a number, or in your own words." Never refer
+to a question card, a form or "the options above": there is none, and the owner reads
+only what you wrote in that message.
+
 Each question carries:
 
 - the decision in one sentence, citing what you saw
