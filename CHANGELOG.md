@@ -21,6 +21,36 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-07 — Ending a session that ignores /exit no longer leaves Draft blocked
+
+### Fixed
+
+- **A drafting session could not be ended, and Draft stayed blocked.** End sent
+  the CLI's `/exit` and stopped there. A CLI can sit on a screen where `/exit` is
+  just text. In the case that prompted this, Codex showed "This conversation is
+  open in another app — press R", which answers only esc, ctrl+c or q, because
+  the same conversation was open in the Codex app. The agent outlived End, so
+  the project looked as if a draft were still running, and Draft could not be
+  clicked. Ending now escalates until the agent is gone:
+  1. `/exit` first, so the CLI saves its session;
+  2. then Escape and two ctrl+c, if it is still running after 8 seconds;
+  3. then the window closes, 4 seconds later.
+
+  The same applies to the kickoff and onboarding interview and the reconcile
+  sessions.
+
+### Upgrade steps
+
+**In Build Studio** — sync the project-server and restart the app:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-11-03 — Owner sessions on Codex no longer point at a question card that is not there
 
 ### Fixed

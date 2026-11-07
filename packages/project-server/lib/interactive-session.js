@@ -93,18 +93,67 @@ function launchSession({ config, tmuxOps, spec, prior = null, findSessionId = fi
   };
 }
 
+/** Is the agent in a tmux target still running? */
+function targetLive(tmuxOps, target) {
+  const pid = tmuxOps.panePid ? tmuxOps.panePid(target) : null;
+  return { live: !!pid, agentRunning: !!pid && (tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false) };
+}
+
 /** Is the session's agent still running? */
 function sessionLive(session, tmuxOps) {
   if (!session) return { live: false, agentRunning: false };
-  const pid = tmuxOps.panePid ? tmuxOps.panePid(`${session.sessionName}:${session.window}`) : null;
-  return { live: !!pid, agentRunning: !!pid && (tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false) };
+  return targetLive(tmuxOps, `${session.sessionName}:${session.window}`);
+}
+
+const EXIT_GRACE_MS = 8000;
+const INTERRUPT_GRACE_MS = 4000;
+
+/**
+ * Stop the agent in a pane, escalating until it is gone.
+ *
+ *   1. The CLI's own `/exit`, so it closes its session cleanly instead of being
+ *      cut off part-way through writing a file.
+ *   2. If it is still running after EXIT_GRACE_MS: Escape and two ctrl+c. A CLI
+ *      can sit on a screen where /exit is just text. In the case that prompted
+ *      this, Codex sat on "This conversation is open in another app — press R",
+ *      which answers only esc, ctrl+c or q. The agent stayed alive, so the
+ *      project's Draft button stayed blocked by a session nobody could end.
+ *      Escape and a double ctrl+c exit Codex, Claude Code and OpenCode alike.
+ *   3. If it is still running after INTERRUPT_GRACE_MS more: close the window.
+ *
+ * A pane with no agent left (a bare shell) is closed at once. Steps 2 and 3 run
+ * on timers, so the caller returns immediately; the poll that drives the UI sees
+ * the agent go.
+ *
+ * @returns {'killed'|'exiting'|'gone'}
+ */
+function stopAgent({ tmuxOps, target, cwd, schedule = setTimeout }) {
+  const { live, agentRunning } = targetLive(tmuxOps, target);
+  if (!live) return 'gone';
+  if (!agentRunning) {
+    tmuxOps.killWindowAndChildren(target);
+    return 'killed';
+  }
+  tmuxOps.sendKeys(target, '/exit', cwd);
+  const later = (ms, fn) => {
+    const t = schedule(() => { try { fn(); } catch (_) { /* window gone meanwhile */ } }, ms);
+    if (t && typeof t.unref === 'function') t.unref();
+  };
+  later(EXIT_GRACE_MS, () => {
+    if (!targetLive(tmuxOps, target).agentRunning) return;
+    if (typeof tmuxOps.sendKeysRaw === 'function') tmuxOps.sendKeysRaw(target, 'Escape', 'C-c', 'C-c');
+    later(INTERRUPT_GRACE_MS, () => {
+      if (targetLive(tmuxOps, target).agentRunning) tmuxOps.killWindowAndChildren(target);
+    });
+  });
+  return 'exiting';
 }
 
 /**
  * Stop the agent, keeping the conversation resumable. Reads a Codex/OpenCode
  * id back first, so a later Start resumes without another lookup.
  */
-function endSession({ session, config, tmuxOps, marker, findSessionId = findDraftSessionId }) {
+function endSession({ session, config, tmuxOps, marker, findSessionId = findDraftSessionId, schedule = setTimeout }) {
   if (!session) return session;
   const cwd = session.cwd || config.projectRoot;
   let cliSessionId = session.cliSessionId || null;
@@ -113,13 +162,10 @@ function endSession({ session, config, tmuxOps, marker, findSessionId = findDraf
       cliSessionId = findSessionId({ cli: session.cli, projectRoot: cwd, since: session.startedAt, marker }) || null;
     } catch (_) { cliSessionId = null; }
   }
-  const { live, agentRunning } = sessionLive(session, tmuxOps);
-  const target = `${session.sessionName}:${session.window}`;
   try {
-    if (agentRunning) tmuxOps.sendKeys(target, '/exit', cwd);
-    else if (live) tmuxOps.killWindowAndChildren(target);
+    stopAgent({ tmuxOps, target: `${session.sessionName}:${session.window}`, cwd, schedule });
   } catch (_) { /* best effort: the window may already be gone */ }
   return { ...session, cliSessionId, endedAt: new Date().toISOString() };
 }
 
-module.exports = { sanitize, launchSession, sessionLive, endSession };
+module.exports = { sanitize, launchSession, sessionLive, targetLive, stopAgent, endSession, EXIT_GRACE_MS, INTERRUPT_GRACE_MS };

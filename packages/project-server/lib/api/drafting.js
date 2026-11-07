@@ -17,6 +17,7 @@ const {
   resolveStepLaunchSettings, canPinSession, canResumeSession, sessionPinFlag, sessionResumeFlag,
 } = require('@build-studio/shared/cli');
 const { findDraftSessionId } = require('../draft-session-id');
+const { stopAgent } = require('../interactive-session');
 const { readItem, refreshBacklogIndex } = require('../backlog');
 const agentSkills = require('../agent-skills');
 const { computeDraftDelta, formatDraftDelta } = require('../draft-delta');
@@ -160,21 +161,14 @@ function createDraftingRouter(config, state, tmuxOps, {
       return res.json({ ok: true, alreadyEnded: true, resumable: !!cliSessionId, commit });
     }
 
-    // Two cases, and sending /exit to both was the bug: a pane whose agent has
-    // already exited is a bare SHELL, which does not understand /exit — it
-    // printed "command not found" and the window stayed open, so Close appeared
-    // to do nothing (2026-09-19).
-    const agentRunning = tmuxOps.hasLiveDescendant ? tmuxOps.hasLiveDescendant(pid) : false;
+    // A pane whose agent has already exited is a bare SHELL, which does not
+    // understand /exit (it printed "command not found" and the window stayed
+    // open, 2026-09-19), so it is closed at once. A running agent gets its own
+    // /exit first, then Escape and ctrl+c, then the window is closed: a CLI can
+    // sit on a screen where /exit is just text (Codex's "open in another app",
+    // 2026-11-07), and the agent outliving End kept Draft blocked.
     try {
-      if (agentRunning) {
-        // The CLI's own exit, so it closes its session cleanly rather than being
-        // cut off part-way through writing a file.
-        tmuxOps.sendKeys(target, '/exit', projectRoot);
-      } else {
-        // Nothing to ask politely. Close the window itself.
-        // No port argument: that is for windows running dev servers, not this one.
-        tmuxOps.killWindowAndChildren(`${state.sessionName}:${session.window}`);
-      }
+      stopAgent({ tmuxOps, target, cwd: projectRoot });
     } catch (e) {
       return res.status(500).json({ error: `could not close the session: ${e.message}` });
     }
