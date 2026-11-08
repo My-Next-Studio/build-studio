@@ -89,12 +89,17 @@ const WAITING_MARKERS = [
  *     ◎ /goal active (1h)
  *     ⏵⏵ bypass permissions on · 2 shells · ← for agents
  *
+ * Monitors are listed beside shells, and count the same:
+ *
+ *     ✻ Churned for 21s · done 10:58 AM · 1 shell, 1 monitor still running
+ *     ⏵⏵ auto mode on · 1 shell, 1 monitor · ↓ to manage
+ *
  * Trade-off, stated: an agent that finished but left a dev server running in a
  * background shell is no longer flagged here; the idle timeout catches it later.
  */
 const BACKGROUND_WORK_MARKERS = [
-  /\b\d+\s+shells?\s+still\s+running\b/i,
-  /·\s*\d+\s+shells?\s*·/,
+  /\b\d+\s+(?:shells?|monitors?)(?:,\s*\d+\s+(?:shells?|monitors?))*\s+still\s+running\b/i,
+  /·\s*\d+\s+(?:shells?|monitors?)(?:,\s*\d+\s+(?:shells?|monitors?))*\s*·/,
   /\/goal\s+active\b/i,
 ];
 

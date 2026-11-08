@@ -21,6 +21,26 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-08 — An agent with a background monitor is no longer reported as waiting
+
+### Fixed
+
+- **An agent working in the background was reported as waiting for input.** The
+  stall check recognised background work only when Claude Code's status line
+  listed shells alone. When it listed a monitor too, as in
+  "1 shell, 1 monitor still running", or a monitor alone, the check missed it and
+  flagged an agent at its prompt as waiting. Monitors now count the same as
+  shells. A question the agent asks while background work runs is still flagged.
+
+### Upgrade steps
+
+**In Build Studio** — run `node inject-resources.js --sync-only` in
+`packages/desktop`, then restart the Electron app.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-11-07 — Ending a session that ignores /exit no longer leaves Draft blocked
 
 ### Fixed

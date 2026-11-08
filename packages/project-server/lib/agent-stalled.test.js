@@ -245,6 +245,30 @@ test('no dialog, no question', () => {
     assert.equal(hasBackgroundWork('✻ Worked for 10m 6s\n❯ \n⏵⏵ bypass permissions on'), false);
   });
 
+  // Found by the shadow trial, 2026-11-08: five panes showing a shell and a
+  // monitor had been read as an agent waiting for input.
+  const WAITING_ON_SHELL_AND_MONITOR = [
+    '✻ Churned for 21s · done 10:58 AM · 1 shell, 1 monitor still running',
+    '❯ ',
+    '⏵⏵ auto mode on · 1 shell, 1 monitor · ↓ to manage',
+  ].join('\n');
+
+  test('monitors count as background work, alone or beside shells', () => {
+    assert.ok(hasBackgroundWork(WAITING_ON_SHELL_AND_MONITOR));
+    assert.ok(hasBackgroundWork('✻ Churned for 21s · 1 shell, 1 monitor still running'));
+    assert.ok(hasBackgroundWork('⏵⏵ auto mode on · 2 shells, 3 monitors · ↓ to manage'));
+    assert.ok(hasBackgroundWork('✻ Worked for 3m · 1 monitor still running'));
+    assert.ok(hasBackgroundWork('⏵⏵ auto mode on · 1 monitor · ↓ to manage'));
+    assert.equal(hasBackgroundWork('  Ran 1 shell command, 1 monitor check'), false);
+  });
+
+  test('an agent with a shell and a monitor running is not stalled', () => {
+    const r = classifyStalledAgent({
+      paneText: WAITING_ON_SHELL_AND_MONITOR, idleMs: 60 * 60 * 1000, hasFeedback: false, cli: 'claude',
+    });
+    assert.equal(r, null);
+  });
+
   test('an agent waiting on background shells is not stalled, even with a transcript text', () => {
     const r = classifyStalledAgent({
       paneText: WAITING_ON_SHELLS, idleMs: 30 * 60 * 1000, hasFeedback: false,
