@@ -33,7 +33,7 @@ The result is a product that grows step by step — each increment vision-aligne
 ### Core concepts
 
 - **Functions** — top-level areas of a project: **Project** (vision, backlog, kickoff), **Development** (review + execution workflows), **Operations** (services, CI/CD, runbooks, UI tests).
-- **Workflows** — ordered sequences of steps. Four types: `kickoff` (stand up a new project), `onboarding` (adopt an existing codebase), `review` (iterate a PRD with a review panel), and `execution` (build, test, and merge a PRD).
+- **Workflows** — ordered sequences of steps. The main types: `kickoff` (stand up a new project), `onboarding` (adopt an existing codebase), `review` (iterate a PRD with a review panel), and `execution` (build, test, and merge a PRD). Smaller ones: `bugfix`, `reconcile` (bring work built elsewhere home), and `scaffold` (build the scaffold once a deferred stack decision is made).
 - **Agents & roles** — each step launches one or more agents playing a role (PM, Architect, Frontend Dev, QA, Security, Code Review, …). Each role is defined by a bundled **command file** the agent invokes, which may draw on skills you have installed (see [Roles, commands & skills](#roles-commands--skills)).
 - **Steps & gates** — steps either advance automatically (optionally hands-off via auto-advance) or wait for you at human gates like owner consultations and demo review.
 
@@ -134,7 +134,26 @@ my-app/
 └── (git init + initial commit)
 ```
 
+**Initializing a folder that already has files** — say a repository where you committed the brief to `docs/inputs/` first — is safe:
+
+- A repository with uncommitted changes is refused. Commit or stash first.
+- If init would change an existing file, it lists the changes and asks first (the dialog's **Initialize anyway**, or `--yes` on the CLI). Build Studio's own files (role commands, skills, the PRD template) are replaced. `.gitignore` gains the missing lines. A populated `CLAUDE.md` is moved verbatim into `AGENTS.md` behind a stub.
+- Your vision, project state, decisions, `AGENTS.md` and `ARCHITECTURE.md` are never overwritten.
+- In an existing repository, init commits only the files it wrote, and does not rename your branch. It warns if you are not on `main`.
+
 Then add your inputs to `docs/inputs/` and run the **kickoff** workflow from the hub: the CEO agent synthesizes a vision, the PM scopes the first PRD and backlog, the team reviews, and you sign off.
+
+**Inputs that leave decisions open.** Kickoff respects the timing your inputs give each open decision:
+
+- A decision for when a feature is drafted is written onto that backlog item, and the PM asks you when drafting it.
+- A later-phase decision goes in the vision's Open Questions.
+- A hypothesis stays a hypothesis.
+- If the stack waits on an investigation, the Architect writes ADR-001 as `Status: Pending` instead of choosing. The kickoff then ends without scaffolding or provisioning anything. Once ADR-001 is decided, start a **Scaffold** run from the Project workflow tab: DevOps reports a plan, and nothing is built or provisioned until you approve it.
+
+Kickoff agents get a guide to `docs/inputs/`:
+- An index file (`00 - Read First.md`, `README.md`, `index.md`) is read first.
+- Long files are read in chunks to the end.
+- Files that can't be read as text, such as `.docx`, are reported instead of guessed at.
 
 ### Existing codebase — "↪ Onboard project" or `register`
 
@@ -217,7 +236,7 @@ Role prompts are CLI-neutral (they point at files, e.g. "read your role definiti
 ## CLI commands
 
 ### `build-studio init <path>`
-Scaffold a new project and register it. Options: `--name <name>`, `--port <N>`.
+Scaffold a new project and register it. Options: `--name <name>`, `--port <N>`, `--yes` (go ahead when init would change existing files; it lists them otherwise). A repository with uncommitted changes is refused.
 
 ### `build-studio hub [--dev] [--port N]`
 Start the hub app (default port 18080). `--dev` enables hot reload.
@@ -287,7 +306,7 @@ Key fields in `.build-studio/config.yaml` (not exhaustive — presets set sensib
 | `roles.review` | No | `[]` | Roles launched during review workflow |
 | `roles.execution` | No | `[]` | Roles launched during execution (use worktrees) |
 | `roles.standalone` | No | `[]` | Roles used by specific workflow steps (PM, QA, CEO) |
-| `workflow.kickoff` | No | Standard steps | Kickoff workflow step sequence |
+| `workflow.kickoff` | No | Standard steps | Kickoff workflow step sequence. `workflow.kickoff.remove: [devops_init]` ends every kickoff without a scaffold; a Pending ADR-001 does that for one kickoff without config |
 | `workflow.review` | No | Standard steps | Review workflow step sequence |
 | `workflow.execution` | No | Standard steps | Execution workflow step sequence |
 | `agent_defaults.permission_mode` | No | `auto` | Claude Code permission mode for agent sessions: `auto` (classifier-reviewed, no routine prompts), `bypassPermissions` (skip all checks), `dontAsk` (allowlist-only), `acceptEdits`, `default`, `plan` |

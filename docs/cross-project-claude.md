@@ -62,7 +62,7 @@ structures or use skill-default paths.
 
 | Directory | Purpose | Mutability |
 |-----------|---------|------------|
-| `docs/inputs/` | Input documents provided before kickoff | Read-only reference |
+| `docs/inputs/` | Input documents provided before kickoff. An index file (`00 - Read First.md`, `README.md`, `index.md`) is read first and governs how the rest are read | Read-only reference |
 | `docs/vision.md` | Canonical vision — produced by kickoff | Update via /ceo only |
 | `docs/project-state.md` | Single source of truth for project status: current state, roles, conventions | Replace lines, never append; history goes to the PRDs or `docs/history/`. Warned past 40 KB |
 | `docs/decisions.md` | Key Decisions Log, newest first | Append a row per decision; not required reading |
@@ -94,6 +94,33 @@ structures or use skill-default paths.
   `.claude/commands/<role>.md` file and apply that role's domain and constraints
 - **Transient artifacts go in `tmp/`** — never commit review drafts, logs, or
   intermediate outputs to the repo
+
+## Decisions the inputs defer (ENFORCED)
+
+A project's inputs may give open decisions a timing: settle at kickoff, settle
+when a feature is drafted, settle before a later phase, settle after an
+investigation. Every role respects that timing:
+
+- **Kickoff decisions** are settled at kickoff, or asked in the owner interview.
+- **A feature's decisions** go onto its backlog item, at the end of the body:
+  `**Open question from the kickoff inputs (<date>) → owner:** <question>. Ask when drafting this story.`
+  The owner interview writes the same form (`… from the owner interview …`),
+  and `draft_prd` asks any `Open question from … → owner` when it drafts the
+  story.
+- **Later-phase decisions** go in the Open Questions of `docs/vision.md`, with
+  their phase.
+- **A choice that waits on an investigation or spike** is not made. The ADR is
+  written with `**Status:** Pending` near the top: candidates, evaluation
+  criteria, the investigation, the decision gate, what is blocked.
+- **Hypotheses stay hypotheses**, not decisions.
+- **Reviewers** do not raise a deferred decision as a gap; they do raise one
+  that was settled early.
+
+While ADR-001 (the stack) is `Pending`, nothing is scaffolded or provisioned:
+the kickoff's `devops_init` step is skipped with a note. Once ADR-001 is
+Accepted, the owner starts a **Scaffold** run (Project → Workflow): DevOps
+reports a plan, the owner approves it, and only then does `devops_init` build
+and provision.
 
 ## Owner checks never block (ENFORCED)
 

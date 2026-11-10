@@ -24,6 +24,9 @@ const agentSkills = require('../agent-skills');
 const gateBlocked = require('../gate-blocked');
 const decisionPoints = require('../decision-points');
 const kickoffInterview = require('../kickoff-interview');
+const kickoffPrompts = require('../kickoff-prompts');
+const { inputsGuide } = require('../kickoff-inputs');
+const { stackDecision } = require('../adr-status');
 const learningsArchive = require('../learnings-archive');
 const { scopedCommit } = require('../scoped-commit');
 const qaSuite = require('../qa-suite-run');
@@ -335,6 +338,13 @@ function fixReturnStep(wf) {
 // The active step sequence for a workflow — bugfix uses its own list, everything
 // else uses the resolved execution list. Used by the step→step transitions so a
 // bugfix run advances by ITS dict order, not the (longer) execution order.
+/**
+ * A Scaffold run: DevOps plans the scaffold and provisioning from ADR-001, the
+ * owner approves the plan, then devops_init carries it out. For a project
+ * whose kickoff deferred the stack, so its own devops_init did not run.
+ */
+const SCAFFOLD_STEPS = ['scaffold_plan', 'devops_init'];
+
 function stepSequence(wf, config) {
   if (wf && wf.type === 'bugfix') return bugfixSequence(config);
   if (wf && wf.type === 'reconcile') return reconcileSequence(config, wf);
@@ -343,6 +353,7 @@ function stepSequence(wf, config) {
   // sequence silently fell back to its defaults.
   if (wf && wf.type === 'kickoff') return (config && config.workflow && config.workflow.kickoff) || [];
   if (wf && wf.type === 'onboarding') return (config && config.workflow && config.workflow.onboarding) || [];
+  if (wf && wf.type === 'scaffold') return SCAFFOLD_STEPS.slice();
   // A lean run has its own fixed sequence, whatever the project's preset says.
   if (lean.isLean(wf)) return lean.LEAN_EXECUTION_STEPS.slice();
   return withOwnerChecks((config && config.workflow && config.workflow.execution) || []);
@@ -2784,7 +2795,7 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       ? `Read the PRD at ${prdPath}.`
       : `Read docs/vision.md and any PRDs in docs/prds/.`;
 
-    const companionScopeNote = `\n\n## SCOPE NOTE — pass this to every subagent/perspective\n\nCompanion-spec files (UX-XXX, ADRs, copy specs, anything in docs/ux/, docs/brand/, docs/adrs/, etc.) are written and refined in the dedicated \`companion_specs\` step that runs AFTER this PRD review approves. Reviewers must NOT raise BLOCKING findings about missing or incomplete content inside companion-spec files — those gaps will be closed by the spec owner in the next step. Surface them as NON-BLOCKING action items targeted at the \`companion_specs\` step.`;
+    const companionScopeNote = `\n\n## SCOPE NOTE — pass this to every subagent/perspective\n\nCompanion-spec files (UX-XXX, ADRs, copy specs, anything in docs/ux/, docs/brand/, docs/adrs/, etc.) are written and refined in the dedicated \`companion_specs\` step that runs AFTER this PRD review approves. Reviewers must NOT raise BLOCKING findings about missing or incomplete content inside companion-spec files — those gaps will be closed by the spec owner in the next step. Surface them as NON-BLOCKING action items targeted at the \`companion_specs\` step.${wf.type === 'kickoff' ? `\n\n${kickoffPrompts.DEFERRED_DECISIONS_REVIEW_RULE}` : ''}`;
     let instruction;
     if (mode === 'orchestrator') {
       instruction = `You are a review orchestrator. ${docRef}\n\nLaunch parallel subagents (using the Agent tool) for each reviewer role below. Each subagent should read its role command file, review the document, and write structured feedback to its feedback file.\n\nRoles:\n${roleList}${companionScopeNote}\n\nAfter all subagents complete, report a summary of all feedback via curl:\ncurl -s -X POST http://localhost:${config.port}/api/workflow/feedback -H 'Content-Type: application/json' -d '{"role":"Orchestrator","step":"${wf.currentStep}","feedback":"<combined summary of all role feedback>"}'${closureBlock}`;
@@ -3709,7 +3720,7 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
   function startWorkflow(body, { dryRun = false } = {}) {
     const { type, input, reviewMode: startReviewMode, autoIterateRemaining: startAutoIterate, developerCli: startDeveloperCli, reviewerCli: startReviewerCli, builderRole: startBuilderRole, override: startOverride, preset: startPreset } = body || {};
     if (!type) return reply(400, { error: 'type required' });
-    if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix', 'reconcile'].includes(type)) return reply(400, { error: 'type must be review, execution, kickoff, onboarding, bugfix, or reconcile' });
+    if (!['review', 'execution', 'kickoff', 'onboarding', 'bugfix', 'reconcile', 'scaffold'].includes(type)) return reply(400, { error: 'type must be review, execution, kickoff, onboarding, bugfix, or reconcile' });
     // Which execution chain: lean (the default, or asked for) or full. See lean-execution.js.
     const presetCheck = lean.validatePreset(type, startPreset);
     if (presetCheck.error) return reply(400, { error: presetCheck.error });
@@ -3754,9 +3765,10 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       resolvedBuilderRole = picked.role.role;
       builderRoleSource = 'picker';
     }
-    // PRD-001: onboarding needs no input (the project itself is the input).
-    // kickoff/review/execution still require input as today.
-    if (type !== 'onboarding' && !input) return reply(400, { error: 'input required' });
+    // Onboarding, kickoff and scaffold take no input: the project (its files,
+    // docs/inputs/, its ADRs) is the input. Kickoff used to require one and used
+    // it only as a label.
+    if (!['onboarding', 'kickoff', 'scaffold'].includes(type) && !input) return reply(400, { error: 'input required' });
 
     const existing = state.loadWorkflow();
     if (existing) return reply(409, { error: 'workflow already active', workflow: existing });
@@ -3808,6 +3820,25 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       // knows is accepted, so a malformed sequence still starts somewhere real.
       const kickoffSeq = (config.workflow && config.workflow.kickoff) || [];
       currentStep = kickoffSeq.length && steps[kickoffSeq[0]] ? kickoffSeq[0] : 'ceo_synthesis';
+    } else if (type === 'scaffold') {
+      // Builds what ADR-001 decided: the kickoff's devops_init, run later,
+      // after a plan the owner approves. Only once ADR-001 exists and is no
+      // longer Pending; a kickoff whose inputs deferred the stack ends without
+      // a scaffold, and this is how it gets one.
+      const stack = stackDecision(docsPath);
+      if (!stack.exists) {
+        return reply(400, { error: 'No ADR-001 in docs/adrs/. A Scaffold run builds the stack ADR-001 decides; write and accept it first.' });
+      }
+      if (stack.pending) {
+        return reply(409, { error: `${stack.file} is still Pending. A Scaffold run starts once the stack decision is made and ADR-001 is updated.` });
+      }
+      const { findRole } = require('../config');
+      if (!findRole(config, 'DevOps')) {
+        return reply(400, { error: 'No DevOps role in this project. A Scaffold run is done by DevOps; add the role under roles.standalone in .build-studio/config.yaml.' });
+      }
+      steps = {};
+      for (const k of SCAFFOLD_STEPS) steps[k] = { status: 'pending', agents: [] };
+      currentStep = SCAFFOLD_STEPS[0];
     } else if (type === 'onboarding') {
       // PRD-001 v1: only available when docs/onboarding/inventory.json exists
       // (the button has run) AND docs/vision.md does not (workflow hasn't completed yet).
@@ -4205,7 +4236,7 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
 
     const wf = {
       id: `${type}-${timestamp}`,
-      type, input, prdPath, itemId, currentStep, steps,
+      type, input: input || '', prdPath, itemId, currentStep, steps,
       // Bugfix synthesizes its single-task plan at start (no planning step). Left
       // undefined for other types, which build taskPlan during their planning step.
       ...(taskPlan ? { taskPlan } : {}),
@@ -5021,6 +5052,9 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
     const alwaysManual = ['device_testing', 'owner_consultations', 'owner_interview', OWNER_CHECKS_STEP];
     if (!wf.autoAdvanceSkipDemoReview) alwaysManual.push('demo_review');
     if (alwaysManual.includes(wf.currentStep)) return;
+    // The scaffold plan launches on its own, but only the owner approves it:
+    // approving is what lets devops_init provision.
+    if (wf.currentStep === 'scaffold_plan' && !isPending) return;
 
     // Review steps used below for verdict-based routing (send_to_devs on blocking).
     // coverage_matrix is intentionally NOT here — it is advisory (its findings are
@@ -5414,6 +5448,10 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
       // --- Kickoff workflow transitions ---
       if (wf.type === 'kickoff') {
         return handleKickoffAdvance(wf, effectiveAction, notes, res);
+      }
+
+      if (wf.type === 'scaffold') {
+        return handleScaffoldAdvance(wf, effectiveAction, res);
       }
 
       // --- Review workflow transitions ---
@@ -6090,10 +6128,13 @@ Fix only the issues raised. Commit your changes.`,
     const allDone = step && step.agents && step.agents.length > 0 && step.agents.every(a => a.status === 'done' || a.status === 'error');
     if (!allDone) return;
 
-    // Hard cap: stop auto-iterating after MAX_REVIEW_ROUNDS
+    // Hard cap: stop auto-iterating after MAX_REVIEW_ROUNDS. Recorded on the run
+    // so needs-attention can say why nothing moves: this stop used to reach
+    // only the server log, and the run looked as if it were still iterating.
     if (wf.round >= MAX_REVIEW_ROUNDS) {
       console.log(`[workflow] Auto-iterate: reached max rounds (${MAX_REVIEW_ROUNDS}), stopping. Manual approval required.`);
       wf.autoIterateRemaining = 0;
+      wf.autoIterateCapped = { round: wf.round, step: wf.currentStep, maxRounds: MAX_REVIEW_ROUNDS };
       state.saveWorkflow(wf);
       return;
     }
@@ -6331,13 +6372,16 @@ Fix only the issues raised. Commit your changes.`,
   function handleKickoffAdvance(wf, action, notes, res) {
     const { findRole } = require('../config');
     const advanceKickoff = (current, fallback) => advanceBySequence(wf, res, current, fallback);
+    // Built at launch, so it describes the inputs as they are now (the
+    // interview adds owner-interview.md to the folder mid-kickoff).
+    const guide = () => inputsGuide(path.join(docsPath, 'inputs'));
 
     if (wf.currentStep === 'ceo_synthesis' && wf.steps.ceo_synthesis.status === 'pending') {
       const ceoRole = findRole(config, 'CEO');
       const skill = ceoRole ? ceoRole.skill : 'ceo';
       const agents = [{
         role: 'CEO', window: 'ceo', status: 'pending', reportFeedback: true,
-        instruction: `You are the CEO/Strategist. Read all files in docs/inputs/ and produce docs/vision.md — the canonical vision document for this project. Use the /${skill} skill. Fill in all sections of the vision template. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
+        instruction: kickoffPrompts.ceoSynthesisPrompt({ skill, inputsGuide: guide(), commitRule: COMMIT_ON_CURRENT_BRANCH }),
       }];
       wf.steps.ceo_synthesis = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
       state.saveWorkflow(wf);
@@ -6354,7 +6398,7 @@ Fix only the issues raised. Commit your changes.`,
       const skill = pmRole ? pmRole.skill : 'pm';
       const agents = [{
         role: 'PM', window: 'pm', status: 'pending', reportFeedback: true,
-        instruction: `You are the Product Manager. Read docs/vision.md and docs/inputs/. Produce:\n1. docs/project-state.md — fill in all template sections (roles, workflow, conventions); the backlog goes in docs/backlog-index.md (step 2)\n2. The BACKLOG — use the PRD-004 per-item format, NOT a markdown table. For each planned iteration write a file docs/backlog/<PREFIX>-NNN.md with YAML frontmatter (id, title, type: Feature, status, release, created: null, prd, depends_on: [], cost_actual_usd: null) AND add a matching line "- <PREFIX>-NNN — Title  [Type · Status]" under a "### <Release>" heading between the <!-- BACKLOG-START -->/<!-- BACKLOG-END --> markers in docs/backlog-index.md (every item file MUST have a matching marker line, or it renders as nothing). <PREFIX> = a 2–4 letter uppercase code derived from the project name (e.g. example-graph → EG, example-web → EW), numbered 001+. The first item (the one you draft PRD-001 for) is status Drafted with its prd field set to docs/prds/PRD-001-*.md; the rest are status Backlog. See the /${skill} skill's backlog rules for exact steps.\n3. docs/prds/PRD-001-*.md — the first iteration PRD. Start from docs/prds/TEMPLATE.md — copy it and fill it in.\n\nWhile scoping, check docs/inputs/ for the owner's preference on visual design workflow. THREE options:\n  (a) Pencil-controlled — designer authors .pen files; frontend_dev verifies via heatmap-diff\n  (b) Claude Design — designer iterates in claude.ai/design; exports a handoff bundle to design-system/; frontend_dev invokes the bundle's SKILL skill and recreates from HTML prototypes (no heatmap-diff)\n  (c) Agent-autonomous — no design source artifact; frontend_dev works from PRD + UX spec + brand-guidelines.md alone\n\nIf the input documents don't specify which, flag it in your feedback — the owner needs to decide. Record the decision in project-state.md under Project Conventions, e.g.:\n  "Visual design workflow: Pencil-controlled"\n  "Visual design workflow: Claude Design (bundle at design-system/)"\n  "Visual design workflow: agent-autonomous"\n\nThe execution flow uses this convention to decide whether to include or skip the visual_design step and which verification protocol applies.\n\nUse the /${skill} skill. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
+        instruction: kickoffPrompts.pmScopingPrompt({ skill, inputsGuide: guide(), commitRule: COMMIT_ON_CURRENT_BRANCH }),
       }];
       wf.steps.pm_scoping = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
       state.saveWorkflow(wf);
@@ -6410,7 +6454,7 @@ Fix only the issues raised. Commit your changes.`,
           const agents = reviewRoles.map(r => ({
             role: r.role, window: r.role.toLowerCase().slice(0, 15), status: 'pending',
             feedback: null, reportFeedback: true,
-            instruction: `You are a ${r.role} reviewer. Review docs/vision.md and the PRD in docs/prds/. Provide structured feedback from a ${r.role} perspective. Use your /${r.skill} skill.${ownerNotesHint}\n\n## REVIEW SCOPE RULES\n\n1. **Only review what the document covers.** Do not raise issues about systems or features outside the document's scope.\n2. **Companion specs are OUT OF SCOPE for this review.** Companion-spec files (UX-XXX, ADRs, copy specs, anything in docs/ux/, docs/brand/, docs/adrs/, etc.) are written and refined in the dedicated \`companion_specs\` step that runs AFTER this review approves. Do NOT raise BLOCKING findings about missing or incomplete content inside companion-spec files. Surface those gaps as NON-BLOCKING action items for the \`companion_specs\` step.\n3. **Do not introduce new features or expand scope.** Verify the proposed scope is correct, not expand it.\n4. **After round 2, only raise genuinely new issues.** Confirm prior fixes are resolved — do not re-raise or follow up tangentially.\n5. **Classify findings** as BLOCKING or NON-BLOCKING. Be conservative with BLOCKING.\n6. **If you have no issues, say "APPROVE — no issues found."**\n\nThis is round ${wf.round}.`,
+            instruction: `You are a ${r.role} reviewer. Review docs/vision.md and the PRD in docs/prds/. Provide structured feedback from a ${r.role} perspective. Use your /${r.skill} skill.${ownerNotesHint}\n\n## REVIEW SCOPE RULES\n\n1. **Only review what the document covers.** Do not raise issues about systems or features outside the document's scope.\n2. **Companion specs are OUT OF SCOPE for this review.** Companion-spec files (UX-XXX, ADRs, copy specs, anything in docs/ux/, docs/brand/, docs/adrs/, etc.) are written and refined in the dedicated \`companion_specs\` step that runs AFTER this review approves. Do NOT raise BLOCKING findings about missing or incomplete content inside companion-spec files. Surface those gaps as NON-BLOCKING action items for the \`companion_specs\` step.\n3. **Do not introduce new features or expand scope.** Verify the proposed scope is correct, not expand it.\n4. **After round 2, only raise genuinely new issues.** Confirm prior fixes are resolved — do not re-raise or follow up tangentially.\n5. **Classify findings** as BLOCKING or NON-BLOCKING. Be conservative with BLOCKING.\n6. ${kickoffPrompts.DEFERRED_DECISIONS_REVIEW_RULE}\n7. **If you have no issues, say "APPROVE — no issues found."**\n\nThis is round ${wf.round}.`,
           }));
           launchedAgents = launchWorkflowAgents(wf, agents, { useWorktrees: false });
         } else {
@@ -6446,9 +6490,9 @@ Fix only the issues raised. Commit your changes.`,
         : '';
       const agents = [{
         role: 'PM', window: 'pm-rev', status: 'pending', reportFeedback: true,
-        instruction: `You are the Product Manager. Revise the vision and PRD based on reviewer feedback.\n\nUse the /${skill} skill.${ownerNotesHint}\n\n## Reviewer Feedback (Round ${wf.round})\n\n${roundFeedback}${notes ? `\n\n## Additional Notes from User\n\n${notes}` : ''}\n\nUpdate docs/vision.md, docs/project-state.md, and the PRD as needed. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
+        instruction: `You are the Product Manager. Revise the vision and PRD based on reviewer feedback.\n\nUse the /${skill} skill.${ownerNotesHint}\n\n## Reviewer Feedback (Round ${wf.round})\n\n${roundFeedback}${notes ? `\n\n## Additional Notes from User\n\n${notes}` : ''}\n\nUpdate docs/vision.md, docs/project-state.md, and the PRD as needed.\n\n${kickoffPrompts.DEFERRED_DECISIONS_RULE}\n\nA reviewer may ask you to settle a decision the inputs defer. Keep it open, and say in your feedback which requests you declined for that reason.\n\nCommit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
       }];
-      wf.steps.pm_revision = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
+      wf.steps.pm_revision ={ status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
       state.saveWorkflow(wf);
       return res.json({ workflow: wf });
     }
@@ -6470,23 +6514,7 @@ Fix only the issues raised. Commit your changes.`,
       return res.json({ workflow: wf });
     }
     if (wf.currentStep === 'companion_specs' && wf.steps.companion_specs && wf.steps.companion_specs.status === 'pending') {
-      const { findRole } = require('../config');
-      const specRoles = [
-        { roleName: 'Brand', output: 'docs/brand/', desc: 'brand guidelines, identity, tone, and visual language' },
-        { roleName: 'UX', output: 'docs/ux/', desc: 'UX principles, user flows, and interaction patterns' },
-        { roleName: 'Marketing', output: 'docs/marketing/', desc: 'go-to-market direction and growth approach' },
-        { roleName: 'Architect', output: 'docs/adrs/', desc: 'ADR-001: tech stack and system architecture decisions' },
-        { roleName: 'DevOps', output: 'docs/adrs/', desc: 'ADR-002: CI/CD pipeline and deployment strategy' },
-      ];
-      const agents = [];
-      for (const spec of specRoles) {
-        const role = findRole(config, spec.roleName);
-        if (!role) continue;
-        agents.push({
-          role: spec.roleName, window: spec.roleName.toLowerCase().slice(0, 12), status: 'pending', reportFeedback: true,
-          instruction: `You are the ${spec.roleName}. Read docs/vision.md, docs/project-state.md, and the PRD in docs/prds/.${spec.roleName === 'Architect' ? `\n\nBefore deciding on deployment model, hosting, database, or other infrastructure: check docs/inputs/ for any information about what the owner already uses. Prefer reusing existing infrastructure over introducing new platforms. If the input documents do not mention the owner's current infrastructure, flag this in your feedback — the owner needs to provide this context before you can make well-informed decisions.` : ''}${spec.roleName === 'DevOps' ? `\n\nBefore deciding on CI/CD tooling: check docs/inputs/ for the owner's existing CI/CD setup. GitHub Actions is the default recommendation, but verify this matches the owner's preferences. Also determine whether CI/CD should be set up from the start or deferred while the project runs locally during early iterations. If the input documents don't clarify these points, flag them in your feedback — the owner needs to decide, and the PM needs this to plan which phase includes CI/CD setup.` : ''}\n\nProduce ${spec.desc} in ${spec.output}.\n\nUse the /${role.skill} skill. Create concrete, actionable specs that the team can use immediately when starting the first PRD iteration. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
-        });
-      }
+      const agents = kickoffPrompts.companionSpecAgents({ findRole, config, inputsGuide: guide(), commitRule: COMMIT_ON_CURRENT_BRANCH });
       if (agents.length === 0) {
         wf.steps.companion_specs.status = 'skipped';
         return advanceKickoff('companion_specs', 'devops_init');
@@ -6502,63 +6530,120 @@ Fix only the issues raised. Commit your changes.`,
     }
 
     // --- DevOps Init step ---
+    // Scaffolds and provisions from the ADRs. Not while ADR-001 says the stack
+    // is still Pending: the inputs deferred that choice to an investigation,
+    // and a scaffold would make it. The step then records why it did not run,
+    // and a Scaffold run (type 'scaffold') does the work once ADR-001 is
+    // decided. The check reads the file; no agent judges it.
     if (wf.currentStep === 'devops_init' && wf.steps.devops_init.status === 'pending') {
-      const { findRole } = require('../config');
       const devopsRole = findRole(config, 'DevOps');
       if (!devopsRole) {
-        // No DevOps role configured — skip
         wf.steps.devops_init.status = 'skipped';
-        wf.currentStep = 'completed';
-        writeWorklog(wf);
-        state.saveWorkflow(wf);
-        return res.json({ workflow: wf, completed: true });
+        return advanceKickoff('devops_init', 'completed');
       }
-      // Build features configuration context for DevOps
-      const presetFeatures = config.features || {};
-      const featuresContext = `\n\n## PROJECT FEATURES CONFIGURATION\n\nThe project preset (${config.preset || 'web-app'}) provides default feature flags. Review these and override in \`.build-studio/config.yaml\` if the project's actual tech stack differs from the preset defaults.\n\nCurrent feature defaults from preset:\n- \`playwright_cli: ${presetFeatures.playwright_cli !== false}\` — browser screenshot verification against Pencil designs\n\n**Decision rule for playwright_cli:**\n- Set to \`true\` if the project has a web frontend that runs in a browser (SvelteKit, Next.js, React, Vue, etc.)\n- Set to \`false\` if the project is mobile-only (iOS/Android native), API-only, or has no browser-renderable UI\n\nIf the preset default is wrong for this project, add a \`features:\` section to \`.build-studio/config.yaml\`:\n\`\`\`yaml\nfeatures:\n  playwright_cli: false  # no web frontend to screenshot\n\`\`\`\n\nIf \`playwright_cli\` is \`true\`, ensure \`@playwright/cli\` is installed globally (\`npm install -g @playwright/cli\`).`;
-
+      const stack = stackDecision(docsPath);
+      if (stack.exists && stack.pending) {
+        console.log(`[workflow] devops_init deferred: ${stack.file} is Pending`);
+        wf.steps.devops_init = {
+          status: 'skipped', agents: [],
+          deferred: { reason: 'stack_pending', adr: stack.file },
+          note: `${stack.file} is Pending, so nothing was scaffolded or provisioned. Once it is decided, start a Scaffold run under Project.`,
+        };
+        return advanceKickoff('devops_init', 'completed');
+      }
       const agents = [{
         role: 'DevOps', window: 'devops-init', status: 'pending', reportFeedback: true,
-        instruction: `You are DevOps. Read docs/project-state.md, docs/vision.md, the PRD in docs/prds/, and all ADRs in docs/adrs/.\n\nYour job is to initialize the project scaffold so that Frontend and Backend developers can start from a clean, working base — no duplicate scaffolding, no merge conflicts.\n\nBased on the ADRs and PRD, do what is needed:\n- Initialize the framework (e.g. create-next-app) if not already done\n- Set up deployment target (e.g. vercel link) if applicable\n- Provision storage/database if specified in ADRs\n- Install shared dependencies from ADRs (framework, DB client, CSS, fonts)\n- Create initial config files (tsconfig, eslint, tailwind, postcss, etc.)\n- Run DB migrations/schema if applicable\n- Set up environment variables template (.env.example)\n- In the project's CI workflow, add a step right after dependency install, run from the repo root: \`node scripts/check-docs-budget.mjs --self-test && node scripts/check-docs-budget.mjs\` (the script is already in scripts/; it keeps docs/project-state.md and ARCHITECTURE.md within their limits and fails on a path ARCHITECTURE.md names that doesn't exist)\n- If docs/project-state.md indicates "Visual design: Pencil-controlled", create an initial .pen file for the project using the Pencil MCP tools (open_document with 'new') so it is ready for the visual_design step in execution iterations\n- Commit a clean, building scaffold that passes lint\n\nIf the project is already scaffolded and no infra work is needed, report that and commit nothing.${featuresContext}\n\nUse the /${devopsRole.skill} skill. Commit your changes. ${COMMIT_ON_CURRENT_BRANCH}`,
+        instruction: kickoffPrompts.devopsInitPrompt({ skill: devopsRole.skill, config, commitRule: COMMIT_ON_CURRENT_BRANCH }),
       }];
       wf.steps.devops_init = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
       state.saveWorkflow(wf);
       return res.json({ workflow: wf });
     }
 
-    if (wf.currentStep === 'devops_init' && action === 'approve') {
-      wf.steps.devops_init.status = 'completed';
-      wf.currentStep = 'completed';
-      writeWorklog(wf);
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, completed: true });
+    if (wf.currentStep === 'devops_init' && (action === 'approve' || action === 'skip')) {
+      wf.steps.devops_init.status = action === 'skip' ? 'skipped' : 'completed';
+      return advanceKickoff('devops_init', 'completed');
     }
 
-    if (wf.currentStep === 'devops_init' && action === 'skip') {
-      wf.steps.devops_init.status = 'skipped';
-      wf.currentStep = 'completed';
-      writeWorklog(wf);
-      state.saveWorkflow(wf);
-      return res.json({ workflow: wf, completed: true });
-    }
-
+    // Not sent by the hub or either auto-advance (both approve pm_revision),
+    // so only an API caller reaches it. At the round cap it used to jump to
+    // devops_init, skipping companion_specs and asking no one; it now stops
+    // and says what the owner can do instead.
     if (wf.currentStep === 'pm_revision' && action === 'request_changes') {
+      if (capExceeded({ ...wf, round: (wf.round || 1) + 1 })) {
+        return res.status(409).json({
+          workflow: wf,
+          error: `The kickoff review reached its cap of ${MAX_REVIEW_ROUNDS} rounds. Approve PM Revision to move on to the next step, or raise max_review_rounds in .build-studio/config.yaml for another round.`,
+        });
+      }
       wf.steps.pm_revision.status = 'completed';
       wf.round++;
-
-      // Hard cap
-      if (wf.round > MAX_REVIEW_ROUNDS) {
-        console.log(`[workflow] Kickoff review hard cap reached (${MAX_REVIEW_ROUNDS} rounds). Moving to devops init.`);
-        wf.currentStep = 'devops_init';
-        state.saveWorkflow(wf);
-        return res.json({ workflow: wf, needsAdvance: true, warning: `Review capped at ${MAX_REVIEW_ROUNDS} rounds.` });
-      }
 
       wf.currentStep = 'team_review';
       wf.steps.team_review = { status: 'pending', agents: [] };
       wf.steps.pm_revision = { status: 'pending', agents: [] };
       state.saveWorkflow(wf);
       return res.json({ workflow: wf, needsAdvance: true });
+    }
+
+    return res.status(400).json({ error: `no valid transition for step=${wf.currentStep} action=${action}` });
+  }
+
+  // --- Scaffold workflow ---
+  // scaffold_plan: DevOps reports what it would build and provision, and
+  // changes nothing. The owner approves the plan (or skips, which ends the run
+  // with nothing done). devops_init then carries out that plan and nothing
+  // beyond it. Neither auto-advance approves the plan: it is the owner's.
+  function handleScaffoldAdvance(wf, action, res) {
+    const { findRole } = require('../config');
+    const devopsRole = findRole(config, 'DevOps');
+    const skill = devopsRole ? devopsRole.skill : 'devops';
+    const launch = (stepKey, window, instruction) => {
+      const agents = [{ role: 'DevOps', window, status: 'pending', reportFeedback: true, instruction }];
+      wf.steps[stepKey] = { status: 'running', agents: launchWorkflowAgents(wf, agents, { useWorktrees: false }) };
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf });
+    };
+
+    if (wf.currentStep === 'scaffold_plan') {
+      const step = wf.steps.scaffold_plan || (wf.steps.scaffold_plan = { status: 'pending', agents: [] });
+      if (action === 'skip') {
+        step.status = 'skipped';
+        wf.steps.devops_init = { ...(wf.steps.devops_init || {}), status: 'skipped', agents: [] };
+        return advanceBySequence(wf, res, 'devops_init', 'completed');
+      }
+      if (step.status === 'running' && action === 'launch') return res.json({ workflow: wf });
+      if (step.status === 'pending') {
+        // ADR-001 could have been reopened since the run started.
+        const stack = stackDecision(docsPath);
+        if (!stack.exists || stack.pending) {
+          return res.status(409).json({ workflow: wf, error: `${stack.file || 'ADR-001'} is ${stack.exists ? 'Pending again' : 'missing'}, so there is nothing decided to scaffold. Cancel this run.` });
+        }
+        return launch('scaffold_plan', 'scaffold-plan', kickoffPrompts.scaffoldPlanPrompt({ skill, adrFile: stack.file }));
+      }
+      if (action === 'approve') {
+        const plan = (step.agents || []).map((a) => a.feedback).filter(Boolean).join('\n\n').trim();
+        if (!plan) {
+          return res.status(409).json({ workflow: wf, error: 'DevOps has not reported the scaffold plan yet. Wait for its report, or relaunch the step.' });
+        }
+        step.status = 'completed';
+        wf.approvedScaffoldPlan = plan;
+        return advanceBySequence(wf, res, 'scaffold_plan', 'devops_init');
+      }
+    }
+
+    if (wf.currentStep === 'devops_init') {
+      const step = wf.steps.devops_init || (wf.steps.devops_init = { status: 'pending', agents: [] });
+      if (action === 'approve' || action === 'skip') {
+        step.status = action === 'skip' ? 'skipped' : 'completed';
+        return advanceBySequence(wf, res, 'devops_init', 'completed');
+      }
+      if (step.status === 'running' && action === 'launch') return res.json({ workflow: wf });
+      if (step.status === 'pending') {
+        return launch('devops_init', 'devops-init', kickoffPrompts.devopsInitPrompt({
+          skill, config, commitRule: COMMIT_ON_CURRENT_BRANCH, approvedPlan: wf.approvedScaffoldPlan || null,
+        }));
+      }
     }
 
     return res.status(400).json({ error: `no valid transition for step=${wf.currentStep} action=${action}` });

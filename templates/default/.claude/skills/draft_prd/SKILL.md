@@ -23,8 +23,9 @@ Most "open questions" are already answered. Read, in this order, and stop when
 the story is answered:
 
 1. The backlog item itself — the whole file, including comments and links.
-   **Open questions from the owner interview** (`Open question from the owner interview … → owner`)
-   were deferred to this story on purpose: ask them now, in the story's context.
+   **Open questions deferred to this story** (`Open question from … → owner`,
+   written by the owner interview or from the kickoff inputs) were deferred
+   here on purpose: ask them now, in the story's context.
 2. `docs/decisions.md` — the **Key Decisions Log** (older projects keep it
    as a section of `docs/project-state.md`).
 3. `docs/vision.md` — especially any "explicitly not planned" section.

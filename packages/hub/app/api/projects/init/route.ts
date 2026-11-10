@@ -2,8 +2,16 @@ import { NextResponse } from 'next/server'
 import path from 'path'
 import fs from 'fs'
 
+/**
+ * Initialize a folder as a Build Studio project.
+ *
+ * A folder that already holds files (commonly a repository with the brief in
+ * docs/inputs/) is checked first: a dirty working tree is refused, and if init
+ * would replace, merge or move any existing file, the caller gets the list
+ * (409, needsConfirm) and must send `confirm: true` to go ahead.
+ */
 export async function POST(req: Request) {
-  const { name, dirPath, port } = await req.json()
+  const { name, dirPath, port, confirm } = await req.json()
 
   if (!name || !dirPath) {
     return NextResponse.json({ error: 'name and dirPath required' }, { status: 400 })
@@ -22,16 +30,41 @@ export async function POST(req: Request) {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { registry } = require(/* turbopackIgnore: true */ '@build-studio/shared')
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { scaffoldProject } = require(/* turbopackIgnore: true */ '@build-studio/project-server/lib/scaffold')
+  const { scaffoldProject, planScaffold } = require(/* turbopackIgnore: true */ '@build-studio/project-server/lib/scaffold')
+
+  if (fs.existsSync(targetPath)) {
+    let plan: { existingRepo: boolean; branch: string | null; dirty: string[]; changes: { path: string; action: string; note: string }[] }
+    try {
+      plan = planScaffold(targetPath)
+    } catch (e: unknown) {
+      return NextResponse.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 })
+    }
+    if (plan.dirty.length) {
+      return NextResponse.json({
+        error: `${targetPath} is a git repository with uncommitted changes. Commit or stash them first, so init commits only its own files.`,
+        dirty: plan.dirty.slice(0, 20),
+      }, { status: 409 })
+    }
+    if (plan.changes.length && !confirm) {
+      return NextResponse.json({
+        needsConfirm: true,
+        error: 'Init would change existing files in this folder.',
+        changes: plan.changes,
+        existingRepo: plan.existingRepo,
+        branch: plan.branch,
+      }, { status: 409 })
+    }
+  }
 
   const assignedPort = port || registry.nextAvailablePort()
 
   try {
-    scaffoldProject(targetPath, { name, port: assignedPort })
+    const result = scaffoldProject(targetPath, { name, port: assignedPort })
     registry.add(name, targetPath, assignedPort)
-    return NextResponse.json({ ok: true, name, path: targetPath, port: assignedPort })
+    return NextResponse.json({ ok: true, name, path: targetPath, port: assignedPort, warnings: result?.warnings || [] })
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e)
-    return NextResponse.json({ error: message }, { status: 500 })
+    const code = (e as { code?: string })?.code
+    return NextResponse.json({ error: message }, { status: code === 'DIRTY_TREE' ? 409 : 500 })
   }
 }

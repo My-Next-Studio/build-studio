@@ -37,3 +37,10 @@
 ## Success Metrics (KPIs)
 
 ## Open Questions
+
+<!-- Decisions not settled yet, each with the timing the inputs give it: when a
+feature is drafted (until its backlog item exists), before a later phase, after
+an investigation. A hypothesis to test belongs here too, marked as one. -->
+
+| Question | Timing | Who decides |
+|----------|--------|-------------|

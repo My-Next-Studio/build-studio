@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const { findDraftSessionId } = require('./draft-session-id');
 const { sanitize, launchSession, sessionLive, endSession } = require('./interactive-session');
+const { inputsGuide } = require('./kickoff-inputs');
 
 const STEP = 'owner_interview';
 const WINDOW = 'interview';
@@ -43,7 +44,7 @@ function interviewMarker(projectName) {
  * owner's inputs, or reconstructed from an existing project's files. That is
  * what the agent has to look for assumptions in.
  */
-function interviewPrompt(projectName, mode = 'kickoff') {
+function interviewPrompt(projectName, mode = 'kickoff', inputsGuideText = '') {
   const context = mode === 'onboarding'
     ? `The CEO, Architect and PM have just reconstructed docs/vision.md, the ADRs,
 docs/project-state.md and the backlog from this project's existing files
@@ -64,7 +65,10 @@ This is an INTERACTIVE session. The owner is at the keyboard and will answer.
 ${context}
 then open with what is already answered and where. Write each answer down as it
 is made. Do not commit. When you are done, tell the owner to click
-Finish interview.`;
+Finish interview.${mode === 'onboarding' ? '' : `
+
+Decisions the inputs time for later (when a feature is drafted, a later phase,
+after an investigation) are not interview questions: the skill says where they go.`}${inputsGuideText ? `\n\n${inputsGuideText}` : ''}`;
 }
 
 /**
@@ -74,6 +78,8 @@ Finish interview.`;
  */
 function launchInterview({ config, tmuxOps, prior = null, mode = 'kickoff', findSessionId = findDraftSessionId }) {
   const projectName = config.name || path.basename(config.projectRoot);
+  const docsPath = config.docsPath || path.join(config.projectRoot, 'docs');
+  const guide = mode === 'onboarding' ? '' : inputsGuide(path.join(docsPath, 'inputs'));
   return launchSession({
     config,
     tmuxOps,
@@ -84,7 +90,7 @@ function launchInterview({ config, tmuxOps, prior = null, mode = 'kickoff', find
       sessionName: interviewSessionName(projectName),
       window: WINDOW,
       marker: interviewMarker(projectName),
-      prompt: interviewPrompt(projectName, mode),
+      prompt: interviewPrompt(projectName, mode, guide),
       resumePrompt: 'Continue the owner interview where we left off. Re-read docs/inputs/owner-interview.md and the Key Decisions Log (docs/decisions.md) first, then pick up from the next open topic.',
     },
   });

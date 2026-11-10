@@ -78,11 +78,14 @@ function deriveNeedsAttention(wf) {
   //    running, yet nothing else can start — which reads as "busy" to every
   //    consumer that only checks whether a workflow object exists.
   if (stepKey === 'completed') {
+    // A kickoff whose stack decision is still Pending ends without a scaffold
+    // on purpose; say so, or the owner reads the finished run as "set up".
+    const deferred = wf.steps && wf.steps.devops_init && wf.steps.devops_init.deferred;
     return {
       reason: 'completed_not_finished',
       step: stepKey,
       title: 'Run finished — waiting to be closed',
-      detail: `The ${wf.type || 'workflow'} run for ${wf.input || 'this item'} completed. It still holds the project's workflow slot, so nothing else can start here.`,
+      detail: `The ${wf.type || 'workflow'} run${wf.input ? ` for ${wf.input}` : ''} completed. It still holds the project's workflow slot, so nothing else can start here.${deferred ? `\n\nNothing was scaffolded or provisioned: ${deferred.adr} is Pending. Once the stack is decided and ADR-001 updated, start a Scaffold run under Project.` : ''}`,
       action: 'Click Done on the Workflow tab to close it out.',
     };
   }
@@ -225,6 +228,38 @@ function deriveNeedsAttention(wf) {
 
   // (The alive-but-stuck scan that used to sit here is now rule 2b, above the
   //  dead-step rules it was losing to.)
+
+  // 4b. Auto-iterate ran out of rounds. It stops without moving the step on,
+  //     so the run sits on a finished step, waiting for an approval no one
+  //     knew was needed. Holds only while the run is still where it stopped.
+  const capped = wf.autoIterateCapped;
+  if (capped && capped.step === stepKey && capped.round === wf.round && step && step.status !== 'completed') {
+    const agents = agentsOfStep(wf, stepKey, step);
+    if (agents.length > 0 && agents.every((a) => a.status === 'done' || a.status === 'error')) {
+      return {
+        reason: 'auto_iterate_capped',
+        step: stepKey,
+        title: 'Auto-iterate stopped at the round cap',
+        detail: `Auto-iterate ran ${capped.round} round(s), the cap set by max_review_rounds (${capped.maxRounds}). Nothing more runs on its own.`,
+        action: `Read the round's feedback, then approve ${stepKey} to continue by hand.`,
+      };
+    }
+  }
+
+  // 4c. The Scaffold run's plan is in. Approving it is what lets devops_init
+  //     build and provision, so it waits for the owner whatever auto-advance says.
+  if (stepKey === 'scaffold_plan' && step && step.status !== 'completed') {
+    const agents = agentsOfStep(wf, stepKey, step);
+    if (agents.length > 0 && agents.every((a) => a.status === 'done' || a.status === 'error') && agents.some((a) => a.feedback)) {
+      return {
+        reason: 'human_gate',
+        step: stepKey,
+        title: 'The scaffold plan is waiting for you',
+        detail: 'DevOps has reported what it would build and provision. Nothing has been changed yet.',
+        action: 'Read the plan in the step\'s report, then Approve to carry it out, or Skip to end the run with nothing built.',
+      };
+    }
+  }
 
   // 5. A gate that exists to wait for a person. Not a failure — but the run is
   //    stopped and will stay stopped, which is what a caller needs to know.

@@ -45,6 +45,16 @@ agent**. The assumed ones are your question list. That line is how the owner
 catches an assumption made wrongly, the failure that is otherwise invisible
 until review.
 
+**Decisions the inputs defer are not on the list.** Inputs often give open
+decisions a timing: settle at kickoff, settle when a feature is drafted, settle
+before a later phase, settle after an investigation. Only the kickoff ones are
+interview questions. Say the rest in one line ("Deferred by the inputs: 14
+decisions, to drafting, the pilot or later phases"), check they were recorded
+where they belong (step 3 for a feature's, the vision's Open Questions for a
+later phase's), and do not spend a question on them. If a draft settled one of
+them anyway, that is worth a question: "The backlog settles X, which the brief
+leaves to <timing>. Keep it open?"
+
 ## 2. The filter — project level only
 
 Ask only what shapes the **whole product** or is **expensive to reverse**:
@@ -66,6 +76,8 @@ Do **not** ask about:
 - Copy, naming, tone → `/brand`, `/ux`
 - Anything the documents answered in step 1
 - **Anything that belongs to one story** → step 3
+- **Anything the inputs time for later** (a feature's drafting, a later phase,
+  an investigation) → recorded, not asked (step 1)
 
 ## 3. Defer to the story — do not drop, do not ask now
 
@@ -112,9 +124,14 @@ above it, so the owner sees only the card:
 Follow-ups are welcome: this is a conversation, and "that depends — what would
 it mean for pricing?" deserves an answer before the next topic.
 
-**Cap: about eight questions across the interview.** More means you are asking
-story-level or engineering questions. Stop and move them to step 3 or to open
-questions.
+**Cap: twenty questions across the interview — a ceiling, not a target.** At
+the start of a project, a decision the owner makes is worth more than one an
+agent guessed, so do not stop short of a real project-level question to stay
+brief. But ask only what passes the filter in step 2: most projects need far
+fewer, and a padded interview costs the owner's attention for nothing. Reaching
+the cap means you are asking story-level, engineering or deferred questions;
+stop and move them to step 3 or to open questions. Deferred decisions never
+count toward the twenty.
 
 **No questions is a good outcome.** If the inputs answered everything, say so
 and go to step 6.
@@ -149,6 +166,8 @@ interview** to continue. Do not commit; the workflow does.
 - **Asking before reading.** The most common failure.
 - **A wall of questions.** One at a time.
 - **Asking a story question at kickoff.** It belongs in the item, for drafting.
+- **Asking a question the inputs deferred.** Its timing is the owner's decision
+  already; record it, do not reopen it.
 - **Answering for the owner.** "Not decided yet" is recorded, not filled in.
 - **Recording at the end.** Write each decision as it is made.
 - **Leaving the vision or backlog contradicting an answer.** Fix them in the

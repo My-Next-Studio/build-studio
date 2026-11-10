@@ -11,7 +11,7 @@ function usage() {
 build-studio — Mission control for multi-agent Claude Code workflows
 
 Usage:
-  build-studio init <path> [--port <port>] [--name <name>] [--workspace <ws>]
+  build-studio init <path> [--port <port>] [--name <name>] [--workspace <ws>] [--yes]
   build-studio start [path]
   build-studio hub [--port <port>]
   build-studio register <path> [--workspace <ws>]
@@ -55,6 +55,7 @@ if (command === 'init') {
   let port = null;
   let name = path.basename(targetPath);
   let workspace = null;
+  const yes = args.includes('--yes');
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--port' && args[i + 1]) port = parseInt(args[i + 1]);
     if (args[i] === '--name' && args[i + 1]) name = args[i + 1];
@@ -69,6 +70,25 @@ if (command === 'init') {
     process.exit(1);
   }
 
+  const { scaffoldProject, planScaffold } = require('@build-studio/project-server/lib/scaffold');
+
+  // A folder that already holds files: refuse a dirty repository, and list
+  // what init would replace, merge or move before doing it (needs --yes).
+  if (fs.existsSync(targetPath)) {
+    const plan = planScaffold(targetPath);
+    if (plan.dirty.length) {
+      console.error(`Error: ${targetPath} is a git repository with uncommitted changes. Commit or stash them first, so init commits only its own files.`);
+      for (const line of plan.dirty.slice(0, 20)) console.error(`  ${line}`);
+      process.exit(1);
+    }
+    if (plan.changes.length && !yes) {
+      console.error(`Init would change existing files in ${targetPath}:`);
+      for (const c of plan.changes) console.error(`  ${c.path} — ${c.action}: ${c.note}`);
+      console.error('Everything else is left as it is. Re-run with --yes to go ahead.');
+      process.exit(1);
+    }
+  }
+
   // Collision check
   const existing = registry.findByName(name);
   if (existing) {
@@ -79,9 +99,9 @@ if (command === 'init') {
 
   console.log(`\nScaffolding project at ${targetPath}...\n`);
 
-  const { scaffoldProject } = require('@build-studio/project-server/lib/scaffold');
   try {
-    scaffoldProject(targetPath, { name, port });
+    const result = scaffoldProject(targetPath, { name, port });
+    for (const w of (result && result.warnings) || []) console.warn(`  ⚠ ${w}`);
 
     // Register in hub registry
     registry.add(name, targetPath, port, workspace);

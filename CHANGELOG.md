@@ -21,6 +21,117 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-10 — Kickoff respects decisions the inputs defer; init no longer overwrites an existing folder
+
+### Changed
+
+- **Kickoff no longer settles decisions your inputs leave open.** Every kickoff
+  step now follows the timing the inputs give an open decision:
+  - kickoff decisions are settled, or asked in the owner interview;
+  - a feature's decisions are written onto its backlog item, as
+    `Open question from the kickoff inputs (<date>) → owner: … Ask when drafting this story.`;
+  - later-phase decisions go into the vision's Open Questions, with their phase;
+  - hypotheses stay hypotheses.
+
+  The CEO used to be told to fill in every section of the vision and to "make
+  decisions, don't defer everything". Reviewers now treat a deferred decision
+  as correct, not as a gap. The owner interview no longer spends its questions
+  on deferred decisions. Inputs that give no timing are handled as before.
+- **The Architect no longer picks a stack the inputs say must wait.** When the
+  inputs make the stack depend on an investigation or spike, ADR-001 is written
+  with `Status: Pending`, listing the candidates, evaluation criteria,
+  investigation and decision gate. DevOps writes only the stack-independent
+  parts of ADR-002.
+- **Kickoff does not scaffold or provision while ADR-001 is Pending.**
+  `devops_init` is skipped with a note, and the kickoff ends. With an Accepted
+  ADR-001, or none, `devops_init` runs as before.
+- **Kickoff agents read the inputs by a guide, not "Read all files".** The
+  guide is built from `docs/inputs/` at launch:
+  - an index file (`00 - Read First.md`, `README.md`, `index.md`) is named and
+    read first;
+  - long files are read in chunks, to the last line;
+  - binary files such as `.docx` are listed as unreadable, for agents to report
+    instead of guessing at.
+- **The owner interview may ask up to twenty questions, up from about eight.**
+  At a project's start an owner's answer beats an agent's guess, so the
+  interview no longer stops short of a real project-level question to stay
+  brief. Twenty is a ceiling, not a target: the skill still asks only what
+  shapes the whole product, and most projects need fewer. This applies to
+  onboarding's interview too.
+- **Kickoff needs no input.** The Input field is gone for kickoff, as it was
+  for onboarding. The API no longer requires `input` for `kickoff`.
+
+### Added
+
+- **Scaffold run** (Project → Workflow → `scaffold`): builds the scaffold once
+  ADR-001 is decided, for a project whose kickoff deferred it. DevOps first
+  reports a plan (what it would scaffold, provision, and what it needs from
+  you) and changes nothing. Neither auto-advance approves the plan. Approving
+  it lets `devops_init` carry it out, and nothing beyond it. Starting the run
+  is refused while ADR-001 is missing or Pending.
+- **"Auto-iterate stopped at the round cap"** now shows on the Workflow tab.
+  Auto-iterate used to stop at `max_review_rounds` silently, with only a line
+  in the server log.
+
+### Fixed
+
+- **Init on a folder with files no longer overwrites them.** In a repository
+  where the brief was committed to `docs/inputs/` first, init replaced
+  `.gitignore`, `AGENTS.md`, `CLAUDE.md` and the docs templates without
+  checking. It then committed with `git add -A`, which could commit a file the
+  project's own `.gitignore` had excluded, such as an `.env`, and it renamed
+  the checked-out branch to `main`. Now:
+  - a repository with uncommitted changes is refused;
+  - init lists any existing file it would change and asks first (the dialog's
+    **Initialize anyway**, or `build-studio init --yes`);
+  - the vision, project state, decisions, `AGENTS.md` and `ARCHITECTURE.md`
+    are written only when absent;
+  - `.gitignore` gains the missing lines;
+  - a populated `CLAUDE.md` is moved verbatim into `AGENTS.md` behind a stub;
+  - in an existing repository, init commits only the paths it wrote and leaves
+    the branch alone, warning when it is not `main`.
+- **The kickoff review cap no longer skips companion specs.** An API
+  `request_changes` at the cap jumped straight to `devops_init`. It now refuses,
+  and asks you to approve PM Revision. The hub and both auto-advance paths never
+  sent that action, so the 2026-09-30 known issue ("moves on to DevOps init by
+  itself") could not happen from the app.
+- **`devops_init` follows the kickoff's step sequence** instead of ending the
+  run itself, so a custom sequence with a step after it reaches that step.
+
+### Upgrade steps
+
+**In Build Studio** — hub, project-server and templates changed. Rebuild,
+inject and restart:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+**In each managed project** — nothing required. Role files and skills are
+copied at init, so existing projects keep their copies of `ceo.md`,
+`architect.md`, `devops.md`, `owner_interview` and `draft_prd`. To pick up the
+new wording in a project that will run kickoff again, copy them from
+`templates/default/.claude/`:
+
+```bash
+cp -R templates/default/.claude/skills/owner_interview templates/default/.claude/skills/draft_prd <project>/.claude/skills/
+```
+
+```bash
+cp templates/default/.claude/commands/{ceo,architect,devops}.md <project>/.claude/commands/
+```
+
+### Notes for forks
+
+- A step that builds on the stack must check `stackDecision()`
+  (`lib/adr-status.js`), not an agent's reading of ADR-001.
+- Kickoff prompts live in `lib/kickoff-prompts.js`. Any new kickoff prompt that
+  reads `docs/inputs/` should carry `inputsGuide()` and
+  `DEFERRED_DECISIONS_RULE`.
+
+---
+
 ## 2026-11-08 — An agent with a background monitor is no longer reported as waiting
 
 ### Fixed

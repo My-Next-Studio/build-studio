@@ -4,7 +4,7 @@ export interface FunctionDefinition {
   /** Which views this function provides */
   views: ('overview' | 'workflow')[]
   /** Which workflow types are available in this function */
-  workflowTypes: ('kickoff' | 'onboarding' | 'review' | 'execution' | 'bugfix')[]
+  workflowTypes: ('kickoff' | 'onboarding' | 'scaffold' | 'review' | 'execution' | 'bugfix')[]
   /** Tabs available in overview view (default: ['spec', 'status', 'agents']) */
   tabs?: string[]
   enabledByDefault: boolean
@@ -20,7 +20,7 @@ export const BUILTIN_FUNCTIONS: FunctionDefinition[] = [
     id: 'project',
     label: 'Project',
     views: ['overview', 'workflow'],
-    workflowTypes: ['kickoff', 'onboarding'],
+    workflowTypes: ['kickoff', 'onboarding', 'scaffold'],
     tabs: ['spec', 'status', 'backlog', 'queue', 'reconcile', 'agents', 'model'],
     enabledByDefault: true,
   },

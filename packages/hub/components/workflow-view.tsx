@@ -89,6 +89,8 @@ interface RecoverableAgent {
 interface WorkflowStep {
   status: string
   error?: string
+  /** Why a step did not run, in words (e.g. devops_init deferred while ADR-001 is Pending). */
+  note?: string
   /** Stashed by server-side auto-advance when a gate repeatedly rejects this step
    *  (e.g. qa_tests with no committed tests) — surfaced so a stall is never silent. */
   autoAdvanceError?: string
@@ -158,7 +160,7 @@ interface OverseerState {
 
 interface Workflow {
   id: string
-  type: 'review' | 'execution' | 'kickoff' | 'onboarding' | 'bugfix' | 'reconcile'
+  type: 'review' | 'execution' | 'kickoff' | 'onboarding' | 'bugfix' | 'reconcile' | 'scaffold'
   input: string
   currentStep: string
   round: number
@@ -246,6 +248,13 @@ const WF_STEPS: Record<string, { key: string; name: string; loopHint?: string }[
     { key: 'capture_learnings', name: 'Capture Learnings' },
     { key: 'owner_checks', name: 'Owner Checks' },
   ],
+  // Scaffold: the kickoff's devops_init, run once ADR-001 has decided the
+  // stack (the kickoff skipped it while ADR-001 was Pending). The owner
+  // approves DevOps's plan before anything is built or provisioned.
+  scaffold: [
+    { key: 'scaffold_plan', name: 'Scaffold Plan' },
+    { key: 'devops_init', name: 'DevOps Init' },
+  ],
   // PRD-001 v1: onboarding workflow for existing projects.
   onboarding: [
     { key: 'discovery',          name: 'Discovery' },
@@ -276,7 +285,11 @@ const WORKFLOW_TYPE_TO_FUNCTION: Record<string, string> = {
   execution: 'development',
   bugfix: 'development',
   reconcile: 'project',
+  scaffold: 'project',
 }
+
+/** Run types the project itself is the input to: no input field, nothing to type. */
+const NO_INPUT_TYPES = ['onboarding', 'kickoff', 'scaffold']
 
 export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: autoAdvanceProp, onAutoAdvanceChange }: WorkflowViewProps = {}) {
   const api = useProjectApi()
@@ -518,6 +531,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
     if (!skipDemo) alwaysManual.push('demo_review')
     if (alwaysManual.includes(wf.currentStep)) return
     if (wf.type === 'onboarding' && wf.currentStep === 'team_review') return
+    // The scaffold plan launches on its own; only the owner approves it.
+    if (wf.currentStep === 'scaffold_plan' && !isPending) return
     if (round <= 1 && reviewSteps.includes(wf.currentStep)) return
     // A check that could not run, with nothing else to act on, waits for the
     // owner. The server decides that (needs-attention) and its tick holds too,
@@ -649,12 +664,13 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
   const [startError, setStartError] = useState<string | null>(null)
   const [startCanOverride, setStartCanOverride] = useState(false)
   async function startWorkflow(override?: boolean) {
-    // Onboarding doesn't take a PRD input — the project itself is the input.
-    if (wfType !== 'onboarding' && !input.trim()) return
+    // Onboarding, kickoff and scaffold take no input — the project is the input.
+    const takesInput = !NO_INPUT_TYPES.includes(wfType)
+    if (takesInput && !input.trim()) return
     setStartError(null)
     setStartCanOverride(false)
     const body: Record<string, string | boolean> = { type: wfType }
-    if (wfType !== 'onboarding') body.input = input.trim()
+    if (takesInput) body.input = input.trim()
     if (override) body.override = true
     // Only sent when the owner picked one. Absent means execution[0], which is
     // what every run did before the picker existed.
@@ -877,8 +893,8 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
           </div>
         )}
 
-        {/* Input — onboarding has no PRD/input concept (the project itself IS the input). */}
-        {wfType !== 'onboarding' && (
+        {/* Input — onboarding, kickoff and scaffold have none (the project itself IS the input). */}
+        {!NO_INPUT_TYPES.includes(wfType) && (
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
               Input
@@ -1024,6 +1040,16 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
             Synthesizes vision, ADR-001, project-state, and a baseline PRD from existing files. No input needed — owner sign-off gates the first commit.
           </div>
         )}
+        {wfType === 'kickoff' && (
+          <div style={{ marginBottom: 16, padding: '8px 10px', background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: 4, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+            Turns the files in docs/inputs/ into a vision, backlog, first PRD and specs. No input needed.
+          </div>
+        )}
+        {wfType === 'scaffold' && (
+          <div style={{ marginBottom: 16, padding: '8px 10px', background: 'var(--surface2)', border: '1px dashed var(--border)', borderRadius: 4, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)' }}>
+            Scaffolds the project from ADR-001, once ADR-001 has decided the stack. DevOps reports a plan first; nothing is built or provisioned until you approve it.
+          </div>
+        )}
 
         {/* WHICH LENS PRODUCED THIS CODE.
             Not a single answer: the fix loop derives its own role from the fix
@@ -1098,7 +1124,7 @@ export function WorkflowView({ allowedTypes, onSwitchFunction, autoAdvance: auto
         {/* Start / Cancel */}
         {!wf ? (
           (() => {
-            const canStart = wfType === 'onboarding' || !!input.trim()
+            const canStart = NO_INPUT_TYPES.includes(wfType) || !!input.trim()
             return (
               <>
                 <CompactUsageMeter providers={usageProviders} />
@@ -1704,7 +1730,10 @@ function StepDetail({
   if (activeKey === 'completed') {
     const msg = wf.type === 'execution' ? 'The review branch is ready to merge to main.'
       : wf.type === 'bugfix' ? 'Bug fixed and merged — the fix branch is cleaned up.'
-      : wf.type === 'kickoff' ? 'Kickoff complete — project is ready for PRD iterations.'
+      : wf.type === 'kickoff' ? (wf.steps.devops_init?.note
+        ? `Kickoff complete — project is ready for PRD iterations. ${wf.steps.devops_init.note}`
+        : 'Kickoff complete — project is ready for PRD iterations.')
+      : wf.type === 'scaffold' ? 'Scaffold complete.'
       : 'PRD has been approved.'
     return (
       <div>

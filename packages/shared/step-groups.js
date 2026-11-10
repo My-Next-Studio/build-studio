@@ -64,7 +64,9 @@ const DEFAULT_STEP_GROUPS = [
     key: 'build',
     label: 'Build',
     hint: 'writes code into the repo — implementation, fixes, tests, scaffolding',
-    steps: ['task_execution', 'fix_execution', 'qa_tests', 'devops_init', 'devops_detect'],
+    // scaffold_plan writes nothing, but it is DevOps planning the scaffold
+    // devops_init then builds: one model for both, so the plan fits the build.
+    steps: ['task_execution', 'fix_execution', 'qa_tests', 'devops_init', 'devops_detect', 'scaffold_plan'],
   },
   {
     key: 'review',
