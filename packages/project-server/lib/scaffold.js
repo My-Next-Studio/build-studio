@@ -102,15 +102,49 @@ function missingIgnoreLines(templateDir, targetPath) {
   return gitignoreLines(fs.readFileSync(tpl, 'utf8')).filter((l) => !have.has(l));
 }
 
+/** Every path, relative to the project root, that init may write. */
+function destinationPaths(templateDir) {
+  const rels = ownedFiles(templateDir).map(([, dst]) => dst);
+  rels.push(
+    path.join('.build-studio', 'config.yaml'), path.join('.claude', 'settings.json'),
+    path.join('docs', 'knowledge.yaml'), '.gitignore', 'AGENTS.md', 'CLAUDE.md', 'ARCHITECTURE.md', 'tmp',
+  );
+  for (const f of DOC_TEMPLATES) rels.push(path.join('docs', f));
+  for (const d of KEPT_DIRS) rels.push(path.join(d, '.gitkeep'));
+  for (const c of LEARNING_CATEGORIES) rels.push(path.join('docs', 'learnings', c, '.gitkeep'));
+  return rels;
+}
+
+/**
+ * Symbolic links on the way to anything init writes, relative to the project
+ * root. A cloned repository can carry a `.gitignore` or `.claude/commands`
+ * linked out of the folder; init would then append to or overwrite a file
+ * elsewhere on disk, so it refuses instead.
+ */
+function symlinkedPaths(targetPath, templateDir) {
+  const found = new Set();
+  for (const rel of destinationPaths(templateDir)) {
+    const parts = rel.split(path.sep);
+    for (let i = 1; i <= parts.length; i++) {
+      const prefix = parts.slice(0, i).join(path.sep);
+      let st;
+      try { st = fs.lstatSync(path.join(targetPath, prefix)); } catch (_) { break; } // absent: nothing below it exists
+      if (st.isSymbolicLink()) { found.add(prefix); break; }
+    }
+  }
+  return [...found].sort();
+}
+
 function git(targetPath, args, opts = {}) {
   return execFileSync('git', args, { cwd: targetPath, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], ...opts }).trim();
 }
 
 /**
  * What init would do to a folder that already has files. Writes nothing.
- * @returns {{ existingRepo: boolean, branch: string|null, dirty: string[],
+ * @returns {{ existingRepo: boolean, branch: string|null, dirty: string[], symlinks: string[],
  *             changes: { path: string, action: 'overwrite'|'merge'|'migrate', note: string }[] }}
  *   `changes` lists only existing files init would alter; new files are not listed.
+ *   `symlinks` lists links on the way to a file init writes; init refuses while any exist.
  */
 function planScaffold(targetPath, templateDir = resolveTemplateDir()) {
   const existingRepo = fs.existsSync(path.join(targetPath, '.git'));
@@ -141,7 +175,8 @@ function planScaffold(targetPath, templateDir = resolveTemplateDir()) {
       changes.push({ path: 'CLAUDE.md', action: 'migrate', note: 'content moved verbatim to AGENTS.md; CLAUDE.md becomes a stub that imports it' });
     }
   }
-  return { existingRepo, branch, dirty, changes };
+  const symlinks = fs.existsSync(targetPath) ? symlinkedPaths(targetPath, templateDir) : [];
+  return { existingRepo, branch, dirty, symlinks, changes };
 }
 
 function scaffoldProject(targetPath, options = {}) {
@@ -161,6 +196,13 @@ function scaffoldProject(targetPath, options = {}) {
       err.code = 'DIRTY_TREE';
       throw err;
     }
+  }
+  const symlinks = symlinkedPaths(targetPath, templateDir);
+  if (symlinks.length) {
+    const err = new Error(`Init would write through a symbolic link, possibly outside the folder: ${symlinks.join(', ')}. Replace the link with a real file or folder, or remove it, then run init again.`);
+    err.code = 'SYMLINK';
+    err.paths = symlinks;
+    throw err;
   }
 
   const written = [];

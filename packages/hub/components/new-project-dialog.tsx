@@ -35,7 +35,10 @@ export function NewProjectDialog({ onClose }: { onClose: () => void }) {
     const data = await res.json()
     if (!res.ok) {
       if (data.needsConfirm) setChanges(data.changes || [])
-      else setError(data.dirty?.length ? `${data.error}\n${data.dirty.join('\n')}` : data.error)
+      else {
+        const list: string[] | undefined = data.dirty?.length ? data.dirty : data.symlinks
+        setError(list?.length ? `${data.error}\n${list.join('\n')}` : data.error)
+      }
       setCreating(false)
       return
     }

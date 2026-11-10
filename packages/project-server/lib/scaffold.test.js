@@ -146,6 +146,29 @@ test('a repository with uncommitted changes is refused before anything is writte
   } finally { sb.done(); }
 });
 
+test('a symbolic link on the way to a file init writes is refused before anything is written', () => {
+  const sb = sandbox();
+  try {
+    const dir = existingProject(sb);
+    const outside = path.join(sb.tmp, 'outside');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'rc'), 'keep me\n');
+    fs.rmSync(path.join(dir, '.gitignore'));
+    fs.symlinkSync(path.join(outside, 'rc'), path.join(dir, '.gitignore'));
+    fs.mkdirSync(path.join(dir, '.claude'));
+    fs.symlinkSync(outside, path.join(dir, '.claude', 'commands'));
+    sb.git(dir, 'add', '-A');
+    sb.git(dir, 'commit', '-q', '-m', 'chore: links');
+    const plan = sb.call('planScaffold', dir);
+    assert.deepEqual(plan.symlinks, ['.claude/commands', '.gitignore']);
+    const r = sb.call('scaffoldProject', dir, { name: 'proj' });
+    assert.equal(r.code, 'SYMLINK');
+    assert.equal(fs.readFileSync(path.join(outside, 'rc'), 'utf8'), 'keep me\n');
+    assert.deepEqual(fs.readdirSync(outside), ['rc']);
+    assert.ok(!fs.existsSync(path.join(dir, '.build-studio')));
+  } finally { sb.done(); }
+});
+
 test('a Build Studio file that differs from the template is reported as overwritten', () => {
   const sb = sandbox();
   try {

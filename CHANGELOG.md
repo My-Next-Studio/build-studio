@@ -87,6 +87,9 @@ that move underneath you without your having edited anything.
   - the vision, project state, decisions, `AGENTS.md` and `ARCHITECTURE.md`
     are written only when absent;
   - `.gitignore` gains the missing lines;
+  - a symbolic link on the way to any file init writes (a linked
+    `.gitignore` or `.claude/commands`, say, in a cloned repository) is
+    refused, so init cannot append to or overwrite a file outside the folder;
   - a populated `CLAUDE.md` is moved verbatim into `AGENTS.md` behind a stub;
   - in an existing repository, init commits only the paths it wrote and leaves
     the branch alone, warning when it is not `main`.

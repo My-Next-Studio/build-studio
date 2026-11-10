@@ -81,6 +81,11 @@ if (command === 'init') {
       for (const line of plan.dirty.slice(0, 20)) console.error(`  ${line}`);
       process.exit(1);
     }
+    if (plan.symlinks.length) {
+      console.error('Error: init would write through a symbolic link, possibly outside the folder. Replace each link with a real file or folder, or remove it:');
+      for (const p of plan.symlinks) console.error(`  ${p}`);
+      process.exit(1);
+    }
     if (plan.changes.length && !yes) {
       console.error(`Init would change existing files in ${targetPath}:`);
       for (const c of plan.changes) console.error(`  ${c.path} — ${c.action}: ${c.note}`);
