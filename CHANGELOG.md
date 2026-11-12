@@ -21,9 +21,20 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-11-12 — A hung Obsidian CLI no longer freezes a project-server
+## 2026-11-12 — Two ways a project-server could stop answering mid-run
 
 ### Fixed
+
+- **Stopping a QA dev server could stop the project-server too.** To free a
+  dev server's port, the server sent SIGTERM to every process `lsof` listed on
+  that port, and `lsof` lists processes *connected* to a port as well as the
+  one listening on it. The project-server is one of those whenever it has
+  talked to the dev server, so stopping the dev server between QA rounds, or
+  when a run was cancelled or finished, could stop the project-server as well.
+  It exits on SIGTERM without logging anything, so the symptom is a project
+  whose agents suddenly show as not connected, with nothing in
+  `tmp/.logs/server-*.log` to say why. Only the process listening on the port
+  is stopped now, and never the server itself.
 
 - **A project-server could freeze for hours when a run finished.** At the end
   of a run, and after a release is tagged, the server appends a note to the

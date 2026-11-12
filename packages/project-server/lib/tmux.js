@@ -247,6 +247,32 @@ function killWindowSafely(target, failures) {
   return true;
 }
 
+/**
+ * SIGTERM whatever is LISTENING on `port` — the dev server — and nothing else.
+ *
+ * `lsof -ti :PORT` also lists every process with a CLIENT connection to the
+ * port: a browser, a test runner, or this project-server itself after it has
+ * talked to the dev server over a kept-alive socket. Stopping a dev server that
+ * way could SIGTERM the project-server, which exits on SIGTERM without a word.
+ * So: listeners only, and never our own PID.
+ */
+function killPortListeners(port, { lsof = defaultLsof, kill = process.kill.bind(process), selfPid = process.pid } = {}) {
+  if (!port) return [];
+  const killed = [];
+  for (const pid of lsof(port)) {
+    if (pid === selfPid) continue;
+    try { kill(pid, 'SIGTERM'); killed.push(pid); } catch (_) {}
+  }
+  return killed;
+}
+
+function defaultLsof(port) {
+  try {
+    const r = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: TMUX_TIMEOUT_MS });
+    return (r.stdout || '').split('\n').map((s) => parseInt(s, 10)).filter((n) => n > 0);
+  } catch (_) { return []; }
+}
+
 function createTmuxOps(config) {
   const projectName = config.name;
 
@@ -388,35 +414,14 @@ function createTmuxOps(config) {
   // tmux kill-window only kills the shell; child processes (vite, node, tsx) survive
   // and keep the port bound, preventing the next server from starting.
   function killWindowAndChildren(target, port) {
-    if (port) {
-      try {
-        const result = spawnSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' });
-        const pids = (result.stdout || '').trim();
-        if (pids) {
-          pids.split('\n').filter(Boolean).forEach(pid => {
-            try { process.kill(parseInt(pid), 'SIGTERM'); } catch (_) {}
-          });
-        }
-      } catch (_) {}
-    }
+    if (port) killPortListeners(port);
     if (target) killWindowSafely(target);
   }
 
   // Kill all processes holding the given ports, then kill the tmux session.
   // Use instead of killSession() when dev servers were started in the session.
   function killSessionAndDevPorts(sessionName, devServerPorts) {
-    const ports = Object.values(devServerPorts || {});
-    for (const port of ports) {
-      try {
-        const result = spawnSync('lsof', ['-ti', `:${port}`], { encoding: 'utf8' });
-        const pids = (result.stdout || '').trim();
-        if (pids) {
-          pids.split('\n').filter(Boolean).forEach(pid => {
-            try { process.kill(parseInt(pid), 'SIGTERM'); } catch (_) {}
-          });
-        }
-      } catch (_) {}
-    }
+    for (const port of Object.values(devServerPorts || {})) killPortListeners(port);
     closeSession(sessionName);
   }
 
@@ -651,4 +656,5 @@ function stripAnsi(str) {
 }
 
 module.exports = {
-  renderPipePaneLog, createTmuxOps, stripAnsi, releaseGroupedViews, releaseOrphanViews, closeSession, killWindowSafely };
+  renderPipePaneLog, createTmuxOps, stripAnsi, releaseGroupedViews, releaseOrphanViews, closeSession, killWindowSafely,
+  killPortListeners };
