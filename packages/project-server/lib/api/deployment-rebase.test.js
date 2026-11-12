@@ -15,6 +15,16 @@ const { createDeploymentRouter } = require('./deployment');
 
 let tmp, remote, local, server, baseUrl;
 
+// No background git work in these throwaway repos: newer git starts auto
+// maintenance detached after a fetch, and it went on writing into .git after the
+// test ended. Set in the environment so the router's own git calls inherit it.
+for (const [k, v] of [['maintenance.auto', 'false'], ['gc.auto', '0'], ['fetch.writeCommitGraph', 'false']]) {
+  const i = Number(process.env.GIT_CONFIG_COUNT || 0);
+  process.env[`GIT_CONFIG_KEY_${i}`] = k;
+  process.env[`GIT_CONFIG_VALUE_${i}`] = v;
+  process.env.GIT_CONFIG_COUNT = String(i + 1);
+}
+
 const git = (cwd, args) =>
   execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 
@@ -57,10 +67,15 @@ beforeEach(async () => {
 
 afterEach(() => {
   if (server) server.close();
-  // GET /deployment starts a background `git fetch`, which can still be writing
-  // into .git as the test ends; a single rmSync then fails with ENOTEMPTY (seen
-  // on CI). Retrying outlasts it.
-  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // A background git process can still be writing into .git as the test ends
+  // (seen on CI as ENOTEMPTY, for over five seconds of retries). Auto maintenance
+  // is off in these repos (see above); a temp dir that still will not go is
+  // left for the OS, not reported as a test failure.
+  try {
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (e) {
+    console.warn(`[deployment-rebase.test] could not remove ${tmp}: ${e.code || e.message}`);
+  }
 });
 
 const rebase = () => fetch(`${baseUrl}/api/deployment/rebase`, { method: 'POST' });

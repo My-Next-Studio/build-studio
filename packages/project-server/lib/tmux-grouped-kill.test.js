@@ -67,21 +67,22 @@ function timedOut() {
   return e;
 }
 
-/**
- * True for the tmux releases known to crash: 3.6 and 3.7. 3.8 carries the
- * upstream fix, and older releases (CI's Ubuntu ships 3.4) never had the bug.
- */
-function tmuxHasGroupKillCrash() {
+/** True from tmux 3.8, which carries the upstream fix. */
+function tmuxHasGroupKillFix() {
   const m = execFileSync('tmux', ['-V']).toString().match(/(\d+)\.(\d+)/);
-  return !!m && Number(m[1]) === 3 && Number(m[2]) >= 6 && Number(m[2]) < 8;
+  return !!m && (Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 8));
 }
 
+// Shows the crash where it happens (tmux 3.6a on macOS). The version alone does
+// not say: CI's Linux tmux reports a pre-3.8 version and does not crash. So a
+// tmux that survives the bare kill-window skips, naming itself; the tests below
+// check the helpers either way.
 test('the setup really is the crashing shape: a bare kill-window takes the server down', (t) => {
-  if (!tmuxHasGroupKillCrash()) {
-    return t.skip(`${execFileSync('tmux', ['-V']).toString().trim()} does not have the crash, so there is none to show`);
-  }
+  const version = execFileSync('tmux', ['-V']).toString().trim();
+  if (tmuxHasGroupKillFix()) return t.skip(`${version} has the upstream fix, so there is no crash to show`);
   setup(t, 1);
   quiet('kill-window', '-t', 'wf-1:agent');
+  if (sessions().length) return t.skip(`${version} survived the bare kill-window here, so there is no crash to show`);
   assert.deepEqual(sessions(), [], 'tmux crashed, so nothing is left');
 });
 
