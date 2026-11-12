@@ -21,6 +21,37 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-12 — A hung Obsidian CLI no longer freezes a project-server
+
+### Fixed
+
+- **A project-server could freeze for hours when a run finished.** At the end
+  of a run, and after a release is tagged, the server appends a note to the
+  owner's Obsidian daily note through the `obsidian` CLI. That call blocked the
+  server, and its 5-second timeout only sent SIGTERM, which the CLI can ignore
+  while it waits for an Obsidian app that is not running (after a reboot, say).
+  The server then answered nothing: the hub showed the run stuck at its last
+  agent step, such as Capture Learnings with no output, and no button reached
+  it. The note is now written in the background and the CLI is killed outright
+  at the timeout; a failure is logged and the run carries on.
+
+  To free a server stuck this way without restarting it, kill its `obsidian`
+  child (`pgrep -P <server pid> -l` shows it); the run resumes where it was.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the app, or stop and start each project from the hub.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-11-10 — Kickoff respects decisions the inputs defer; init no longer overwrites an existing folder
 
 ### Changed

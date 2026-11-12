@@ -7,6 +7,7 @@ const { stripAnsi, renderPipePaneLog } = require('../tmux');
 const opencodeTelemetry = require('../opencode-telemetry');
 const codexTelemetry = require('../codex-telemetry');
 const tokenPricing = require('../token-pricing');
+const obsidianWorklog = require('../obsidian-worklog');
 const agentScorecard = require('../agent-scorecard');
 const { transitionFeaturesForPRD, refreshBacklogIndex, readBacklogGroups, BACKLOG_INDEX_FILE, readItem, isValidId, writeItem } = require('../backlog');
 const { deriveNeedsAttention } = require('../needs-attention');
@@ -896,15 +897,9 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
     };
   }
 
-  function obsidianAppend(dailyPath, content, yyyy, mm, dd) {
-    const { execFileSync } = require('child_process');
-    const execOpts = { timeout: 5000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] };
-    const appendResult = execFileSync('obsidian', ['append', `path=${dailyPath}`, `content=${content}`, `vault=${OBSIDIAN_VAULT}`, 'silent'], execOpts);
-    if (appendResult.includes('Error:')) {
-      const frontmatter = `---\\ndate: ${yyyy}-${mm}-${dd}\\n---\\n\\n## Work Log`;
-      execFileSync('obsidian', ['create', `path=${dailyPath}`, `content=${frontmatter}`, `vault=${OBSIDIAN_VAULT}`, 'silent'], execOpts);
-      execFileSync('obsidian', ['append', `path=${dailyPath}`, `content=${content}`, `vault=${OBSIDIAN_VAULT}`, 'silent'], execOpts);
-    }
+  /** Fire-and-forget: never blocks the server, logs its own outcome (lib/obsidian-worklog.js). */
+  function obsidianAppend(dailyPath, content, yyyy, mm, dd, label) {
+    obsidianWorklog.obsidianAppend({ vault: OBSIDIAN_VAULT, dailyPath, content, date: `${yyyy}-${mm}-${dd}`, label });
   }
 
   /**
@@ -977,8 +972,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
       }
 
       const content = `\\n### ${hhmm} — ${projectName}\\n${bullets.map(b => `- ${b}`).join('\\n')}`;
-      obsidianAppend(dailyPath, content, yyyy, mm, dd);
-      console.log(`[workflow] Worklog written to ${OBSIDIAN_VAULT}/${dailyPath} for ${projectName}`);
+      obsidianAppend(dailyPath, content, yyyy, mm, dd, `Worklog for ${projectName}`);
     } catch (e) {
       console.warn(`[workflow] Failed to write worklog: ${e.message}`);
     }
@@ -1106,8 +1100,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
         lines.push(`- ${msg}`);
       }
       const content = lines.join('\\n');
-      obsidianAppend(dailyPath, content, yyyy, mm, dd);
-      console.log(`[workflow] Changelog written to ${OBSIDIAN_VAULT}/${dailyPath} for ${projectName} ${tag || ''}`);
+      obsidianAppend(dailyPath, content, yyyy, mm, dd, `Changelog for ${projectName} ${tag || ''}`.trim());
     } catch (e) {
       console.warn(`[workflow] Failed to write changelog: ${e.message}`);
     }
