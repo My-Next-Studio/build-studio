@@ -57,7 +57,10 @@ beforeEach(async () => {
 
 afterEach(() => {
   if (server) server.close();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  // GET /deployment starts a background `git fetch`, which can still be writing
+  // into .git as the test ends; a single rmSync then fails with ENOTEMPTY (seen
+  // on CI). Retrying outlasts it.
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 const rebase = () => fetch(`${baseUrl}/api/deployment/rebase`, { method: 'POST' });

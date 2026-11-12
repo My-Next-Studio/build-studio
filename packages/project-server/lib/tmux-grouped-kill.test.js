@@ -67,14 +67,19 @@ function timedOut() {
   return e;
 }
 
-/** True from tmux 3.8, which carries the upstream fix. */
-function tmuxHasGroupKillFix() {
+/**
+ * True for the tmux releases known to crash: 3.6 and 3.7. 3.8 carries the
+ * upstream fix, and older releases (CI's Ubuntu ships 3.4) never had the bug.
+ */
+function tmuxHasGroupKillCrash() {
   const m = execFileSync('tmux', ['-V']).toString().match(/(\d+)\.(\d+)/);
-  return !!m && (Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 8));
+  return !!m && Number(m[1]) === 3 && Number(m[2]) >= 6 && Number(m[2]) < 8;
 }
 
 test('the setup really is the crashing shape: a bare kill-window takes the server down', (t) => {
-  if (tmuxHasGroupKillFix()) return t.skip('this tmux has the upstream fix, so there is no crash to show');
+  if (!tmuxHasGroupKillCrash()) {
+    return t.skip(`${execFileSync('tmux', ['-V']).toString().trim()} does not have the crash, so there is none to show`);
+  }
   setup(t, 1);
   quiet('kill-window', '-t', 'wf-1:agent');
   assert.deepEqual(sessions(), [], 'tmux crashed, so nothing is left');

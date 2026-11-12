@@ -129,16 +129,24 @@ test('drafting resolves its CLI through a real group key', () => {
 // Seen on the first real use (FAZ-318, 2026-09-17). bash passes an unmatched
 // glob through literally, which is why the workflow launcher — which runs a
 // script under bash — never hit it.
-test('a bracketed model id survives the shell', () => {
+test('a bracketed model id survives the shell', (t) => {
   const cmd = buildDraftCommand({
     cli: 'claude', modelFlag: ' --model claude-opus-5[1m]', effortFlag: ' --effort medium',
     promptFile: '/tmp/p.txt',
   });
   assert.match(cmd, /--model 'claude-opus-5\[1m\]'/);
   assert.match(cmd, /--effort 'medium'/);
-  // And prove it against the real shell rather than trusting the pattern.
+  // And prove it against the real shell rather than trusting the pattern. zsh
+  // is the shell that failed; a CI runner without it still checks the quoting
+  // above.
   const { execFileSync } = require('node:child_process');
-  const echoed = execFileSync('zsh', ['-c', `echo ${cmd.replace(/ "\$\(cat.*$/, '')}`]).toString();
+  let echoed;
+  try {
+    echoed = execFileSync('zsh', ['-c', `echo ${cmd.replace(/ "\$\(cat.*$/, '')}`]).toString();
+  } catch (e) {
+    if (e.code === 'ENOENT') return t.diagnostic('zsh is not installed; the shell check was skipped');
+    throw e;
+  }
   assert.match(echoed, /claude-opus-5\[1m\]/);
 });
 
