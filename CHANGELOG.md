@@ -21,6 +21,49 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-13 — A run stops the Android emulators it started
+
+### Changed
+
+- **When a run ends, the Android emulators its agents started are stopped.**
+  An agent boots an emulator in the background, and it used to outlive the run:
+  when the run's terminals closed, the emulator kept running with nothing left
+  to stop it. Each one holds about 6 GB of memory. Two left over from earlier
+  runs pushed a 16 GB Mac into 12 GB of swap, which filled the boot disk and
+  slowed the next run's QA to a crawl. Now, when a run completes, finishes or is
+  cancelled, its emulators are shut down, and any still running after 20
+  seconds are killed.
+
+  Only emulators started by that run are touched: each agent's processes carry
+  a `BUILD_STUDIO_RUN_ID` variable, and only emulators carrying the ending
+  run's value are stopped. One you booted yourself, or one started by another
+  project or another run, is left running even if it uses the same virtual
+  device. The next run boots its own emulator, so its first device test takes
+  the emulator's cold-boot time.
+
+### Known issues
+
+- **Emulators started before this update carry no run id and are never
+  stopped.** Shut any leftovers down by hand. `adb devices` lists them, and
+  `adb -s emulator-<port> emu kill` stops one; an `offline` one may need
+  `kill <pid>` on its `qemu-system-*` process instead.
+
+### Upgrade steps
+
+**In Build Studio** — project-server only:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the app, or stop and start each project from the hub. A run
+already in progress keeps its old start scripts, so its emulators are not
+stopped when it ends; runs started after the restart are covered.
+
+**In each managed project** — nothing to do.
+
+---
+
 ## 2026-11-12 — Two ways a project-server could stop answering mid-run
 
 ### Fixed

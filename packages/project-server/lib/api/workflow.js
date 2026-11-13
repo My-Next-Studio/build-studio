@@ -16,6 +16,7 @@ const agentRecovery = require('../agent-recovery');
 const agentRelaunch = require('../agent-relaunch');
 const uitestScope = require('../uitest-scope');
 const devPorts = require('../dev-ports');
+const runEmulators = require('../run-emulators');
 const learningScope = require('../learning-scope');
 const limitBlock = require('../limit-block');
 const memoryGuard = require('../memory-guard');
@@ -849,6 +850,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
     _origSaveWorkflow(wf);
     if (wf.currentStep === 'completed' && wf.sessionName) {
       try { tmuxOps.killSessionAndDevPorts(wf.sessionName, wf.devServerPorts); } catch (_) {}
+      runEmulators.stopRunEmulators(runEmulators.runIdFor(wf.id, projectRoot));
     }
   };
 
@@ -2539,6 +2541,9 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       // that starts the CLI carries them: a resume runs in a fresh shell, and
       // without them a resumed QA agent tested against the defaults again.
       const devUrlEnvLine = devPorts.devUrlEnvLines(wf.devServerPorts, config.dev_commands);
+      // Marks every process the agent starts as this run's, so the Android
+      // emulator it boots can be stopped when the run ends (run-emulators.js).
+      const runIdEnvLine = `export ${runEmulators.RUN_ID_VAR}=${JSON.stringify(runEmulators.runIdFor(wf.id, projectRoot))}\n`;
       // Unset PORT before launching the agent. The Electron hub runs on
       // PORT=18080; that value propagates hub → project-server → tmux server →
       // agent shell. If an agent then starts a project dev server to test its
@@ -2556,7 +2561,7 @@ if ! command -v ${cliBin} >/dev/null 2>&1; then
     if [ -x "$p/${cliBin}" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}${devUrlEnvLine}${goalArmLine}${cliInvocation}
+${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${goalArmLine}${cliInvocation}
 `;
       // Pre-trust project-scoped MCP servers so Claude Code's interactive
       // "New MCP server found in this project" prompt can't stall the agent.
@@ -2585,7 +2590,7 @@ ${unsetKey ? 'unset ANTHROPIC_API_KEY\n' : ''}if ! command -v claude >/dev/null 
     if [ -x "$p/claude" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}${devUrlEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${resumePromptFile}')"
+${simEnvLine}${devUrlEnvLine}${runIdEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${resumePromptFile}')"
 `;
         fs.writeFileSync(path.join(agentCwd, resumeScriptName), resumeScript, { mode: 0o755 });
         agent.cliSessionId = cliSessionId;
@@ -2612,7 +2617,7 @@ if ! command -v codex >/dev/null 2>&1; then
     if [ -x "$p/codex" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat '${limitPromptFile}')"
+${simEnvLine}${devUrlEnvLine}${runIdEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat '${limitPromptFile}')"
 `, { mode: 0o755 });
         agent.limitResumeScript = limitScriptName;
       }
@@ -2982,6 +2987,7 @@ ${simEnvLine}${devUrlEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortF
   // Stop agents without deleting branches — safe for cancel
   function stopWorkflow(wf) {
     if (wf.sessionName) tmuxOps.killSessionAndDevPorts(wf.sessionName, wf.devServerPorts);
+    runEmulators.stopRunEmulators(runEmulators.runIdFor(wf.id, projectRoot));
     // Clean up generated start scripts from project root
     try {
       const files = fs.readdirSync(projectRoot);
