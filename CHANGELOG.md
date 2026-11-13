@@ -21,10 +21,41 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-11-13 — A run stops the Android emulators it started
+## 2026-11-13 — Runs stop their emulators, and test only the platforms they touch
+
+### Added
+
+- **`qa_validation.path_suites`: device test suites routed by path, like CI.**
+  Each entry is `{ name, paths, command }`. A suite runs only when the branch
+  changes a file under one of its `paths`; otherwise the builder and QA skip
+  it. For example, an Android gate that only Android changes should trigger:
+
+  ```yaml
+  qa_validation:
+    path_suites:
+      - name: Android tier-1
+        paths: [android/]
+        command: android/scripts/run-tests.sh
+  ```
+
+  Builders get a command, `node "$BUILD_STUDIO_SUITE_SCOPE" main`, that prints
+  RUN or SKIP per suite for their branch, including uncommitted and untracked
+  files. QA's prompt lists the same verdicts.
 
 ### Changed
 
+- **On an iOS project, a builder no longer has to run the iOS unit tests for a
+  branch that changes nothing the iOS app is built from.** Before, the builder's
+  goal said "every unit test" without exception, so on a project with several
+  apps an Android-only or web-only story ran the whole iOS unit target too. QA
+  already skipped it in that case; the builder now follows the same rule, using
+  the same watched paths (the Xcode project's folder, the folders its project
+  file reaches into, and `qa_validation.native_suite_paths`). A branch that
+  touches any of them still runs the full unit target.
+- **Builders on a project with device suites are told to run them one at a
+  time.** An agent ran the iOS suite and an Android emulator gate in parallel,
+  and the simulator plus emulator pushed a 16 GB Mac into 10 GB of swap with
+  a load average of 158.
 - **When a run ends, the Android emulators its agents started are stopped.**
   An agent boots an emulator in the background, and it used to outlive the run:
   when the run's terminals closed, the emulator kept running with nothing left
@@ -58,9 +89,13 @@ cd packages/desktop && node inject-resources.js --sync-only
 
 Then restart the app, or stop and start each project from the hub. A run
 already in progress keeps its old start scripts, so its emulators are not
-stopped when it ends; runs started after the restart are covered.
+stopped when it ends and its builder keeps the old test goal; runs started
+after the restart are covered.
 
-**In each managed project** — nothing to do.
+**In each managed project** — nothing required. A project with a device suite
+that only some paths should trigger (an Android gate beside an iOS app) can add
+it under `qa_validation.path_suites` in `.build-studio/config.yaml`; until it
+does, that suite keeps running for every branch.
 
 ---
 

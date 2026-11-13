@@ -126,9 +126,9 @@ test('an unreadable claims file reads as empty', () => {
 const SRC = fs.readFileSync(path.join(__dirname, 'api', 'workflow.js'), 'utf8');
 
 test('every script that starts the CLI exports the dev server URLs', () => {
-  assert.match(SRC, /\$\{simEnvLine\}\$\{devUrlEnvLine\}\$\{goalArmLine\}\$\{cliInvocation\}/, 'first launch');
-  assert.match(SRC, /\$\{simEnvLine\}\$\{devUrlEnvLine\}claude --resume /, 'claude resume after a crash or lost session');
-  assert.match(SRC, /\$\{simEnvLine\}\$\{devUrlEnvLine\}codex exec resume/, 'codex resume after a limit');
+  assert.match(SRC, /\$\{simEnvLine\}\$\{devUrlEnvLine\}\$\{runIdEnvLine\}\$\{suiteEnvLine\}\$\{goalArmLine\}\$\{cliInvocation\}/, 'first launch');
+  assert.match(SRC, /\$\{simEnvLine\}\$\{devUrlEnvLine\}\$\{runIdEnvLine\}\$\{suiteEnvLine\}claude --resume /, 'claude resume after a crash or lost session');
+  assert.match(SRC, /\$\{simEnvLine\}\$\{devUrlEnvLine\}\$\{runIdEnvLine\}\$\{suiteEnvLine\}codex exec resume/, 'codex resume after a limit');
 });
 
 test('workflow.js no longer kills a port it did not record', () => {

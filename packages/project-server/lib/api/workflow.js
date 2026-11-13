@@ -17,6 +17,7 @@ const agentRelaunch = require('../agent-relaunch');
 const uitestScope = require('../uitest-scope');
 const devPorts = require('../dev-ports');
 const runEmulators = require('../run-emulators');
+const suiteScope = require('../suite-scope');
 const learningScope = require('../learning-scope');
 const limitBlock = require('../limit-block');
 const memoryGuard = require('../memory-guard');
@@ -199,8 +200,12 @@ function iosDerivedDataGuidance(config, wf) {
  *
  * @returns {{goalClause: string, guidance: string}}
  */
-function builderTestRequirement(config, baseBranch = 'main') {
+function builderTestRequirement(config, baseBranch = 'main', suites = []) {
   const scope = (config && config.qa_validation && config.qa_validation.scope) || 'full';
+  // Device suites (iOS unit tests, qa_validation.path_suites) run only when the
+  // branch touches their paths, as in CI (suite-scope.js).
+  const deviceClause = suiteScope.goalException(suites, baseBranch);
+  const deviceGuidance = suiteScope.builderGuidance(suites, baseBranch);
   // qa_validation.js_scope=changed narrows the JS suite the same way: CI runs
   // all of it, so the builder runs what its branch can affect (js-test-scope.js).
   const jsGuidance = jsTestScope.builderJsScopeGuidance(config, baseBranch);
@@ -209,19 +214,19 @@ function builderTestRequirement(config, baseBranch = 'main') {
     : '';
   if (scope !== 'new-uitests') {
     return {
-      goalClause: `the COMPLETE test suite (including the pre-implementation tests committed before this session started) has been run and passes${jsClause}`,
-      guidance: `- The objective requires the COMPLETE test suite, not a relevant subset. Iterate on targeted tests while implementing, but the final verification run is the full suite.${jsGuidance}`,
+      goalClause: `the COMPLETE test suite (including the pre-implementation tests committed before this session started) has been run and passes${deviceClause}${jsClause}`,
+      guidance: `- The objective requires the COMPLETE test suite, not a relevant subset. Iterate on targeted tests while implementing, but the final verification run is the full suite.${deviceGuidance}${jsGuidance}`,
     };
   }
   const unitTarget = config.qa_validation.unit_test_target || 'the unit-test target';
   return {
     goalClause: 'every unit test (including the pre-implementation tests committed before this session started) and every other non-XCUITest suite has been run in full and passes, and every XCUITest that `node "$BUILD_STUDIO_UITEST_SCOPE"` lists for this branch versus '
-      + `${baseBranch} has been run and passes (the test files it adds in full; in the test files it modifies, the tests that reach the changed code); the full XCUITest regression suite is NOT required (this project sets qa_validation.scope=new-uitests, so it runs periodically and before a release)${jsClause}`,
+      + `${baseBranch} has been run and passes (the test files it adds in full; in the test files it modifies, the tests that reach the changed code); the full XCUITest regression suite is NOT required (this project sets qa_validation.scope=new-uitests, so it runs periodically and before a release)${deviceClause}${jsClause}`,
     // The list is computed by uitest-scope.js, the same code QA's run uses, so
     // the builder and QA cover the same tests. A modified file runs only the
     // tests that reach its changed code: one copy edit in a helper had pulled a
     // 44-minute class into both runs (fazon FAZ-460, 2026-10-25).
-    guidance: `- The final verification run is every unit test (${unitTarget}) and every other non-XCUITest suite in full, plus ONLY the XCUITests this branch adds or modifies. Do NOT run the full XCUITest regression suite: this project runs it periodically and before a release, not per task. Get the XCUITests to run with\n  \`node "$BUILD_STUDIO_UITEST_SCOPE" ${baseBranch}\`\n  It prints one \`-only-testing:\` flag per line, and on stderr why: a test file the branch adds runs in full; in a test file it modifies, only the tests that reach the changed code run (a test whose code did not change is left to the regression run, like an unchanged class). Pass every line to xcodebuild exactly as printed, and run the command again after your last change to a UI test file, since the list follows your edits. QA runs the same list. If it prints nothing, no XCUITests are required. Only if \`$BUILD_STUDIO_UITEST_SCOPE\` is unset: list the files with \`git diff --name-only --diff-filter=AM ${baseBranch}...HEAD -- '*UITests/*.swift'\` and pass every XCTestCase subclass they declare as \`-only-testing:<UITestTarget>/<Class>\` (a shared support file declares none and adds nothing).${jsGuidance}`,
+    guidance: `- The final verification run is every unit test (${unitTarget}) and every other non-XCUITest suite in full, plus ONLY the XCUITests this branch adds or modifies. Do NOT run the full XCUITest regression suite: this project runs it periodically and before a release, not per task. Get the XCUITests to run with\n  \`node "$BUILD_STUDIO_UITEST_SCOPE" ${baseBranch}\`\n  It prints one \`-only-testing:\` flag per line, and on stderr why: a test file the branch adds runs in full; in a test file it modifies, only the tests that reach the changed code run (a test whose code did not change is left to the regression run, like an unchanged class). Pass every line to xcodebuild exactly as printed, and run the command again after your last change to a UI test file, since the list follows your edits. QA runs the same list. If it prints nothing, no XCUITests are required. Only if \`$BUILD_STUDIO_UITEST_SCOPE\` is unset: list the files with \`git diff --name-only --diff-filter=AM ${baseBranch}...HEAD -- '*UITests/*.swift'\` and pass every XCTestCase subclass they declare as \`-only-testing:<UITestTarget>/<Class>\` (a shared support file declares none and adds nothing).${deviceGuidance}${jsGuidance}`,
   };
 }
 
@@ -2544,6 +2549,9 @@ ${EFFICIENCY_INSTRUCTIONS}`,
       // Marks every process the agent starts as this run's, so the Android
       // emulator it boots can be stopped when the run ends (run-emulators.js).
       const runIdEnvLine = `export ${runEmulators.RUN_ID_VAR}=${JSON.stringify(runEmulators.runIdFor(wf.id, projectRoot))}\n`;
+      // Which device suites the branch must run (suite-scope.js). Empty for a
+      // project without any.
+      const suiteEnvLine = suiteScope.envLines(suiteScope.deviceSuites(config, projectRoot), suiteScope.CLI_PATH);
       // Unset PORT before launching the agent. The Electron hub runs on
       // PORT=18080; that value propagates hub → project-server → tmux server →
       // agent shell. If an agent then starts a project dev server to test its
@@ -2561,7 +2569,7 @@ if ! command -v ${cliBin} >/dev/null 2>&1; then
     if [ -x "$p/${cliBin}" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${goalArmLine}${cliInvocation}
+${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}${goalArmLine}${cliInvocation}
 `;
       // Pre-trust project-scoped MCP servers so Claude Code's interactive
       // "New MCP server found in this project" prompt can't stall the agent.
@@ -2590,7 +2598,7 @@ ${unsetKey ? 'unset ANTHROPIC_API_KEY\n' : ''}if ! command -v claude >/dev/null 
     if [ -x "$p/claude" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}${devUrlEnvLine}${runIdEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${resumePromptFile}')"
+${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}claude --resume ${cliSessionId}${dangerFlag}${modelFlag}${effortFlag} "$(cat '${resumePromptFile}')"
 `;
         fs.writeFileSync(path.join(agentCwd, resumeScriptName), resumeScript, { mode: 0o755 });
         agent.cliSessionId = cliSessionId;
@@ -2617,7 +2625,7 @@ if ! command -v codex >/dev/null 2>&1; then
     if [ -x "$p/codex" ]; then PATH="$p:$PATH"; break; fi
   done
 fi
-${simEnvLine}${devUrlEnvLine}${runIdEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat '${limitPromptFile}')"
+${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${dangerFlag}${modelFlag}${effortFlag} "$1" "$(cat '${limitPromptFile}')"
 `, { mode: 0o755 });
         agent.limitResumeScript = limitScriptName;
       }
@@ -5651,7 +5659,7 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}codex exec resume${dangerFlag}${mode
     const useGoalHarness = (config.builder_strategy || 'role') === 'goal'
       && wf.taskPlan && wf.taskPlan.monolithic
       && resolveStepLaunchSettings('task_execution', wf, config.cli, config.step_groups).cli === 'claude';
-    const testRequirement = builderTestRequirement(config, wf.defaultBranch || 'main');
+    const testRequirement = builderTestRequirement(config, wf.defaultBranch || 'main', suiteScope.deviceSuites(config, projectRoot));
     const goalCondition = useGoalHarness
       ? `Every acceptance criterion of the PRD at ${prdPath} is implemented; ${testRequirement.goalClause}; all work is committed on the current branch; and the feedback POST from the prompt file has been sent successfully, including a per-AC evidence table.`
       : null;
@@ -8917,6 +8925,23 @@ Report honestly. Note: this step does NOT block — even Approved: no advances t
       }
       const jsScopeSection = jsTestScope.jsScopeSection(config, { projectRoot, changedFiles: jsScopeChanged, baseBranch: wf.defaultBranch || 'main' });
 
+      // qa_validation.path_suites: a device suite (the Android gate) runs only
+      // when the branch touches its paths, as for the builder (suite-scope.js).
+      // The iOS suite is not listed here: QA already decides that one itself
+      // (nativeSuiteRelevance, below), by the same rule.
+      const pathSuites = suiteScope.deviceSuites({ qa_validation: config.qa_validation }, projectRoot);
+      let deviceSuitesSection = '';
+      if (pathSuites.length) {
+        let suiteChanged = null;
+        try {
+          suiteChanged = require('child_process').execFileSync('git', ['diff', '--name-only', `${wf.defaultBranch || 'main'}...${wf.branch || 'HEAD'}`], { cwd: projectRoot, encoding: 'utf8' })
+            .split('\n').map((l) => l.trim()).filter(Boolean);
+        } catch (_) { suiteChanged = null; }
+        const results = suiteScope.classifySuites(pathSuites, suiteChanged);
+        for (const r of results) console.log(`[qa-suite] ${suiteScope.formatLine(r)}`);
+        deviceSuitesSection = suiteScope.qaSection(results);
+      }
+
       const testFileList2 = testFiles2.length > 0
         ? `\n\n## TEST FILES TO RUN\nThese unit test files were written by the QA step for this PRD:\n${testFiles2.map(f => `- ${f}`).join('\n')}\n\nRun these FIRST. ${jsScopeSection ? 'Then run the scoped JS tests in QA SCOPE — CHANGED JS TESTS ONLY below, not the whole suite.' : 'If they all pass, run the broader unit test suite (vitest/jest) to check for regressions.'}${e2eAlreadyRan ? '' : e2eInstruction}`
         : '';
@@ -9223,7 +9248,7 @@ xcodebuild test \\\\
 You are QA. **Your job is to RUN the test suite and report test outcomes — nothing else.**`;
       const qaAgent = [{
         role: 'QA', window: 'qa-validate', status: 'pending', reportFeedback: true,
-        instruction: `${qaHeader}\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** ${qaUnchanged ? 'This round re-runs only the checks behind the open findings (see RE-VALIDATION above); run those, and carry the rest forward as that section says.' : 'If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.'}\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${awaitingOwner.AWAITING_OWNER_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}${jsScopeSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: ${jsScopeSection ? 'the scoped commands in QA SCOPE — CHANGED JS TESTS ONLY above, NOT \`npm test\`. ' : "the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. "}${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
+        instruction: `${qaHeader}\n\nPRD path: ${wf.prdPath}\nUse the /${skill} skill.${browserSkillRef2}${testFileList2}${e2eAlreadyRan ? e2eInstruction : ''}${qaRoundContext2}\n\n## DO NOT DO THESE THINGS\n\n- **Do NOT review companion-spec methodology or quality.** That is a team_review concern. Your feedback must contain test results (e.g. \`N passed\`, \`M failed\`), not spec critique. The approval gate REJECTS feedback that lacks recognizable test output.\n- **Do NOT skip running tests in favor of static review.** ${qaUnchanged ? 'This round re-runs only the checks behind the open findings (see RE-VALIDATION above); run those, and carry the rest forward as that section says.' : 'If you cannot run the test command (missing toolchain, broken environment), report the exact failure verbatim and stop — do not substitute a spec review for missing test output.'}\n- **Do NOT pass \`-resultBundlePath\` to xcodebuild.** It routes output to the .xcresult bundle instead of stdout, making the test counts invisible to you and to the approval gate. Default stdout reporting is what the gate parses.${gateBlocked.GATE_BLOCKED_INSTRUCTIONS}${awaitingOwner.AWAITING_OWNER_INSTRUCTIONS}${devServerSection}${preTestSection}${iosTestingSection}${qaScopeSection}${jsScopeSection}${deviceSuitesSection}\n\n## VALIDATION STEPS — RUN IN ORDER\n\n**Do NOT read companion-spec files (docs/qa/*.md, docs/adrs/*.md, docs/ux/*.md, etc.) at all in this step.** They were already validated in the companion_specs step before execution started. Reading them is what causes you to drift into methodology review instead of running tests. If you find yourself opening a spec file, STOP and run tests instead.\n\n1. **Run the test suite FIRST.** Use the project's native test command:\n   - JS/TS projects: ${jsScopeSection ? 'the scoped commands in QA SCOPE — CHANGED JS TESTS ONLY above, NOT \`npm test\`. ' : "the project's own scripts in \`package.json\` (\`npm test\`, and any \`test:e2e\`/\`e2e\` script), in the package that has them. "}${playwrightConfigs.length ? `Playwright is configured (${playwrightConfigs.join(', ')}): run it for E2E with that config.` : 'This project has **no Playwright config**: do NOT run \\`npx playwright test\\`. Browser tests, if any, run through the scripts above. A runner the project does not use is not a check that could not run.'}\n   - iOS/Swift projects: \`xcodebuild test -scheme <SchemeName> -destination 'platform=iOS Simulator,name=iPhone 15'\` (or the equivalent for the project's scheme)\n   - Android/Kotlin projects: \`./gradlew test\` (unit) and \`./gradlew connectedAndroidTest\` (instrumented)\n2. **Report ALL test counts** in the format the approval gate expects: include at least one of \`**Tests passed:** N/M\`, \`N passed\`, \`N failed\`, or the native runner's "Executed N tests, with M failures" line. Without this, the gate will reject your feedback.\n3. ${e2eAlreadyRan ? 'E2E tests were already run during task execution (see results above) — skip unless re-run is needed' : 'Run any E2E/Playwright .spec.* files written for this PRD'}\n${visualSmokeSection2}\n\n## TEST DATA CLEANUP — MANDATORY\nAfter ALL tests finish (pass or fail), delete every test record created during this run.\n- Test users (emails matching \`test-*@example.com\` or \`preflight@example.com\`)\n- Test events, sessions, and any other DB rows created by tests\n- Use the project's delete endpoints or direct DB queries\n- Verify cleanup: query the DB and confirm test records are gone\n- Report cleanup status in your feedback (e.g., "Cleaned up 12 test users, 3 test events")\nDo NOT leave test data behind — it accumulates across runs and pollutes the database.\n\n## IMPORTANT\n- If tests fail, report the EXACT failure output — do not summarize\n- Distinguish between PRD test failures (blocking) and pre-existing failures (non-blocking)\n- Do NOT fix code — only report what fails${qaVisualSection2}`,
       }];
 
       // Launch the agent with the suite result appended. Shared by the direct

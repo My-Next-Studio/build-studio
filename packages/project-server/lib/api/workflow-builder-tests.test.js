@@ -61,9 +61,34 @@ test('the base branch and a configured unit-test target reach the text', () => {
 
 test('the builder goal is built from the helper, not a second hand-written copy', () => {
   const src = fs.readFileSync(path.join(__dirname, 'workflow.js'), 'utf8');
-  assert.match(src, /const testRequirement = builderTestRequirement\(config, wf\.defaultBranch \|\| 'main'\);/);
+  assert.match(src, /const testRequirement = builderTestRequirement\(config, wf\.defaultBranch \|\| 'main', suiteScope\.deviceSuites\(config, projectRoot\)\);/);
   assert.match(src, /is implemented; \$\{testRequirement\.goalClause\};/);
   assert.match(src, /\$\{testRequirement\.guidance\}/);
   // No hand-written copy of the full-suite goal outside the helper.
   assert.doesNotMatch(src.slice(src.indexOf("const goalCondition")), /the COMPLETE test suite \(including/);
+});
+
+test('device suites: the goal excepts the ones the scope command skips, in both scopes', () => {
+  const suites = [{ name: 'iOS unit tests (DeskRhythmTests)', command: null, paths: ['ios/'] },
+    { name: 'Android tier-1', command: 'android/scripts/run-deskrhythm-tests.sh', paths: ['android/'] }];
+  for (const config of [{ qa_validation: { scope: 'new-uitests', unit_test_target: 'DeskRhythmTests' } }, {}]) {
+    const r = builderTestRequirement(config, 'main', suites);
+    assert.match(r.goalClause, /except the device suites that `node "\$BUILD_STUDIO_SUITE_SCOPE" main` marks SKIP for this branch/);
+    assert.match(r.guidance, /iOS unit tests \(DeskRhythmTests\); Android tier-1/);
+    assert.match(r.guidance, /Run every suite it marks RUN in full/);
+    assert.match(r.guidance, /one at a time, never in parallel/);
+  }
+});
+
+test('no device suites, no scope command in the text', () => {
+  for (const config of [{}, { qa_validation: { scope: 'new-uitests' } }]) {
+    const r = builderTestRequirement(config, 'main');
+    assert.doesNotMatch(r.goalClause + r.guidance, /BUILD_STUDIO_SUITE_SCOPE/);
+  }
+});
+
+test('every start script exports the suite scope beside the run id', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'workflow.js'), 'utf8');
+  assert.equal((src.match(/\$\{runIdEnvLine\}\$\{suiteEnvLine\}/g) || []).length, 3);
+  assert.match(src, /const suiteEnvLine = suiteScope\.envLines\(suiteScope\.deviceSuites\(config, projectRoot\), suiteScope\.CLI_PATH\);/);
 });

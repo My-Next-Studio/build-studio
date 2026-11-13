@@ -329,6 +329,8 @@ Key fields in `.build-studio/config.yaml` (not exhaustive — presets set sensib
 | `qa_validation.scope` | No | `full` | `new-uitests` runs only this branch's new and changed XCUITests: a new test file in full, and in a modified one only the tests that reach the changed code (the whole class when that cannot be traced). A branch that changes only test code also skips the rest of the unit target |
 | `qa_validation.js_scope` | No | `full` | `changed` runs only the JS/TS test files the branch adds or modifies plus the tests related to its changed sources (`vitest related` / `jest --findRelatedTests`); a manifest, lockfile or test-config change still runs the suite in full. Use when CI runs the full suite |
 | `qa_validation.unit_test_target` | No | `<Scheme>Tests` | (iOS) unit-test target for scoped QA runs |
+| `qa_validation.native_suite_paths` | No | `[]` | (iOS) extra paths whose changes make a branch run the iOS suite, beyond the Xcode project's own folders |
+| `qa_validation.path_suites` | No | `[]` | Device suites routed by path, like CI: `[{ name, paths, command }]`. A suite runs only when the branch changes a file under one of its `paths`; builders check with `node "$BUILD_STUDIO_SUITE_SCOPE" main`, and QA's prompt lists the same verdicts |
 | `qa_validation.honor_clean_approval` | No | `false` | Strict gate accepts the QA agent's certified-clean verdict |
 
 Each role entry:
