@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync, execFileSync } = require('child_process');
+const { gitMergeNoFf } = require('./git-merge');
 
 // Commands carrying an interpolated value go through `execGit` (argv form, no
 // shell). `exec` — the shell form — is kept only for fixed command strings.
@@ -150,8 +151,10 @@ function createGitOps(config) {
       try { execGit(['branch', force ? '-D' : '-d', branch]); } catch (_) {}
     },
 
+    // Async: a project's pre-merge-commit hook runs inside the merge and can
+    // take minutes (see git-merge.js). Callers must await it.
     mergeBranch(branch, cwd, message) {
-      execFileSync('git', ['merge', branch, '--no-ff', '-m', message], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      return gitMergeNoFf(cwd, branch, message);
     },
 
     abortMerge(cwd) {

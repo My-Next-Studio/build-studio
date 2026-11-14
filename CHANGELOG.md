@@ -21,6 +21,61 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-14 — Merges no longer freeze a project while its merge hook runs
+
+### Fixed
+
+- **A project with a `pre-merge-commit` hook no longer freezes its dashboard
+  while a run merges.** Git runs that hook inside every merge Build Studio
+  makes (Merge to Main, the review-branch merge after task execution, and the
+  Execution tab's per-worker merge). The project-server ran those merges
+  synchronously, so a hook that runs a full check (one takes about 35 s) froze
+  every API call, poll and live update for that project until it finished. The
+  merges now run in the background and the project stays responsive.
+
+### Changed
+
+- **Merge to Main shows as running while it runs, and refuses a second
+  request.** A second merge, retry or cancel for the same workflow while one
+  is in progress gets a 409 ("already running") instead of racing it; before,
+  the second request's failure path could abort the first merge. Auto-advance
+  waits for the running merge rather than firing another one.
+- **A merge now times out after 30 minutes.** Git is killed, the merge is
+  aborted as for any other failure, and the step error says the hook may be
+  hanging. Before, a hung hook hung the project-server.
+- **If the project-server stops mid-merge, the step comes back as a merge
+  error** naming the interruption, with the usual Retry Merge button, instead
+  of an un-actionable "running" step.
+- Failure handling is otherwise unchanged: the merge is aborted, the checkout
+  returns to the default branch, and the step error includes the hook's output
+  (git prints a hook's output on stderr, which the error carries).
+
+### Upgrade steps
+
+**In Build Studio** — sync the project-server into the app and restart it:
+
+```bash
+cd packages/desktop && node inject-resources.js --sync-only
+```
+
+Then restart the Electron app (or stop/start each project-server from the hub).
+
+**In each managed project** — nothing to do.
+
+### Known issues
+
+- Other git calls in the merge step still run synchronously: the docs
+  auto-commit before the merge (a `pre-commit` hook runs there), and the
+  release tag and push after it (a `pre-push` hook runs there). A project with
+  a slow hook on either still stalls its project-server for that hook's run.
+
+### Notes for forks
+
+- `gitOps.mergeBranch()` now returns a Promise, and so does `mergeDevBranches`.
+  Await them; a caller that does not will carry on before the merge happens.
+
+---
+
 ## 2026-11-13 — Runs stop their emulators, and test only the platforms they touch
 
 ### Added

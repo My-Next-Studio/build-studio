@@ -38,6 +38,7 @@ const { resolveScreenshotCommand, qaScreenshotInstructions, builderScreenshotIns
 const { killWindowSafely } = require('../tmux');
 const { extractOwnerAction } = require('../owner-action');
 const { suggestBuilderRole, parseBuilderRoleHint } = require('../builder-role-hint');
+const { gitMergeNoFf, createMergeLock } = require('../git-merge');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
@@ -709,6 +710,42 @@ function collectMissingAcArtifacts(acFb, { projectRoot, strict = false, exists, 
 function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   const router = express.Router();
   const { docsPath, projectRoot, worktreesPath, logsPath } = config;
+
+  // ── Merges run async ──────────────────────────────────────────────────────
+  // A managed project's pre-merge-commit hook runs inside `git merge` and can
+  // take minutes (a full local check), so merges are awaited child processes
+  // (git-merge.js) rather than execFileSync, which blocked every API call,
+  // poll and WebSocket of this project for the hook's whole run.
+  //
+  // Yielding the event loop brings two things the sync version never had to
+  // handle. A second advance for the same workflow can now arrive mid-merge
+  // (a double click, the hub's or the server's auto-advance), and its failure
+  // path would `git merge --abort` the first one's merge: hence the lock, and
+  // the step's `running` status, which both auto-advance loops skip. And other
+  // requests can save the workflow while the merge runs, so the handler
+  // re-reads it afterwards instead of saving its stale copy over theirs.
+  const mergeLock = createMergeLock();
+
+  // A step left `running` by a server that stopped mid-merge has no live merge
+  // behind it (the lock is in-memory) and no button in the hub. Surface it as a
+  // merge error, which the hub offers Retry Merge for.
+  try {
+    const wf0 = state.loadWorkflow();
+    const st = wf0 && wf0.steps && wf0.steps[wf0.currentStep];
+    if (st && st.status === 'running' && (wf0.currentStep === 'merge_to_main' || wf0.currentStep === 'merge_for_review')) {
+      wf0.steps[wf0.currentStep] = { ...st, status: 'error', error: `The project-server stopped while this merge was running (started ${st.startedAt || 'at an unknown time'}). Check the checkout with git status (a merge may be half-done: git merge --abort undoes it), then retry the merge.` };
+      state.saveWorkflow(wf0);
+    }
+  } catch (e) { console.error('[workflow] merge-state recovery check failed:', e.message); }
+
+  /**
+   * Re-read the workflow after an awaited merge. Returns null when it was
+   * cancelled or replaced meanwhile, so the caller does not resurrect it.
+   */
+  function reloadAfterMerge(wf) {
+    const fresh = state.loadWorkflow();
+    return fresh && fresh.id === wf.id ? fresh : null;
+  }
 
   /**
    * Advance any backlog items (Feature, Bug, or Task) linked to this PRD to
@@ -3221,7 +3258,20 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${da
     return { violations, advisories };
   }
 
-  function mergeDevBranches(wf, res) {
+  // Async: each merge runs the project's pre-merge-commit hook, if it has one
+  // (see the note at mergeLock).
+  async function mergeDevBranches(wf, res) {
+    if (!mergeLock.acquire(wf.id)) {
+      return res.status(409).json({ workflow: wf, error: `merge_for_review is already running for this workflow (since ${mergeLock.startedAt(wf.id)}). Wait for it to finish.` });
+    }
+    try {
+      return await mergeDevBranchesLocked(wf, res);
+    } finally {
+      mergeLock.release(wf.id);
+    }
+  }
+
+  async function mergeDevBranchesLocked(wf, res) {
     const prdId = wf.input.replace(/\s+/g, '-');
 
     try {
@@ -3254,7 +3304,7 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${da
         ])];
       }
       const mergeResults = [];
-      const { execFileSync } = require('child_process');
+      if (devBranches.length > 0) markMergeRunning(wf, 'merge_for_review');
       for (const branch of devBranches) {
         try {
           const ahead = gitOps.commitsAhead(branch, reviewBranch);
@@ -3262,7 +3312,7 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${da
           if (ahead === 0) { mergeResults.push({ branch, status: 'empty' }); continue; }
           try {
             // Try clean merge first
-            gitOps.mergeBranch(branch, reviewWtPath, `Merge ${branch} for review`);
+            await gitOps.mergeBranch(branch, reviewWtPath, `Merge ${branch} for review`);
             mergeResults.push({ branch, status: 'merged' });
           } catch (_) {
             // Conflict — abort and mark as conflict (do NOT auto-resolve: -X theirs silently
@@ -3274,6 +3324,12 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${da
         } catch (e) {
           mergeResults.push({ branch, status: 'error', error: e.message });
         }
+      }
+      if (devBranches.length > 0) {
+        const fresh = reloadAfterMerge(wf);
+        if (!fresh) return mergeOutlivedWorkflow(wf, res, null);
+        wf = fresh;
+        wf.reviewBranch = reviewBranch;
       }
 
       const conflictedBranches = mergeResults.filter(r => r.status === 'conflict');
@@ -4514,6 +4570,11 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${da
   router.post('/workflow/cancel', (req, res) => {
     const wf = state.loadWorkflow();
     if (!wf) return res.status(404).json({ error: 'no active workflow' });
+    // Cancel moves the checkout and deletes branches; under a running merge
+    // that fails on git's index lock or strands the merge half-done.
+    if (mergeLock.startedAt(wf.id)) {
+      return res.status(409).json({ error: `A merge for this workflow is running (since ${mergeLock.startedAt(wf.id)}). Cancel once it finishes.` });
+    }
     const deleteWorktrees = req.body?.deleteWorktrees === true;
     const { filedItems } = cancelImpact(wf);
     // Cancelling a bugfix run releases the bug back to Backlog so it can be
@@ -5801,9 +5862,9 @@ Use the /${role.skill} skill. Commit your changes when done. ${COMMIT_ON_CURRENT
       console.log('[workflow] All tasks complete. Merging branches for final review.');
       wf.currentStep = 'merge_for_review';
       state.saveWorkflow(wf);
-      try { mergeDevBranches(wf, fakeRes); } catch (e) {
+      mergeDevBranches(wf, fakeRes).catch((e) => {
         console.error('[workflow] merge after task execution failed:', e.message);
-      }
+      });
       return;
     }
     launchTaskImpl(wf, idx);
@@ -7512,6 +7573,308 @@ Fix only the issues raised. Commit your changes.`,
     }
 
     return res.status(400).json({ error: `no valid transition for step=${wf.currentStep} action=${action}` });
+  }
+
+  /**
+   * merge_to_main: land the run on the default branch. Async because the merge
+   * runs the project's pre-merge-commit hook (see the note at mergeLock). The
+   * lock holds for the whole step, so a second request gets a 409 instead of
+   * racing this one's checkout, merge and cleanup.
+   */
+  async function mergeToMain(wf, res) {
+    if (!mergeLock.acquire(wf.id)) {
+      return res.status(409).json({ workflow: wf, error: `merge_to_main is already running for this workflow (since ${mergeLock.startedAt(wf.id)}). Wait for it to finish.` });
+    }
+    try {
+      return await mergeToMainLocked(wf, res);
+    } catch (e) {
+      console.error('[workflow] merge_to_main error:', e);
+      if (!res.headersSent) res.status(500).json({ error: e.message || 'Internal error in merge_to_main' });
+    } finally {
+      mergeLock.release(wf.id);
+    }
+  }
+
+  // Persisted before the awaited merge: the hub shows the step as running, and
+  // both auto-advance loops act only on a `pending` step, so neither fires a
+  // second merge while this one runs.
+  function markMergeRunning(wf, stepKey = 'merge_to_main') {
+    wf.steps[stepKey] = { ...(wf.steps[stepKey] || {}), status: 'running', startedAt: new Date().toISOString() };
+    delete wf.steps[stepKey].error;
+    state.saveWorkflow(wf);
+  }
+
+  // The workflow was cancelled or replaced while git ran. Saving now would
+  // bring it back, so report what the merge did and leave the state alone.
+  function mergeOutlivedWorkflow(wf, res, mergeErr) {
+    const outcome = mergeErr ? `the merge failed: ${mergeErr.message}` : 'the merge completed, but the rest of the step (status updates, branch cleanup, tagging) did not run';
+    console.warn(`[workflow] ${wf.id}: workflow cancelled or replaced during its merge; ${outcome}`);
+    return res.status(409).json({ error: `Workflow ${wf.id} was cancelled or replaced while its merge ran; ${outcome}.` });
+  }
+
+  async function mergeToMainLocked(wf, res) {
+    // New branching strategy: the run owns wf.branch (checked out in the main dir).
+    // Land it on the default branch, delete it (local + remote if pushed), remove
+    // any fix worktrees, and return the checkout to the default branch so the next
+    // run starts clean. Legacy runs (no wf.branch) fall through to the old logic.
+    if (wf.branch) {
+      const { execFileSync } = require('child_process');
+      const run = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+      const def = wf.defaultBranch || 'main';
+      // Bugfix pre-merge gates. Execution runs the LLM-URL + hygiene scans at its
+      // merge_for_review step (mergeDevBranches); a bugfix run has no such step, so
+      // run them here — against the fix branch's diff vs the default branch — before
+      // anything mutates. The bug-fix discipline mandates a new regression test on
+      // every run, exactly the file class these scans protect (a test URL hitting a
+      // real LLM API already billed tokens on life-graph). Failure blocks the merge
+      // with the scan's error surfaced, same as execution — operator fixes or waives
+      // (@llm-url-fixture / config.hygiene.allow) and retries. Guarded to bugfix so
+      // execution's path is byte-identical. A reconcile run has no
+      // merge_for_review either, so it gets the same gates.
+      if (wf.type === 'bugfix' || wf.type === 'reconcile') {
+        const llmScan = scanTestFilesForLlmViolations(projectRoot, def);
+        if (llmScan.violations.length > 0) {
+          wf.steps.merge_to_main = { status: 'error', error: `${llmScan.violations.length} test file(s) on ${wf.branch} would call real LLM APIs. Fix them (or, for a file that never requests the URL, tag it @llm-url-fixture), commit, and retry the merge.\n\n${llmScan.violations.join('\n')}`, violations: llmScan.violations };
+          state.saveWorkflow(wf);
+          return res.status(400).json({ workflow: wf, error: `bugfix merge blocked: ${llmScan.violations.length} LLM test violation(s)`, violations: llmScan.violations });
+        }
+        const hygieneScan = scanSourceForTestScaffolding(projectRoot, def, config.hygiene || {});
+        if (hygieneScan.violations.length > 0) {
+          wf.steps.merge_to_main = { status: 'error', error: `${hygieneScan.violations.length} production source file(s) on ${wf.branch} contain test scaffolding that must not ship (env failure hooks / test seams). Remove it (or exempt via config.hygiene.allow), commit, and retry the merge.\n\n${hygieneScan.violations.join('\n')}`, violations: hygieneScan.violations, advisories: hygieneScan.advisories || [] };
+          state.saveWorkflow(wf);
+          return res.status(400).json({ workflow: wf, error: `bugfix merge blocked: ${hygieneScan.violations.length} hygiene violation(s)`, violations: hygieneScan.violations, advisories: hygieneScan.advisories || [] });
+        }
+      }
+      // Apply the backlog status transition BEFORE the merge so these doc edits are
+      // captured by the pre-merge docs auto-commit below and land inside the merge
+      // commit — instead of being written to main post-merge and left uncommitted.
+      // A reconcile run's input is its record, not a PRD, and the track's
+      // document pass already rewrote project-state.md for the merge.
+      if (wf.type !== 'reconcile') {
+        markPrdDone(wf.input);
+        advanceLinkedFeatures(wf.prdPath, 'Implemented');
+      }
+      // Read RAW (untrimmed) porcelain output. The `run()` helper trims the whole
+      // string, which strips the leading status-column space of the FIRST line only
+      // (" M path" → "M path"), shifting it one char so slice(3) drops the path's
+      // first character ("docs/…" → "ocs/…") and a docs/ file is then misclassified
+      // as non-docs — falsely blocking the merge on auto-committable evidence.
+      let dirty = '';
+      try { dirty = execFileSync('git', ['status', '--porcelain'], { cwd: projectRoot, encoding: 'utf8' }); } catch {}
+      if (dirty.trim()) {
+        // QA's visual-smoke regenerates evidence under docs/ on every run and often
+        // leaves it uncommitted. Auto-commit docs/-only changes onto the run branch
+        // (they're part of the PRD and land as a reviewable merge commit). But BLOCK
+        // if anything OUTSIDE docs/ is uncommitted — that's un-reviewed source the
+        // agent should have committed; silently merging it would bypass QA/review.
+        // Porcelain v1: cols 0-1 = XY status, col 2 = space, col 3+ = path.
+        const entries = dirty.split('\n').filter(Boolean).map(l => {
+          const status = l.slice(0, 2);
+          let p = l.slice(3).replace(/^"|"$/g, '');
+          if (p.includes(' -> ')) p = p.split(' -> ').pop();
+          return { status, path: p };
+        });
+        const nonDocs = entries.filter(e => !e.path.startsWith('docs/')).map(e => e.path);
+        if (nonDocs.length > 0) {
+          wf.steps.merge_to_main = { status: 'error', error: `Working tree (${wf.branch}) has uncommitted non-docs changes that must be committed/reviewed first: ${nonDocs.slice(0, 8).join(', ')}${nonDocs.length > 8 ? ` (+${nonDocs.length - 8} more)` : ''}. Commit or stash, then retry the merge.` };
+          state.saveWorkflow(wf);
+          return res.status(500).json({ workflow: wf, error: `merge_to_main: uncommitted non-docs changes on ${wf.branch}`, uncommitted: nonDocs });
+        }
+        // Cross-PRD evidence churn: QA's visual smoke re-renders evidence for OTHER PRDs
+        // (PDFs/PNGs drift byte-wise even when visually identical). That evidence belongs
+        // to the other PRD, not this run — revert tracked drift rather than sweeping it
+        // into this merge. Only the CURRENT PRD's pr-evidence dir is auto-committed below.
+        // (Untracked foreign evidence is left alone — deleting it is too aggressive; it is
+        // rare and falls through to the commit.)
+        const prdBase = (wf.prdPath || '').replace(/^.*\//, '').replace(/\.md$/, '');
+        const currentEvidenceDir = prdBase ? `docs/pr-evidence/${prdBase}/` : null;
+        const foreignTracked = entries.filter(e =>
+          e.path.startsWith('docs/pr-evidence/') &&
+          (!currentEvidenceDir || !e.path.startsWith(currentEvidenceDir)) &&
+          !e.status.includes('?')).map(e => e.path);
+        if (foreignTracked.length > 0) {
+          try {
+            run(['checkout', '--', ...foreignTracked]);
+            console.log(`[workflow] merge_to_main: reverted ${foreignTracked.length} cross-PRD evidence drift file(s) not under ${currentEvidenceDir}`);
+          } catch (e) {
+            console.error(`[workflow] merge_to_main: failed to revert cross-PRD evidence drift: ${e.message}`);
+          }
+        }
+        // Whatever is still dirty under docs/ is this PRD's own work — auto-commit it.
+        let remaining = '';
+        try { remaining = execFileSync('git', ['status', '--porcelain'], { cwd: projectRoot, encoding: 'utf8' }); } catch {}
+        if (remaining.trim()) {
+          try {
+            run(['add', '-A', '--', 'docs']);
+            run(['commit', '-m', `chore(${wf.input}): commit workflow docs/evidence before merge`]);
+            console.log(`[workflow] merge_to_main: auto-committed docs/evidence on ${wf.branch}`);
+          } catch (e) {
+            wf.steps.merge_to_main = { status: 'error', error: `Failed to auto-commit docs/evidence on ${wf.branch}: ${e.message}` };
+            state.saveWorkflow(wf);
+            return res.status(500).json({ workflow: wf, error: `merge_to_main: docs auto-commit failed: ${e.message}` });
+          }
+        }
+      }
+      const runBranchExists = (() => { try { run(['rev-parse', '--verify', wf.branch]); return true; } catch { return false; } })();
+      markMergeRunning(wf);
+      let mergeErr = null;
+      try {
+        run(['checkout', def]);
+        if (runBranchExists && wf.branch !== def) {
+          await gitMergeNoFf(projectRoot, wf.branch, `Merge ${wf.branch}: ${wf.input}`);
+        }
+      } catch (e) {
+        mergeErr = e;
+        try { run(['merge', '--abort']); } catch {}
+        try { run(['checkout', def]); } catch {}
+      }
+      const fresh = reloadAfterMerge(wf);
+      if (!fresh) return mergeOutlivedWorkflow(wf, res, mergeErr);
+      wf = fresh;
+      if (mergeErr) {
+        wf.steps.merge_to_main = { status: 'error', error: `Failed to merge ${wf.branch} into ${def}: ${mergeErr.message}. Resolve manually (you are on ${def}; the run branch ${wf.branch} is intact).` };
+        state.saveWorkflow(wf);
+        return res.status(500).json({ workflow: wf, error: `merge_to_main failed: ${mergeErr.message}` });
+      }
+      wf.steps.merge_to_main = { status: 'completed' };
+      // markPrdDone + advanceLinkedFeatures already ran pre-merge → included in the merge commit.
+      // Bugfix: the fixed Bug is still 'Fixing' (a bug has no PRD link, so the
+      // markPrdDone/advanceLinkedFeatures item-lifecycle above are no-ops for it).
+      // Flip it Fixing → Done and stamp the merge commit sha into `fixed_in`, then
+      // commit that doc change on the default branch so the tree stays clean.
+      if (wf.type === 'bugfix' && wf.itemId) {
+        try {
+          const mergeSha = run(['rev-parse', 'HEAD']);
+          setBugItemStatus(wf.itemId, 'Done', { fixed_in: mergeSha });
+          commitWorkflowDocs(`docs(${wf.itemId}): mark Done (fixed_in ${mergeSha.slice(0, 7)})`);
+        } catch (e) { console.error(`[bugfix] finalize ${wf.itemId} → Done failed:`, e.message); }
+      }
+      // Reconcile: the record is Done and the track is merged, which lifts its
+      // id floor. The incoming (renumbered) branch has served its purpose; the
+      // pin and the source checkout stay (owner decision: never clean the source).
+      if (wf.type === 'reconcile' && wf.itemId) {
+        try {
+          const mergeSha = run(['rev-parse', 'HEAD']);
+          setBugItemStatus(wf.itemId, 'Done');
+          commitWorkflowDocs(`docs(${wf.itemId}): reconcile merged (${mergeSha.slice(0, 7)})`);
+          const tracksLib = require('../reconcile-track');
+          const t = tracksLib.loadTrack(projectRoot, wf.reconcileId || wf.itemId);
+          if (t) {
+            tracksLib.saveTrack(projectRoot, {
+              ...t, status: tracksLib.MERGED, mergedAt: new Date().toISOString(), mergeCommit: mergeSha,
+              currentStep: 'ready', steps: { ...t.steps, ready: { ...(t.steps.ready || {}), status: 'done', completedAt: new Date().toISOString(), workflowId: wf.id } },
+            });
+          }
+          try { run(['branch', '-D', `${wf.branch}-incoming`]); } catch { /* none */ }
+        } catch (e) { console.error(`[reconcile] finalize ${wf.itemId} failed:`, e.message); }
+      }
+      // cleanupBranches removes fix worktrees + deletes wf.reviewBranch (= wf.branch) locally.
+      try { cleanupBranches(wf); } catch (e) { console.error('[workflow] cleanupBranches:', e.message); }
+      // Delete the remote copy too, if the run branch was ever pushed.
+      if (runBranchExists && wf.branch !== def) {
+        try { run(['push', 'origin', '--delete', wf.branch]); } catch (_) { /* not pushed / no remote — fine */ }
+      }
+      tagAndPush(wf);
+      wf.currentStep = 'capture_learnings';
+      state.saveWorkflow(wf);
+      broadcast('worktrees-updated', {});
+      return res.json({ workflow: wf, needsAdvance: true });
+    }
+
+    const reviewBranch = wf.reviewBranch;
+    // Check if review branch actually exists — it may not if tasks ran without worktrees
+    let branchExists = false;
+    if (reviewBranch) {
+      try {
+        const { execFileSync } = require('child_process');
+        execFileSync('git', ['rev-parse', '--verify', reviewBranch], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
+        branchExists = true;
+      } catch {} // branch doesn't exist
+    }
+    if (!reviewBranch || !branchExists) {
+      // No review branch — execution didn't use the worktree+review-branch flow
+      // (monolithic / iOS runs commit directly in the main checkout). This used
+      // to ASSUME "code already on main" and skip. But if execution committed
+      // onto a feature branch in the main checkout (e.g. feat/faz-NNN) and left
+      // it checked out, the work was stranded off main and never pushed — the
+      // CI/CD tab then showed nothing to deploy. Verify the actual checkout and,
+      // if it's on a non-default branch, land that branch onto the default
+      // branch before tagging/pushing.
+      const { execFileSync } = require('child_process');
+      const run = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+      let defaultBranch = 'main';
+      try { defaultBranch = (run(['rev-parse', '--abbrev-ref', 'origin/HEAD']) || '').replace(/^origin\//, '') || 'main'; } catch {}
+      let current = '';
+      try { current = run(['branch', '--show-current']); } catch {}
+
+      if (current && current !== defaultBranch) {
+        // Refuse on a dirty tree — never carry or drop uncommitted work.
+        let dirty = '';
+        try { dirty = run(['status', '--porcelain']); } catch {}
+        if (dirty) {
+          wf.steps.merge_to_main = { status: 'error', error: `Working tree on ${current} has uncommitted changes; cannot land it on ${defaultBranch}. Commit or stash, then retry.` };
+          state.saveWorkflow(wf);
+          return res.status(500).json({ workflow: wf, error: `merge_to_main: uncommitted changes on ${current}` });
+        }
+        markMergeRunning(wf);
+        let mergeErr = null;
+        try {
+          run(['checkout', defaultBranch]);
+          await gitMergeNoFf(projectRoot, current, `Merge ${current}: ${wf.input}`);
+          try { run(['branch', '-d', current]); } catch {}
+          console.log(`[workflow] merge_to_main: landed ${current} onto ${defaultBranch}`);
+        } catch (e) {
+          mergeErr = e;
+          try { run(['merge', '--abort']); } catch {}
+        }
+        const fresh = reloadAfterMerge(wf);
+        if (!fresh) return mergeOutlivedWorkflow(wf, res, mergeErr);
+        wf = fresh;
+        if (mergeErr) {
+          wf.steps.merge_to_main = { status: 'error', error: `Failed to merge ${current} into ${defaultBranch}: ${mergeErr.message}. Resolve manually.` };
+          state.saveWorkflow(wf);
+          return res.status(500).json({ workflow: wf, error: `merge_to_main failed: ${mergeErr.message}` });
+        }
+      } else {
+        console.log(`[workflow] merge_to_main: on ${defaultBranch}, code already in place`);
+      }
+
+      wf.steps.merge_to_main = { status: 'completed' };
+      markPrdDone(wf.input);
+      advanceLinkedFeatures(wf.prdPath, 'Implemented');
+      commitWorkflowDocs(`docs(${wf.input.replace(/\s+/g, '-')}): mark Implemented in backlog`);
+      tagAndPush(wf);
+      wf.currentStep = 'capture_learnings';
+      state.saveWorkflow(wf);
+      return res.json({ workflow: wf, needsAdvance: true });
+    }
+    markMergeRunning(wf);
+    let mergeErr = null;
+    try {
+      await gitMergeNoFf(projectRoot, reviewBranch, `Merge ${reviewBranch}: ${wf.input}`);
+    } catch (e) { mergeErr = e; }
+    const fresh = reloadAfterMerge(wf);
+    if (!fresh) return mergeOutlivedWorkflow(wf, res, mergeErr);
+    wf = fresh;
+    try {
+      // Legacy path: a failed merge is left in place for manual resolution.
+      if (mergeErr) throw mergeErr;
+      wf.steps.merge_to_main = { status: 'completed' };
+      markPrdDone(wf.input);
+      advanceLinkedFeatures(wf.prdPath, 'Implemented');
+      commitWorkflowDocs(`docs(${wf.input.replace(/\s+/g, '-')}): mark Implemented in backlog`);
+      // Safe to clean up branches now — they're merged
+      cleanupBranches(wf);
+      tagAndPush(wf);
+      wf.currentStep = 'capture_learnings';
+      state.saveWorkflow(wf);
+      broadcast('worktrees-updated', {});
+      return res.json({ workflow: wf, needsAdvance: true });
+    } catch (e) {
+      wf.steps.merge_to_main = { status: 'error', error: e.message };
+      state.saveWorkflow(wf);
+      return res.status(500).json({ workflow: wf, error: `Merge to main failed: ${e.message}. Resolve manually.` });
+    }
   }
 
   // --- Execution workflow ---
@@ -9935,246 +10298,9 @@ Set **Approved: no** with **Blocking: N** when any BLOCKING finding exists; thos
       return res.json({ workflow: wf });
     }
 
-    // Merge review branch to main — the "ship it" step
+    // Merge review branch to main — the "ship it" step (async: see mergeToMain)
     if (wf.currentStep === 'merge_to_main') {
-      // New branching strategy: the run owns wf.branch (checked out in the main dir).
-      // Land it on the default branch, delete it (local + remote if pushed), remove
-      // any fix worktrees, and return the checkout to the default branch so the next
-      // run starts clean. Legacy runs (no wf.branch) fall through to the old logic.
-      if (wf.branch) {
-        const { execFileSync } = require('child_process');
-        const run = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-        const def = wf.defaultBranch || 'main';
-        // Bugfix pre-merge gates. Execution runs the LLM-URL + hygiene scans at its
-        // merge_for_review step (mergeDevBranches); a bugfix run has no such step, so
-        // run them here — against the fix branch's diff vs the default branch — before
-        // anything mutates. The bug-fix discipline mandates a new regression test on
-        // every run, exactly the file class these scans protect (a test URL hitting a
-        // real LLM API already billed tokens on life-graph). Failure blocks the merge
-        // with the scan's error surfaced, same as execution — operator fixes or waives
-        // (@llm-url-fixture / config.hygiene.allow) and retries. Guarded to bugfix so
-        // execution's path is byte-identical. A reconcile run has no
-        // merge_for_review either, so it gets the same gates.
-        if (wf.type === 'bugfix' || wf.type === 'reconcile') {
-          const llmScan = scanTestFilesForLlmViolations(projectRoot, def);
-          if (llmScan.violations.length > 0) {
-            wf.steps.merge_to_main = { status: 'error', error: `${llmScan.violations.length} test file(s) on ${wf.branch} would call real LLM APIs. Fix them (or, for a file that never requests the URL, tag it @llm-url-fixture), commit, and retry the merge.\n\n${llmScan.violations.join('\n')}`, violations: llmScan.violations };
-            state.saveWorkflow(wf);
-            return res.status(400).json({ workflow: wf, error: `bugfix merge blocked: ${llmScan.violations.length} LLM test violation(s)`, violations: llmScan.violations });
-          }
-          const hygieneScan = scanSourceForTestScaffolding(projectRoot, def, config.hygiene || {});
-          if (hygieneScan.violations.length > 0) {
-            wf.steps.merge_to_main = { status: 'error', error: `${hygieneScan.violations.length} production source file(s) on ${wf.branch} contain test scaffolding that must not ship (env failure hooks / test seams). Remove it (or exempt via config.hygiene.allow), commit, and retry the merge.\n\n${hygieneScan.violations.join('\n')}`, violations: hygieneScan.violations, advisories: hygieneScan.advisories || [] };
-            state.saveWorkflow(wf);
-            return res.status(400).json({ workflow: wf, error: `bugfix merge blocked: ${hygieneScan.violations.length} hygiene violation(s)`, violations: hygieneScan.violations, advisories: hygieneScan.advisories || [] });
-          }
-        }
-        // Apply the backlog status transition BEFORE the merge so these doc edits are
-        // captured by the pre-merge docs auto-commit below and land inside the merge
-        // commit — instead of being written to main post-merge and left uncommitted.
-        // A reconcile run's input is its record, not a PRD, and the track's
-        // document pass already rewrote project-state.md for the merge.
-        if (wf.type !== 'reconcile') {
-          markPrdDone(wf.input);
-          advanceLinkedFeatures(wf.prdPath, 'Implemented');
-        }
-        // Read RAW (untrimmed) porcelain output. The `run()` helper trims the whole
-        // string, which strips the leading status-column space of the FIRST line only
-        // (" M path" → "M path"), shifting it one char so slice(3) drops the path's
-        // first character ("docs/…" → "ocs/…") and a docs/ file is then misclassified
-        // as non-docs — falsely blocking the merge on auto-committable evidence.
-        let dirty = '';
-        try { dirty = execFileSync('git', ['status', '--porcelain'], { cwd: projectRoot, encoding: 'utf8' }); } catch {}
-        if (dirty.trim()) {
-          // QA's visual-smoke regenerates evidence under docs/ on every run and often
-          // leaves it uncommitted. Auto-commit docs/-only changes onto the run branch
-          // (they're part of the PRD and land as a reviewable merge commit). But BLOCK
-          // if anything OUTSIDE docs/ is uncommitted — that's un-reviewed source the
-          // agent should have committed; silently merging it would bypass QA/review.
-          // Porcelain v1: cols 0-1 = XY status, col 2 = space, col 3+ = path.
-          const entries = dirty.split('\n').filter(Boolean).map(l => {
-            const status = l.slice(0, 2);
-            let p = l.slice(3).replace(/^"|"$/g, '');
-            if (p.includes(' -> ')) p = p.split(' -> ').pop();
-            return { status, path: p };
-          });
-          const nonDocs = entries.filter(e => !e.path.startsWith('docs/')).map(e => e.path);
-          if (nonDocs.length > 0) {
-            wf.steps.merge_to_main = { status: 'error', error: `Working tree (${wf.branch}) has uncommitted non-docs changes that must be committed/reviewed first: ${nonDocs.slice(0, 8).join(', ')}${nonDocs.length > 8 ? ` (+${nonDocs.length - 8} more)` : ''}. Commit or stash, then retry the merge.` };
-            state.saveWorkflow(wf);
-            return res.status(500).json({ workflow: wf, error: `merge_to_main: uncommitted non-docs changes on ${wf.branch}`, uncommitted: nonDocs });
-          }
-          // Cross-PRD evidence churn: QA's visual smoke re-renders evidence for OTHER PRDs
-          // (PDFs/PNGs drift byte-wise even when visually identical). That evidence belongs
-          // to the other PRD, not this run — revert tracked drift rather than sweeping it
-          // into this merge. Only the CURRENT PRD's pr-evidence dir is auto-committed below.
-          // (Untracked foreign evidence is left alone — deleting it is too aggressive; it is
-          // rare and falls through to the commit.)
-          const prdBase = (wf.prdPath || '').replace(/^.*\//, '').replace(/\.md$/, '');
-          const currentEvidenceDir = prdBase ? `docs/pr-evidence/${prdBase}/` : null;
-          const foreignTracked = entries.filter(e =>
-            e.path.startsWith('docs/pr-evidence/') &&
-            (!currentEvidenceDir || !e.path.startsWith(currentEvidenceDir)) &&
-            !e.status.includes('?')).map(e => e.path);
-          if (foreignTracked.length > 0) {
-            try {
-              run(['checkout', '--', ...foreignTracked]);
-              console.log(`[workflow] merge_to_main: reverted ${foreignTracked.length} cross-PRD evidence drift file(s) not under ${currentEvidenceDir}`);
-            } catch (e) {
-              console.error(`[workflow] merge_to_main: failed to revert cross-PRD evidence drift: ${e.message}`);
-            }
-          }
-          // Whatever is still dirty under docs/ is this PRD's own work — auto-commit it.
-          let remaining = '';
-          try { remaining = execFileSync('git', ['status', '--porcelain'], { cwd: projectRoot, encoding: 'utf8' }); } catch {}
-          if (remaining.trim()) {
-            try {
-              run(['add', '-A', '--', 'docs']);
-              run(['commit', '-m', `chore(${wf.input}): commit workflow docs/evidence before merge`]);
-              console.log(`[workflow] merge_to_main: auto-committed docs/evidence on ${wf.branch}`);
-            } catch (e) {
-              wf.steps.merge_to_main = { status: 'error', error: `Failed to auto-commit docs/evidence on ${wf.branch}: ${e.message}` };
-              state.saveWorkflow(wf);
-              return res.status(500).json({ workflow: wf, error: `merge_to_main: docs auto-commit failed: ${e.message}` });
-            }
-          }
-        }
-        const runBranchExists = (() => { try { run(['rev-parse', '--verify', wf.branch]); return true; } catch { return false; } })();
-        try {
-          run(['checkout', def]);
-          if (runBranchExists && wf.branch !== def) {
-            execFileSync('git', ['merge', wf.branch, '--no-ff', '-m', `Merge ${wf.branch}: ${wf.input}`], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
-          }
-        } catch (e) {
-          try { run(['merge', '--abort']); } catch {}
-          try { run(['checkout', def]); } catch {}
-          wf.steps.merge_to_main = { status: 'error', error: `Failed to merge ${wf.branch} into ${def}: ${e.message}. Resolve manually (you are on ${def}; the run branch ${wf.branch} is intact).` };
-          state.saveWorkflow(wf);
-          return res.status(500).json({ workflow: wf, error: `merge_to_main failed: ${e.message}` });
-        }
-        wf.steps.merge_to_main = { status: 'completed' };
-        // markPrdDone + advanceLinkedFeatures already ran pre-merge → included in the merge commit.
-        // Bugfix: the fixed Bug is still 'Fixing' (a bug has no PRD link, so the
-        // markPrdDone/advanceLinkedFeatures item-lifecycle above are no-ops for it).
-        // Flip it Fixing → Done and stamp the merge commit sha into `fixed_in`, then
-        // commit that doc change on the default branch so the tree stays clean.
-        if (wf.type === 'bugfix' && wf.itemId) {
-          try {
-            const mergeSha = run(['rev-parse', 'HEAD']);
-            setBugItemStatus(wf.itemId, 'Done', { fixed_in: mergeSha });
-            commitWorkflowDocs(`docs(${wf.itemId}): mark Done (fixed_in ${mergeSha.slice(0, 7)})`);
-          } catch (e) { console.error(`[bugfix] finalize ${wf.itemId} → Done failed:`, e.message); }
-        }
-        // Reconcile: the record is Done and the track is merged, which lifts its
-        // id floor. The incoming (renumbered) branch has served its purpose; the
-        // pin and the source checkout stay (owner decision: never clean the source).
-        if (wf.type === 'reconcile' && wf.itemId) {
-          try {
-            const mergeSha = run(['rev-parse', 'HEAD']);
-            setBugItemStatus(wf.itemId, 'Done');
-            commitWorkflowDocs(`docs(${wf.itemId}): reconcile merged (${mergeSha.slice(0, 7)})`);
-            const tracksLib = require('../reconcile-track');
-            const t = tracksLib.loadTrack(projectRoot, wf.reconcileId || wf.itemId);
-            if (t) {
-              tracksLib.saveTrack(projectRoot, {
-                ...t, status: tracksLib.MERGED, mergedAt: new Date().toISOString(), mergeCommit: mergeSha,
-                currentStep: 'ready', steps: { ...t.steps, ready: { ...(t.steps.ready || {}), status: 'done', completedAt: new Date().toISOString(), workflowId: wf.id } },
-              });
-            }
-            try { run(['branch', '-D', `${wf.branch}-incoming`]); } catch { /* none */ }
-          } catch (e) { console.error(`[reconcile] finalize ${wf.itemId} failed:`, e.message); }
-        }
-        // cleanupBranches removes fix worktrees + deletes wf.reviewBranch (= wf.branch) locally.
-        try { cleanupBranches(wf); } catch (e) { console.error('[workflow] cleanupBranches:', e.message); }
-        // Delete the remote copy too, if the run branch was ever pushed.
-        if (runBranchExists && wf.branch !== def) {
-          try { run(['push', 'origin', '--delete', wf.branch]); } catch (_) { /* not pushed / no remote — fine */ }
-        }
-        tagAndPush(wf);
-        wf.currentStep = 'capture_learnings';
-        state.saveWorkflow(wf);
-        broadcast('worktrees-updated', {});
-        return res.json({ workflow: wf, needsAdvance: true });
-      }
-
-      const reviewBranch = wf.reviewBranch;
-      // Check if review branch actually exists — it may not if tasks ran without worktrees
-      let branchExists = false;
-      if (reviewBranch) {
-        try {
-          const { execFileSync } = require('child_process');
-          execFileSync('git', ['rev-parse', '--verify', reviewBranch], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
-          branchExists = true;
-        } catch {} // branch doesn't exist
-      }
-      if (!reviewBranch || !branchExists) {
-        // No review branch — execution didn't use the worktree+review-branch flow
-        // (monolithic / iOS runs commit directly in the main checkout). This used
-        // to ASSUME "code already on main" and skip. But if execution committed
-        // onto a feature branch in the main checkout (e.g. feat/faz-NNN) and left
-        // it checked out, the work was stranded off main and never pushed — the
-        // CI/CD tab then showed nothing to deploy. Verify the actual checkout and,
-        // if it's on a non-default branch, land that branch onto the default
-        // branch before tagging/pushing.
-        const { execFileSync } = require('child_process');
-        const run = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-        let defaultBranch = 'main';
-        try { defaultBranch = (run(['rev-parse', '--abbrev-ref', 'origin/HEAD']) || '').replace(/^origin\//, '') || 'main'; } catch {}
-        let current = '';
-        try { current = run(['branch', '--show-current']); } catch {}
-
-        if (current && current !== defaultBranch) {
-          // Refuse on a dirty tree — never carry or drop uncommitted work.
-          let dirty = '';
-          try { dirty = run(['status', '--porcelain']); } catch {}
-          if (dirty) {
-            wf.steps.merge_to_main = { status: 'error', error: `Working tree on ${current} has uncommitted changes; cannot land it on ${defaultBranch}. Commit or stash, then retry.` };
-            state.saveWorkflow(wf);
-            return res.status(500).json({ workflow: wf, error: `merge_to_main: uncommitted changes on ${current}` });
-          }
-          try {
-            run(['checkout', defaultBranch]);
-            execFileSync('git', ['merge', current, '--no-ff', '-m', `Merge ${current}: ${wf.input}`], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
-            try { run(['branch', '-d', current]); } catch {}
-            console.log(`[workflow] merge_to_main: landed ${current} onto ${defaultBranch}`);
-          } catch (e) {
-            try { run(['merge', '--abort']); } catch {}
-            wf.steps.merge_to_main = { status: 'error', error: `Failed to merge ${current} into ${defaultBranch}: ${e.message}. Resolve manually.` };
-            state.saveWorkflow(wf);
-            return res.status(500).json({ workflow: wf, error: `merge_to_main failed: ${e.message}` });
-          }
-        } else {
-          console.log(`[workflow] merge_to_main: on ${defaultBranch}, code already in place`);
-        }
-
-        wf.steps.merge_to_main = { status: 'completed' };
-        markPrdDone(wf.input);
-        advanceLinkedFeatures(wf.prdPath, 'Implemented');
-        commitWorkflowDocs(`docs(${wf.input.replace(/\s+/g, '-')}): mark Implemented in backlog`);
-        tagAndPush(wf);
-        wf.currentStep = 'capture_learnings';
-        state.saveWorkflow(wf);
-        return res.json({ workflow: wf, needsAdvance: true });
-      }
-      try {
-        const { execFileSync } = require('child_process');
-        execFileSync('git', ['merge', reviewBranch, '--no-ff', '-m', `Merge ${reviewBranch}: ${wf.input}`], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
-        wf.steps.merge_to_main = { status: 'completed' };
-        markPrdDone(wf.input);
-        advanceLinkedFeatures(wf.prdPath, 'Implemented');
-        commitWorkflowDocs(`docs(${wf.input.replace(/\s+/g, '-')}): mark Implemented in backlog`);
-        // Safe to clean up branches now — they're merged
-        cleanupBranches(wf);
-        tagAndPush(wf);
-        wf.currentStep = 'capture_learnings';
-        state.saveWorkflow(wf);
-        broadcast('worktrees-updated', {});
-        return res.json({ workflow: wf, needsAdvance: true });
-      } catch (e) {
-        wf.steps.merge_to_main = { status: 'error', error: e.message };
-        state.saveWorkflow(wf);
-        return res.status(500).json({ workflow: wf, error: `Merge to main failed: ${e.message}. Resolve manually.` });
-      }
+      return mergeToMain(wf, res);
     }
 
     // Capture learnings step — extract reusable knowledge from workflow feedback

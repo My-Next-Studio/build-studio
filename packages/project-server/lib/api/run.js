@@ -4,6 +4,7 @@ const path = require('path');
 // Shared model-name → CLI model-id map. Was a private inline copy pinned to
 // Opus/Sonnet 4.6, two generations behind the workflow launch path.
 const { MODEL_IDS } = require('@build-studio/shared/cli');
+const { createMergeLock } = require('../git-merge');
 
 // The run's title: the first heading of docs/execution-plan.md, when one exists.
 function executionPlanTitle(docsPath) {
@@ -16,6 +17,7 @@ function executionPlanTitle(docsPath) {
 function createRunRouter(config, state, gitOps, tmuxOps, broadcast) {
   const router = express.Router();
   const { projectRoot, worktreesPath, logsPath } = config;
+  const runMergeLock = createMergeLock();
 
   router.get('/run', (req, res) => res.json({ run: state.loadRun() }));
 
@@ -31,20 +33,29 @@ function createRunRouter(config, state, gitOps, tmuxOps, broadcast) {
     res.json({ commits });
   });
 
-  router.post('/run/merge/:branch', (req, res) => {
+  // Async: the merge runs the project's pre-merge-commit hook, if any, which
+  // can take minutes (see git-merge.js). The lock keeps a second click from
+  // racing it and aborting it from its own failure path.
+  router.post('/run/merge/:branch', async (req, res) => {
     const { branch } = req.params;
     const run = state.loadRun();
     if (!run) return res.status(404).json({ error: 'no active run' });
     const worker = run.workers.find(w => w.branch === branch);
     if (!worker) return res.status(404).json({ error: `worker ${branch} not found` });
 
+    const count = gitOps.commitsAhead(branch);
+    if (count === 0) return res.json({ status: 'empty', message: 'No commits to merge' });
+    if (!runMergeLock.acquire(projectRoot)) {
+      return res.status(409).json({ error: 'A merge is already in progress for this run; wait for it to finish.' });
+    }
     try {
-      const count = gitOps.commitsAhead(branch);
-      if (count === 0) return res.json({ status: 'empty', message: 'No commits to merge' });
       const msg = `Merge ${branch}: ${worker.role}`;
-      gitOps.mergeBranch(branch, projectRoot, msg);
-      worker.merged = true;
-      state.saveRun(run);
+      await gitOps.mergeBranch(branch, projectRoot, msg);
+      // Re-read: other requests may have saved the run while the merge ran.
+      const fresh = state.loadRun() || run;
+      const freshWorker = (fresh.workers || []).find(w => w.branch === branch) || worker;
+      freshWorker.merged = true;
+      state.saveRun(fresh);
 
       // Cleanup worktree
       gitOps.removeWorktree(branch);
@@ -53,6 +64,8 @@ function createRunRouter(config, state, gitOps, tmuxOps, broadcast) {
     } catch (e) {
       gitOps.abortMerge(projectRoot);
       res.status(500).json({ status: 'conflict', error: e.message });
+    } finally {
+      runMergeLock.release(projectRoot);
     }
   });
 
