@@ -38,7 +38,7 @@ const { resolveScreenshotCommand, qaScreenshotInstructions, builderScreenshotIns
 const { killWindowSafely } = require('../tmux');
 const { extractOwnerAction } = require('../owner-action');
 const { suggestBuilderRole, parseBuilderRoleHint } = require('../builder-role-hint');
-const { gitMergeNoFf, createMergeLock } = require('../git-merge');
+const { gitMergeNoFf, gitMergeSyncOrAbort, createMergeLock } = require('../git-merge');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
@@ -8290,10 +8290,8 @@ Report **Approved: yes** once every relevant cell has a test (or a justified MAN
         try {
           const ahead = gitOps.commitsAhead(qaBranchName, 'main');
           if (ahead > 0) {
-            const { execFileSync } = require('child_process');
-            execFileSync('git', ['merge', qaBranchName, '--no-edit', '-m', `Merge ${qaBranchName} (pre-implementation tests)`], {
-              cwd: projectRoot, encoding: 'utf8', timeout: 30000,
-            });
+            // Aborts a failed merge, so a retry is not stuck on MERGE_HEAD.
+            gitMergeSyncOrAbort(projectRoot, qaBranchName, `Merge ${qaBranchName} (pre-implementation tests)`);
             console.log(`[workflow] Merged QA branch ${qaBranchName} to main (${ahead} commits)`);
           }
           // Clean up worktree and branch

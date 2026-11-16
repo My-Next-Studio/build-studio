@@ -22,7 +22,7 @@ const { createWorkflowRouter } = require('./workflow');
 const { loadConfig } = require('../config');
 const { createStateManager } = require('../state');
 const { readItem } = require('../backlog');
-const { gitMergeNoFf } = require('../git-merge');
+const { gitMergeNoFf, gitMergeSyncOrAbort } = require('../git-merge');
 
 const HOOK_SECONDS = 2;
 
@@ -184,6 +184,40 @@ test('gitMergeNoFf: a hook that outlives the timeout is killed and named in the 
       gitMergeNoFf(fx.root, 'side', 'Merge side', { timeoutMs: 300 }),
       /timed out after 0\.3 s .*pre-merge-commit hook may be hanging/,
     );
+  } finally {
+    fx.clean();
+  }
+});
+
+// The qa_tests approve merges the QA branch synchronously. A hook that stops
+// that merge left MERGE_HEAD behind, and every retry then failed with "You have
+// not concluded your merge" (phoclub PHO-051, 2026-11-16).
+test('gitMergeSyncOrAbort: a merge the hook stops is aborted, so a retry starts clean', () => {
+  const fx = makeFixtureRepo();
+  installHook(fx, { seconds: 0, exitCode: 1 });
+  try {
+    execFileSync('git', ['checkout', '-q', '-b', 'qa-tests-x'], { cwd: fx.root });
+    fs.writeFileSync(path.join(fx.root, 'spec.test.js'), 'test("red before the code")\n');
+    execFileSync('git', ['add', '-A'], { cwd: fx.root });
+    execFileSync('git', ['commit', '-q', '-m', 'tests first'], { cwd: fx.root });
+    execFileSync('git', ['checkout', '-q', 'main'], { cwd: fx.root });
+    // The run branch moved on too; otherwise git fast-forwards and no hook runs.
+    fs.writeFileSync(path.join(fx.root, 'impl.js'), 'module.exports = 1;\n');
+    execFileSync('git', ['add', '-A'], { cwd: fx.root });
+    execFileSync('git', ['commit', '-q', '-m', 'run branch work'], { cwd: fx.root });
+    const mainBefore = gitRev(fx.root, 'main');
+
+    assert.throws(
+      () => gitMergeSyncOrAbort(fx.root, 'qa-tests-x', 'Merge qa-tests-x'),
+      /ci-check: 1 test failed \(fake\)/,
+    );
+    assert.equal(fs.existsSync(path.join(fx.root, '.git', 'MERGE_HEAD')), false, 'the failed merge was left in progress');
+    assert.equal(gitRev(fx.root, 'main'), mainBefore);
+    assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: fx.root, encoding: 'utf8' }).trim(), '');
+
+    installHook(fx, { seconds: 0, exitCode: 0 });
+    gitMergeSyncOrAbort(fx.root, 'qa-tests-x', 'Merge qa-tests-x');
+    assert.notEqual(gitRev(fx.root, 'main'), mainBefore);
   } finally {
     fx.clean();
   }

@@ -56,6 +56,33 @@ function gitMergeNoFf(cwd, branch, message, { timeoutMs = MERGE_TIMEOUT_MS } = {
 }
 
 /**
+ * Synchronous merge for a caller that cannot await (the qa_tests approve
+ * runs inside a sync handler). A failed merge is aborted before the error is
+ * rethrown, so the checkout is left as it was and a retry starts clean.
+ * Without the abort, a merge stopped by a pre-merge-commit hook stays half
+ * done with MERGE_HEAD written, and every retry fails with "You have not
+ * concluded your merge" (phoclub PHO-051, 2026-11-16).
+ *
+ * @param {string} cwd
+ * @param {string} branch
+ * @param {string} message
+ * @param {object} [opts]
+ * @param {number} [opts.timeoutMs]  default 30 s, as the caller always used
+ * @param {Function} [opts.execFileSync]  injectable for tests
+ * @returns {string} git's output
+ */
+function gitMergeSyncOrAbort(cwd, branch, message, { timeoutMs = 30000, execFileSync = require('child_process').execFileSync } = {}) {
+  try {
+    return execFileSync('git', ['merge', branch, '--no-edit', '-m', message], {
+      cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: MERGE_MAX_BUFFER, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    try { execFileSync('git', ['merge', '--abort'], { cwd, stdio: 'ignore' }); } catch (_) { /* nothing to abort */ }
+    throw err;
+  }
+}
+
+/**
  * In-process guard so two merges for the same key never overlap. While one is
  * in flight a second request would race it on the same checkout — and its
  * failure path runs `git merge --abort`, which would abort the FIRST merge.
@@ -74,4 +101,4 @@ function createMergeLock() {
   };
 }
 
-module.exports = { gitMergeNoFf, createMergeLock, MERGE_TIMEOUT_MS };
+module.exports = { gitMergeNoFf, gitMergeSyncOrAbort, createMergeLock, MERGE_TIMEOUT_MS };

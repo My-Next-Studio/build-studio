@@ -25,6 +25,17 @@ that move underneath you without your having edited anything.
 
 ### Fixed
 
+- **A failed merge of the pre-implementation QA tests no longer locks the
+  run.** Approving `qa_tests` merges the QA branch into the run branch. When
+  that merge failed (typically a project's `pre-merge-commit` gate, which
+  fails on tests written before the code they test), the half-done merge was
+  left in the checkout and every retry failed with *You have not concluded
+  your merge (MERGE_HEAD exists)* until someone ran `git merge --abort` by
+  hand. The failed merge is now aborted, so the run branch is left as it was
+  and *Retry* works once the cause is fixed. A project whose merge gate runs on
+  every merge should limit it to merges into the default branch, or every
+  test-first run stops at `qa_tests`.
+
 - **A finished review now commits the item's new status.** Completing a
   review run sets the backlog item to *Reviewed* and commits it, but the
   commit ran right after the scorecard commit had started in the background.
