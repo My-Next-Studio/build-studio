@@ -188,7 +188,7 @@ function deriveNeedsAttention(wf) {
         step: stepKey,
         title: 'Waiting on you: owner action required',
         detail: `A blocking finding from ${step.ownerAction.sourceStep || 'the review'} can only be cleared by you, so no agent task was planned. What to do:\n\n${step.ownerAction.text}`,
-        action: 'Do those steps (or defer them on the record), then approve with an override reason saying which.',
+        action: 'Done them? Plan again, so the planner sees your change and plans the agent work. Deferring them instead? Continue with a note saying where to; the run then skips the fixes.',
       };
     }
     if (step.status === 'blocked') {

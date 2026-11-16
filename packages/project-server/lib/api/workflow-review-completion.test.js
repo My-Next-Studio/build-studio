@@ -94,6 +94,18 @@ test('completeReviewWorkflow marks the backlog item Reviewed', () => {
   assert.match(body, /writeWorklog\(wf\)/);
 });
 
+test('completeReviewWorkflow commits the status before the worklog starts the scorecard commit', () => {
+  // writeWorklog fires the scorecard commit in the background; a status commit
+  // after it raced that git process for the index lock and lost (phoclub
+  // PHO-050, 2026-11-16: Reviewed left uncommitted).
+  const i = SRC.indexOf('function completeReviewWorkflow');
+  const body = SRC.slice(i, i + 900);
+  const commitAt = body.indexOf('commitWorkflowDocs(');
+  const worklogAt = body.indexOf('writeWorklog(wf)');
+  assert.ok(commitAt > 0 && worklogAt > 0);
+  assert.ok(commitAt < worklogAt, 'the status commit runs after writeWorklog');
+});
+
 test('the backlog transition lives only in the completion helper', () => {
   // Not in a step handler, where a skipped step takes it down too.
   const hits = (SRC.match(/advanceLinkedFeatures\(wf\.prdPath, 'Reviewed'\)/g) || []).length;

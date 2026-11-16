@@ -112,6 +112,44 @@ test('merge_to_main: a failing hook aborts the merge, returns to main, and shows
   }
 });
 
+// A failed merge leaves the checkout on main. The retry's pre-merge docs
+// commit (status flips, evidence) must still land on the run branch: on main it
+// became a commit the run branch then conflicted with (phoclub PHO-049,
+// 2026-11-16: backlog-index.md, adjacent lines changed on both sides).
+test('merge_to_main: a retry after a failed merge commits its docs on the run branch, not main', async () => {
+  const fx = makeFixtureRepo();
+  installHook(fx, { seconds: 0, exitCode: 1 });
+  const srv = await mountRouter(fx.root);
+  try {
+    stageBugfixAtMerge(fx, srv);
+    const mainBefore = gitRev(fx.root, 'main');
+
+    const first = await srv.post('/api/workflow/advance', {});
+    assert.equal(first.status, 500, JSON.stringify(first.body));
+    assert.equal(currentBranch(fx.root), 'main');
+
+    // Docs evidence written between the attempts, as a status flip or a QA
+    // re-render would be. It is uncommitted on main when the retry starts.
+    fs.mkdirSync(path.join(fx.root, 'docs/pr-evidence/LS-001'), { recursive: true });
+    fs.writeFileSync(path.join(fx.root, 'docs/pr-evidence/LS-001/retry.md'), 'evidence\n');
+
+    installHook(fx, { seconds: 0, exitCode: 0 });
+    const retry = await srv.post('/api/workflow/advance', { action: 'retry' });
+    assert.equal(retry.status, 200, JSON.stringify(retry.body));
+
+    // A bugfix adds its "mark Done" commit on main after the merge, so find
+    // the merge itself rather than reading main's tip.
+    const mergeParents = execFileSync('git', ['rev-list', '--merges', '--parents', '-n', '1', 'main'], { cwd: fx.root, encoding: 'utf8' }).trim().split(' ');
+    assert.equal(mergeParents.length, 3, 'no merge commit on main');
+    assert.equal(mergeParents[1], mainBefore, 'the retry committed onto main before merging');
+    const onBranchSide = execFileSync('git', ['log', '--format=%s', `${mainBefore}..${mergeParents[2]}`], { cwd: fx.root, encoding: 'utf8' });
+    assert.match(onBranchSide, /commit workflow docs\/evidence before merge/);
+  } finally {
+    await srv.close();
+    fx.clean();
+  }
+});
+
 test('router start: a merge left running by a stopped server becomes a retryable error', async () => {
   const fx = makeFixtureRepo();
   const srv0 = await mountRouter(fx.root);

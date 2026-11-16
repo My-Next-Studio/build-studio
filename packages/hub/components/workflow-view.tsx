@@ -1846,8 +1846,16 @@ function StepDetail({
           <div className="md-rendered" style={{ fontSize: 12, marginBottom: 12 }}>
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{(step as any).ownerAction.text}</ReactMarkdown>
           </div>
+          {/* Two outcomes, two buttons. Doing the step must re-plan: the planner
+              was waiting on it and now has agent work to hand out. Approving
+              the empty plan skips the fixes and moves on, which is right only
+              for a deferral (phoclub PHO-049, 2026-11-16: "done" went through
+              the one continue button and the run reached merge with both
+              blocking findings unfixed). */}
           <div style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--mono)', marginBottom: 8 }}>
-            Do it, or defer it on the record (and track it in the backlog). Then continue, with a note saying which: it is logged with the run.
+            Done it? Plan again: the planner sees your change and plans the agent work it was waiting for.
+            Deferring it? Continue without fixing, with a note saying where it went (e.g. a backlog item).
+            The note is logged with the run either way.
           </div>
           {/* The note box lives HERE, not only in the step's general notes box
               further down, which is labelled optional and sits below the agent
@@ -1856,7 +1864,7 @@ function StepDetail({
           <textarea
             value={notes}
             onChange={e => setNotes(e.target.value)}
-            placeholder="Required: what you did, or where it is deferred to (e.g. a backlog item id)"
+            placeholder="What you did (passed to the planner), or where it is deferred to (required to continue without fixing)"
             style={{
               width: '100%', minHeight: 50, resize: 'vertical', marginBottom: 8,
               background: 'var(--surface2)', border: '1px solid var(--border)',
@@ -1864,14 +1872,23 @@ function StepDetail({
               fontSize: 12, padding: '8px 10px', outline: 'none',
             }}
           />
-          <button
-            onClick={() => onAdvance('approve', { override: true, overrideReason: notes.trim() })}
-            disabled={!notes.trim()}
-            className="wf-btn primary"
-            title={notes.trim() ? 'Records your note as the reason and continues past the fix plan' : 'Write a note above first'}
-          >
-            Done or deferred — continue →
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => onAdvance('relaunch')}
+              className="wf-btn primary"
+              title="Runs the fix planner again with the same review findings and your note; it plans the agent work"
+            >
+              Done — plan again
+            </button>
+            <button
+              onClick={() => onAdvance('approve', { override: true, overrideReason: notes.trim() })}
+              disabled={!notes.trim()}
+              className="wf-btn"
+              title={notes.trim() ? 'Records your note and continues past the fix plan without fixing these findings' : 'Write where it is deferred to first'}
+            >
+              Deferred — continue without fixing →
+            </button>
+          </div>
         </div>
       )}
       {step.status === 'blocked' && step.error && !step.validationFailure && !(activeKey === 'fix_plan' && (step as any).ownerAction?.text) && (

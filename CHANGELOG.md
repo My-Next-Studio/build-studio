@@ -21,6 +21,73 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-16 — Owner-action fix plans re-plan; merge retries stay off main; review status commits
+
+### Fixed
+
+- **A finished review now commits the item's new status.** Completing a
+  review run sets the backlog item to *Reviewed* and commits it, but the
+  commit ran right after the scorecard commit had started in the background.
+  When the two git processes collided on the index lock, the status commit
+  gave up with only a warning in the server log, and *Reviewed* was left as an
+  uncommitted change in `docs/backlog-index.md` and the item file. The status
+  is now committed first, and a status commit that meets a held index lock
+  waits and tries again, as the scorecard commit already did. The retry also
+  covers the other status commits (Implemented, Done) when an agent or another
+  git process holds the lock.
+
+- **Finishing an owner action no longer sends the run to merge with its
+  blocking findings unfixed.** When the fix planner found a review finding
+  only the owner can clear (a device check, a render approval), its card had
+  one button, *Done or deferred — continue*. Pressing it after doing the step
+  approved the empty plan, so the run skipped the fix agents and went on to
+  merge with every blocking finding still open. The card now has two
+  buttons: **Done — plan again** relaunches the fix planner, which sees your
+  change and plans the agent work it was waiting for (your note is passed to
+  it), and **Deferred — continue without fixing** keeps the old behaviour for
+  a real deferral and still requires a note.
+- **Retrying Merge to Main after a failed merge no longer causes a conflict of
+  its own.** A failed merge (a red merge gate, a stopped Docker) leaves the
+  checkout on the default branch. The retry then wrote the item's status flip
+  and committed workflow docs *on the default branch* before merging, so the
+  run branch, which carried its own edits to the same files, conflicted with
+  them, typically in `docs/backlog-index.md`. The retry now returns to the run
+  branch first, so those commits land where a first attempt puts them. If git
+  cannot switch back (an uncommitted change in the way), the step says so
+  instead of merging.
+
+### Changed
+
+- **Merge to Main checks out the run branch before it starts** when the
+  checkout is elsewhere. Uncommitted changes in the working tree come along
+  to the run branch, as on a first attempt; non-docs changes still block the
+  merge as before.
+
+### Upgrade steps
+
+**In Build Studio** — rebuild the hub and inject (both packages changed), then
+restart the app:
+
+```bash
+cd packages/hub && npx next build
+cd packages/desktop && node inject-resources.js
+```
+
+**In each managed project** — check for a status change an earlier review
+left uncommitted, and commit it if it is there:
+
+```bash
+git status --short -- docs/backlog docs/backlog-index.md docs/project-state.md
+```
+
+A run already sitting at an owner-action card picks up the two buttons after
+the restart. A run whose retry already put status commits on the default
+branch is not repaired: check `git log --first-parent <default>` for `commit
+workflow docs/evidence before merge` commits made between a failed merge and
+its retry.
+
+---
+
 ## 2026-11-14 — Merges no longer freeze a project while its merge hook runs
 
 ### Fixed

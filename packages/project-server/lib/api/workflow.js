@@ -42,6 +42,7 @@ const { gitMergeNoFf, createMergeLock } = require('../git-merge');
 const { extractFixPlan, checkFeedbackContract, rejectionOutcome, MAX_REJECTIONS } = require('../plan-contract');
 const { assertInside } = require('../path-guard');
 const { commitScorecard } = require('../scorecard-commit');
+const { commitDocsSync } = require('../workflow-docs-commit');
 const lean = require('../lean-execution');
 const suiteGuardrail = require('../suite-guardrail');
 const uncommittedWork = require('../uncommitted-work');
@@ -778,8 +779,11 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   function completeReviewWorkflow(wf) {
     wf.currentStep = 'completed';
     advanceLinkedFeatures(wf.prdPath, 'Reviewed');
-    writeWorklog(wf);
+    // The status commit goes before the worklog: writeWorklog starts the
+    // scorecard commit in the background, and the two git processes then
+    // raced for the index lock, leaving the Reviewed status uncommitted.
     commitWorkflowDocs(`docs(${String(wf.input || '').replace(/\s+/g, '-')}): mark Reviewed in backlog`);
+    writeWorklog(wf);
   }
 
   /**
@@ -813,27 +817,14 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
    * next run's clean-tree guardrail). No-op when nothing under docs/ is dirty.
    */
   function commitWorkflowDocs(message) {
-    try {
-      const { execFileSync } = require('child_process');
-      const docsRel = (config.docs_path || './docs').replace(/^\.\//, '');
-      // Scope strictly to the backlog status files. A review may legitimately run
-      // with the owner's unrelated PRD drafts uncommitted (the start guardrail
-      // allows it), so a broad `git add docs/` would sweep those into this commit.
-      // The index is its own file after the move, a section of project-state.md
-      // before it; `git add` refuses a missing path, so only existing ones.
-      const paths = [`${docsRel}/project-state.md`, `${docsRel}/${BACKLOG_INDEX_FILE}`, `${docsRel}/backlog`]
-        .filter(p => fs.existsSync(path.join(projectRoot, p)));
-      execFileSync('git', ['add', '--', ...paths], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
-      const staged = execFileSync('git', ['diff', '--cached', '--name-only', '--', ...paths], { cwd: projectRoot, encoding: 'utf8' }).trim();
-      if (!staged) return false;
-      // `-- paths` keeps the commit limited to these files even if anything else is staged.
-      execFileSync('git', ['commit', '-m', message, '--', ...paths], { cwd: projectRoot, stdio: ['pipe', 'pipe', 'pipe'] });
-      console.log(`[workflow] committed backlog status (${staged.split('\n').length} file(s)): ${message}`);
-      return true;
-    } catch (e) {
-      console.warn('[workflow] commitWorkflowDocs failed:', e.message);
-      return false;
-    }
+    const docsRel = (config.docs_path || './docs').replace(/^\.\//, '');
+    // Scope strictly to the backlog status files. A review may legitimately run
+    // with the owner's unrelated PRD drafts uncommitted (the start guardrail
+    // allows it), so a broad `git add docs/` would sweep those into this commit.
+    // The index is its own file after the move, a section of project-state.md
+    // before it; only the existing ones are added (lib/workflow-docs-commit.js).
+    const paths = [`${docsRel}/project-state.md`, `${docsRel}/${BACKLOG_INDEX_FILE}`, `${docsRel}/backlog`];
+    return commitDocsSync(projectRoot, paths, message).committed;
   }
 
   /** Try JSON.parse with repair for common LLM output issues. */
@@ -7621,6 +7612,27 @@ Fix only the issues raised. Commit your changes.`,
       const { execFileSync } = require('child_process');
       const run = (args) => execFileSync('git', args, { cwd: projectRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
       const def = wf.defaultBranch || 'main';
+      const runBranchExists = (() => { try { run(['rev-parse', '--verify', wf.branch]); return true; } catch { return false; } })();
+      // A retry after a failed merge starts on the default branch: the failed
+      // attempt aborted and checked it out. Everything below up to the merge
+      // (the scans, the status flip, the docs auto-commit) belongs on the run
+      // branch, as on a first attempt. Run on the default branch, the docs
+      // commit became one the run branch then conflicted with (phoclub PHO-049,
+      // 2026-11-16). Uncommitted changes come along, as they would have on the
+      // run branch; a switch git refuses is reported instead of merging.
+      if (runBranchExists && wf.branch !== def) {
+        let current = '';
+        try { current = run(['branch', '--show-current']); } catch {}
+        if (current !== wf.branch) {
+          try {
+            run(['checkout', wf.branch]);
+          } catch (e) {
+            wf.steps.merge_to_main = { status: 'error', error: `Could not check out the run branch ${wf.branch} (you are on ${current || 'a detached HEAD'}): ${e.stderr ? String(e.stderr).trim() : e.message}. Commit or stash what is in the way, then retry the merge.` };
+            state.saveWorkflow(wf);
+            return res.status(500).json({ workflow: wf, error: `merge_to_main: cannot return to ${wf.branch}` });
+          }
+        }
+      }
       // Bugfix pre-merge gates. Execution runs the LLM-URL + hygiene scans at its
       // merge_for_review step (mergeDevBranches); a bugfix run has no such step, so
       // run them here — against the fix branch's diff vs the default branch — before
@@ -7715,7 +7727,6 @@ Fix only the issues raised. Commit your changes.`,
           }
         }
       }
-      const runBranchExists = (() => { try { run(['rev-parse', '--verify', wf.branch]); return true; } catch { return false; } })();
       markMergeRunning(wf);
       let mergeErr = null;
       try {
@@ -10794,7 +10805,8 @@ Before adding new entries, scan existing files in docs/learnings/:
             wf.steps.fix_plan.status = 'blocked';
             wf.steps.fix_plan.ownerAction = { text: ownerAction.slice(0, 4000), sourceStep, at: new Date().toISOString() };
             wf.steps.fix_plan.error = `Waiting on you: owner action required. The fix planner found that ${summary} from "${sourceStep}" can only be cleared by you, so it planned no agent tasks. `
-              + `Do the steps it lists, or defer them on the record, then approve with an override reason saying which.`;
+              + `Done them? Relaunch the fix plan: the planner sees your change and plans the agent work it was waiting for. `
+              + `Deferring them? Approve with an override reason saying where to; the run then continues without fixing them.`;
             state.saveWorkflow(wf);
             return res.status(400).json({
               error: wf.steps.fix_plan.error,

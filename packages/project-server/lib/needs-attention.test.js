@@ -358,6 +358,11 @@ test('an empty fix plan that names an owner action reads as waiting on the owner
   assert.match(n.title, /Waiting on you/);
   assert.match(n.detail, /code_review/);
   assert.match(n.detail, /Run the device script/);
+  // Doing the step re-plans; only deferring skips the fixes (phoclub PHO-049,
+  // 2026-11-16: "done" was approved as an override and the run went to merge
+  // with both blocking findings unfixed).
+  assert.match(n.action, /Plan again/);
+  assert.match(n.action, /skips the fixes/);
 });
 
 test('the interview banner names the interview\'s own buttons, not Approve', () => {
