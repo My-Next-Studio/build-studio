@@ -6,7 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput, readFinalAssistantText, looksLikeReport,
+  slugCandidates, findTranscript, extractFinalAssistantText, extractCodexFinalMessage,
+  recoverAgentOutput, readFinalAssistantText, looksLikeReport,
 } = require('./transcript-recovery');
 
 /** Build a throwaway ~/.claude/projects tree. */
@@ -104,9 +105,64 @@ test('readFinalAssistantText returns the last words even when they are not a rep
 });
 
 test('an agent with no CLI session id is not recoverable', () => {
-  // codex agents have no pinned session; recovery simply does not apply.
   assert.equal(recoverAgentOutput({ agentCwd: '/tmp/proj' }), null);
   assert.equal(recoverAgentOutput(null), null);
+});
+
+// ── codex rollouts ──────────────────────────────────────────────────────────
+// phoclub PHO-014, 2026-11-17: a codex UX reviewer printed a complete approval
+// and exited without the curl. The report sat in its rollout; Recover read only
+// Claude transcripts, so the agent was failed instead.
+
+const codexRow = (type, payload) => line({ timestamp: '2026-11-17T19:06:59.000Z', type, payload });
+const codexMessage = (t) => codexRow('response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: t }] });
+const codexComplete = (t) => codexRow('event_msg', { type: 'task_complete', last_agent_message: t });
+const UX_REPORT = '## Review: UX\n\n**Approved:** yes\n**Blocking:** 0 | **Medium:** 0 | **Low:** 0\n\n### Findings\nNone.';
+
+function fakeCodexHome(sessionId, contents) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bs-codex-'));
+  const dir = path.join(home, '.codex', 'sessions', '2026', '11', '17');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `rollout-2026-11-17T20-06-30-${sessionId}.jsonl`);
+  fs.writeFileSync(file, contents);
+  return { home, file };
+}
+
+test('codex: task_complete is the report, over an earlier assistant message', () => {
+  const jsonl = codexMessage('Reading the diff first.') + codexComplete(UX_REPORT)
+    + codexRow('event_msg', { type: 'token_count', info: {} });
+  assert.equal(extractCodexFinalMessage(jsonl), UX_REPORT);
+});
+
+test('codex: a rollout cut off before task_complete falls back to the last message', () => {
+  const jsonl = codexMessage('early') + codexMessage(UX_REPORT) + '{"type":"event_m';
+  assert.equal(extractCodexFinalMessage(jsonl), UX_REPORT);
+  assert.equal(extractCodexFinalMessage(codexRow('event_msg', { type: 'token_count' })), null);
+});
+
+test('codex: the report is recovered from the rollout the watchdog recorded', () => {
+  const { file } = fakeCodexHome('01a1eae7', codexMessage('Reading.') + codexComplete(UX_REPORT));
+  const r = recoverAgentOutput({ cli: 'codex', codexRolloutPath: file, agentCwd: '/tmp/proj' });
+  assert.equal(r.text, UX_REPORT);
+  assert.equal(r.transcript, file);
+});
+
+test('codex: without a recorded path, the rollout is found by session id', () => {
+  const { home, file } = fakeCodexHome('01a1eae7-4fc5', codexComplete(UX_REPORT));
+  const r = recoverAgentOutput({ cli: 'codex', cliSessionId: '01a1eae7-4fc5' }, { home });
+  assert.equal(r.transcript, file);
+});
+
+test('codex: a progress note is not offered as a report', () => {
+  const { file } = fakeCodexHome('01a1eae7', codexComplete('Still running; waiting for the suite.'));
+  assert.equal(recoverAgentOutput({ cli: 'codex', codexRolloutPath: file }), null);
+  assert.equal(readFinalAssistantText({ cli: 'codex', codexRolloutPath: file }).text, 'Still running; waiting for the suite.');
+});
+
+test('codex: no rollout means nothing to recover', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bs-codex-empty-'));
+  assert.equal(recoverAgentOutput({ cli: 'codex' }, { home }), null);
+  assert.equal(recoverAgentOutput({ cli: 'codex', codexRolloutPath: path.join(home, 'missing.jsonl') }, { home }), null);
 });
 
 test('a transcript that exists but holds no report is not recoverable', () => {

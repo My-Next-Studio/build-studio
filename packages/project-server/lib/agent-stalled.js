@@ -250,10 +250,22 @@ const clock = (ms) => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
-function classifyNonInteractive({ cli, idleMs, modelLastActivityMs, now, modelStallMs }) {
+function classifyNonInteractive({ cli, idleMs, modelLastActivityMs, now, modelStallMs, hasRecoverableReport, waitConfirmMs }) {
   // The model's own activity record (codex's rollout) beats the pane log: the
   // log only moves when a command finishes, the rollout moves as tokens stream.
   const silentMs = Number.isFinite(modelLastActivityMs) ? now - modelLastActivityMs : idleMs;
+  // A quiet rollout that ENDS in a report is a finished agent, not a stalled
+  // model: it wrote its report and exited without the curl (phoclub PHO-014,
+  // 2026-11-17, read as "waiting on the model" and then failed). Recover
+  // delivers it; relaunching would redo the work.
+  if (hasRecoverableReport && Number.isFinite(silentMs) && silentMs >= waitConfirmMs) {
+    return {
+      reason: 'finished_not_reported',
+      title: 'An agent finished but never reported',
+      detail: `The ${cli} agent produced a complete report and stopped without posting it, so the step will wait indefinitely. Its own output is still recoverable.`,
+      action: 'Use Recover on that agent to deliver its report, or relaunch the step.',
+    };
+  }
   if (!Number.isFinite(silentMs) || silentMs < modelStallMs) return null;
   const minutes = Math.round(silentMs / 60000);
   if (Number.isFinite(modelLastActivityMs)) {
@@ -294,7 +306,9 @@ function classifyStalledAgent({
 
   // Non-interactive agents: no prompt, no dialog, so none of the readings below
   // apply. Judge them on silence alone.
-  if (NON_INTERACTIVE_CLIS.has(cli)) return classifyNonInteractive({ cli, idleMs, modelLastActivityMs, now, modelStallMs });
+  if (NON_INTERACTIVE_CLIS.has(cli)) {
+    return classifyNonInteractive({ cli, idleMs, modelLastActivityMs, now, modelStallMs, hasRecoverableReport, waitConfirmMs });
+  }
 
   if (!text.trim()) return null;              // unreadable pane proves nothing
 

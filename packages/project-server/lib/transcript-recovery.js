@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const codexTelemetry = require('./codex-telemetry');
 
 /**
  * Recover the output of an agent that finished but never reported.
@@ -23,6 +24,12 @@ const os = require('os');
  * This is strictly better than nudging the pane. Under memory pressure the
  * process stops accepting input entirely (both observed cases), so a nudge
  * cannot land — but the transcript is unaffected.
+ *
+ * Codex agents do the same thing (phoclub PHO-014 review, 2026-11-17: the UX
+ * reviewer printed a complete approval and exited without the curl). Their
+ * transcript is the Codex rollout, which records the closing message as
+ * `task_complete.last_agent_message`. Reading only Claude transcripts left
+ * Recover empty for them, and the agent was reported failed instead.
  */
 
 /** Where the Claude CLI keeps per-project transcripts. */
@@ -110,6 +117,41 @@ function extractFinalAssistantText(jsonlText) {
 }
 
 /**
+ * The closing message of a Codex session, from its rollout.
+ *
+ * `task_complete` carries the turn's final message as `last_agent_message`;
+ * the latest non-blank one wins, since a resumed session completes more than
+ * one turn. A rollout cut off before `task_complete` falls back to the last
+ * assistant `message` item, which Codex writes as each reply streams in.
+ *
+ * @param {string} jsonlText  raw rollout contents
+ * @returns {string|null}
+ */
+function extractCodexFinalMessage(jsonlText) {
+  let completed = null;
+  let lastMessage = null;
+  for (const line of String(jsonlText || '').split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    let row;
+    try { row = JSON.parse(t); } catch (_) { continue; } // a partial trailing write
+    const p = row && row.payload;
+    if (!p) continue;
+    if (row.type === 'event_msg' && p.type === 'task_complete'
+        && typeof p.last_agent_message === 'string' && p.last_agent_message.trim()) {
+      completed = p.last_agent_message;
+    } else if (row.type === 'response_item' && p.type === 'message' && p.role === 'assistant' && Array.isArray(p.content)) {
+      const text = p.content
+        .filter((c) => c && c.type === 'output_text' && typeof c.text === 'string')
+        .map((c) => c.text)
+        .join('');
+      if (text.trim()) lastMessage = text;
+    }
+  }
+  return completed || lastMessage;
+}
+
+/**
  * Does this look like a step's report, rather than a passing remark?
  *
  * The final assistant text is whatever the agent said last, and an agent that
@@ -151,11 +193,24 @@ function recoverAgentOutput(agent, opts = {}) {
  * @returns {null|{text:string, transcript:string}}
  */
 function readFinalAssistantText(agent, opts = {}) {
+  if (agent && agent.cli === 'codex') return readCodexFinalMessage(agent, opts);
   if (!agent || !agent.cliSessionId) return null;
   const file = findTranscript(agent.cliSessionId, agent.agentCwd, opts);
   if (!file) return null;
   let text = null;
   try { text = extractFinalAssistantText(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
+  return text ? { text, transcript: file } : null;
+}
+
+/**
+ * A Codex agent's rollout: the path the watchdog already recorded, else a
+ * lookup by session id.
+ */
+function readCodexFinalMessage(agent, { home = os.homedir() } = {}) {
+  const file = agent.codexRolloutPath || codexTelemetry.findRolloutFile(agent.cliSessionId, home);
+  if (!file) return null;
+  let text = null;
+  try { text = extractCodexFinalMessage(fs.readFileSync(file, 'utf8')); } catch (_) { return null; }
   return text ? { text, transcript: file } : null;
 }
 
@@ -184,6 +239,7 @@ const REPORT_SHADOW_QUESTIONS = {
 const REPORT_SHADOW_QUESTIONS_VERSION = 1;
 
 module.exports = {
-  projectsRoot, slugCandidates, findTranscript, extractFinalAssistantText, recoverAgentOutput, readFinalAssistantText, looksLikeReport,
+  projectsRoot, slugCandidates, findTranscript, extractFinalAssistantText, extractCodexFinalMessage,
+  recoverAgentOutput, readFinalAssistantText, looksLikeReport,
   REPORT_SHADOW_QUESTIONS, REPORT_SHADOW_QUESTIONS_VERSION,
 };

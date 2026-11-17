@@ -209,6 +209,25 @@ test('no dialog, no question', () => {
     assert.equal(r, null);
   });
 
+  // phoclub PHO-014, 2026-11-17: a codex reviewer printed its approval and
+  // exited without the curl. Read as "waiting on the model", it was failed.
+  test('a quiet codex agent whose rollout ends in a report finished but never reported', () => {
+    const r = classifyStalledAgent({
+      paneText: CODEX_PANE, idleMs: 3 * MIN, hasFeedback: false, hasRecoverableReport: true, cli: 'codex',
+      modelLastActivityMs: NOW - 3 * MIN, now: NOW,
+    });
+    assert.equal(r.reason, 'finished_not_reported');
+    assert.match(r.action, /Recover/);
+  });
+
+  test('a codex report is not offered while the agent was active moments ago', () => {
+    const r = classifyStalledAgent({
+      paneText: CODEX_PANE, idleMs: 30 * 1000, hasFeedback: false, hasRecoverableReport: true, cli: 'codex',
+      modelLastActivityMs: NOW - 30 * 1000, now: NOW,
+    });
+    assert.equal(r, null);
+  });
+
   test('without a rollout, long silence is reported as silence, not as a prompt', () => {
     const r = classifyStalledAgent({ paneText: CODEX_PANE, idleMs: MODEL_STALL_MS + MIN, hasFeedback: false, cli: 'opencode', now: NOW });
     assert.equal(r.reason, 'agent_silent');

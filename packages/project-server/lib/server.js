@@ -1036,7 +1036,14 @@ function startServer(projectRoot, opts = {}) {
             // instruction that hides the cost: relaunching a live agent throws
             // away its context and any uncommitted work, so that tradeoff is
             // stated even when the classifier's own action offers a relaunch.
-            agent.error = exited
+            // An exited agent whose report survives in its transcript finished
+            // its work; it only skipped the curl. Say so, rather than sending
+            // the owner to inspect commits for a review that never commits.
+            const exitedWithReport = exited && !!transcriptRecovery.recoverAgentOutput(agent);
+            agent.error = exitedWithReport
+              ? `Process exited ${Math.round(idleMs / 60000)} minutes ago without posting its report, but the report is in its transcript. `
+                + 'Use Recover to deliver it instead of relaunching.'
+              : exited
               ? `Process exited ${Math.round(idleMs / 60000)} minutes ago (pane is back at a shell prompt) after ${Math.round(elapsed / 60000)}m of work`
                 + `${agent.cliSessionId ? '' : ` — ${agent.cli || 'this CLI'} has no resumable session, so it cannot be continued in place`}. `
                 + 'Check whether it committed its work before relaunching — if it did, recover that instead of redoing it.'

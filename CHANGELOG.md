@@ -21,6 +21,27 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-17 — Recover works for Codex agents
+
+### Fixed
+
+- **A Codex agent that finished but never reported can now be recovered.**
+  Codex agents sometimes write their complete report and exit without posting
+  it. The report is in the Codex session log, but Recover only read Claude
+  transcripts, so the hub offered nothing: the agent was shown as *waiting on
+  the model* and then failed, and the only way forward was to relaunch and redo
+  the work. Recover now reads the Codex session log too. Such an agent is shown
+  as *finished but never reported*, and once its process has exited the error
+  says to use Recover instead of telling you to check its commits.
+
+### Upgrade steps
+
+**In Build Studio** — sync the project-server into the app
+(`cd packages/desktop && node inject-resources.js --sync-only`) and restart
+the project-servers.
+
+**In each managed project** — nothing to do.
+
 ## 2026-11-16 — Owner-action fix plans re-plan; merge retries stay off main; review status commits
 
 ### Fixed
