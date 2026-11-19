@@ -21,6 +21,66 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-19 — Nightly test runs, scheduled by Build Studio
+
+### Added
+
+- **Operations → Nightly: a scheduled run of a slow test suite.** A suite too
+  slow for the merge gate (a full end-to-end suite of half an hour, say) can now
+  run once a night on this machine. The project declares how to run it in
+  `.build-studio/config.yaml`; you turn it on, and choose the time, in the new
+  Nightly tab. The tab shows the latest run (result, counts, duration, commit,
+  and whether the working tree was dirty), its failed and flaky tests, the log,
+  the history of kept runs as a trend, and the tests that keep coming back.
+  **Run now** starts a full run in the background.
+- **A scheduled run is skipped when there is nothing new to test.** When the
+  branch is where the last completed run left it, that day's run is skipped and
+  the tab says why. It also waits, rather than starts, while a workflow in the
+  project has an agent or a merge at work, and while the checkout is on another
+  branch. The suite shares the checkout, its database and its dev server.
+- **A failed nightly run is flagged like a failed CI run:** a red dot on the
+  Nightly tab and on Operations, and an alert in Monitor (raised to *high* after
+  two failures in a row). It clears itself when a run comes back green.
+- **Investigate** on a failed or flaky run starts an agent that reads the run's
+  report, log and traces, and classifies each failure as a product bug, a test
+  bug, flaky or environment, with its evidence. Its diagnosis appears in the tab.
+  The agent changes no files.
+
+The runner contract, for anyone adding this to a project (full detail in
+`packages/project-server/lib/nightly.js`):
+
+```yaml
+nightly:
+  cmd: npm run e2e:nightly      # required: one full pass
+  status_dir: tmp/nightly-e2e   # required: where the runner writes
+  branch: main                  # optional, default main
+  label: E2E                    # optional, the tab's name for it
+  at: "03:30"                   # optional, the time offered when turned on
+```
+
+The runner writes `<status_dir>/runs/<ISO time>/summary.json` per run, with
+`startedAt, finishedAt, head, branch, dirtyWorkingTree, passed, failed, flaky,
+skipped, durationSec, failures[], flakes[]`, or `error` when it could not run.
+While it runs, it writes its pid to `<status_dir>/run.lock`.
+
+### Known issues
+
+- **It runs only while Build Studio is running.** A night missed because the
+  app was closed, or the Mac was asleep, runs later the same day, once the app
+  is back. That catch-up run can therefore start while you are working.
+
+### Upgrade steps
+
+**In Build Studio** — hub and project-server both changed: rebuild the hub and
+run the full inject (`cd packages/hub && npx next build`, then
+`cd packages/desktop && node inject-resources.js`), then restart the app.
+
+**In each managed project** — nothing, unless you want a nightly run. To add
+one, put a `nightly:` block like the one above in the project's
+`.build-studio/config.yaml`, then turn it on in Operations → Nightly. A project
+that already schedules the same suite another way (cron, launchd) should remove
+that schedule first, or the suite runs twice.
+
 ## 2026-11-17 — Recover works for Codex agents
 
 ### Fixed

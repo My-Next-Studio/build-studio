@@ -31,6 +31,7 @@ const { createBacklogRouter } = require('./api/backlog');
 const { createReconcileRouter } = require('./api/reconcile');
 const { createHealthHandler } = require('./api/health');
 const { createLocalCiRouter } = require('./api/local-ci');
+const { createNightly } = require('./api/nightly');
 const { createSupportRouter } = require('./api/support');
 const { createCliConfigRouter } = require('./api/cli-config');
 const { createOverseer } = require('./overseer');
@@ -180,7 +181,9 @@ function startServer(projectRoot, opts = {}) {
   // CI runtime per workflow, and its drift notice (docs/plans/test-suite-drift.md).
   const ciRuntime = createCiRuntime(config);
   const ciMaintenance = createCiMaintenance(config, ciRuntime);
-  const monitor = createMonitor(config, { extraAlerts: () => [...publisher.alerts(), ...ciRuntime.alerts()] });
+  // The project's scheduled test run (Operations → Nightly); its failures are alerts too.
+  const nightly = createNightly(config, { state });
+  const monitor = createMonitor(config, { extraAlerts: () => [...publisher.alerts(), ...ciRuntime.alerts(), ...nightly.alerts()] });
   const deploymentRouter = createDeploymentRouter(config, gitOps, { monitor });
   const localCiRouter = createLocalCiRouter(config);
   const monitorRouter = createMonitorRouter(config, monitor);
@@ -202,6 +205,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', runRouter);
   app.use('/api', deploymentRouter);
   app.use('/api', localCiRouter);
+  app.use('/api', nightly.router);
   app.use('/api', monitorRouter);
   app.use('/api', ciRuntimeRouter);
   app.use('/api', publishingRouter);
@@ -1132,6 +1136,8 @@ function startServer(projectRoot, opts = {}) {
       // Files a finished maintenance analysis, and restarts the runtime
       // baseline once its item has merged.
       ciMaintenance.startTicking();
+      // Starts a project's scheduled test run when it is due (lib/nightly.js).
+      nightly.startTicking();
     });
   };
 

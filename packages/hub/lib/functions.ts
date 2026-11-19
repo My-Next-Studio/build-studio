@@ -88,6 +88,7 @@ export function resolveFunctions(
         const extras: string[] = []
         if (operationsTabs?.uitests) extras.push('uitests')
         if (operationsTabs?.publishing) extras.push('publishing')
+        if (operationsTabs?.nightly) extras.push('nightly')
         if (portals && portals.length > 0) extras.push(...portals.map((_, i) => `portal-${i}`))
         if (extras.length > 0) return { ...fn, tabs: [...(fn.tabs || []), ...extras] }
       }

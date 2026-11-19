@@ -5,6 +5,7 @@ const { execFileSync } = require('child_process');
 const { derivePrdPhase } = require('../prd-phase');
 const { assertInside } = require('../path-guard');
 const { BACKLOG_INDEX_FILE, backlogIndexPath } = require('../backlog');
+const { nightlyConfig } = require('../nightly');
 
 // ─── Active-PRD + Backlog parsers (used by /status/prd-phase) ───────────────
 
@@ -326,6 +327,9 @@ function createStatusRouter(config, gitOps, state) {
       operationsTabs: {
         ...(config.operations_tabs || {}),
         ...((config.content_publishing && typeof config.content_publishing === 'object') ? { publishing: true } : {}),
+        // Shown wherever a nightly runner is declared, on or off: the tab is
+        // where it gets turned on.
+        ...(nightlyConfig(config) ? { nightly: true } : {}),
       },
       hasBacklog,
     });
