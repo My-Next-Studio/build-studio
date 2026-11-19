@@ -130,6 +130,13 @@ Only `ok: true` runs are measured.
   resume the old session) and for the scorecard's token count. The latest
   session in the log is now used. A rollout recorded before the agent started
   is looked up again.
+- **A usage-limit banner no longer outlives its agent.** Claude Code waits out
+  a usage limit and continues by itself. The agent then finished and reported,
+  but the banner "hit a Claude usage limit and stopped" stayed up. Its Nudge
+  did nothing, because the agent's tmux session was already gone. A banner
+  that names one agent (usage limit, or a task running past 45 minutes) now
+  comes down once that agent has reported, failed or been relaunched. Nudge on
+  such a banner clears it instead of typing into a closed pane.
 
 ### Known issues
 

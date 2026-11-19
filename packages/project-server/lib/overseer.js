@@ -47,6 +47,39 @@ const FEEDBACK_COMPLETION_PATTERNS = [
   /```json[\s\S]*?\\?"tasks\\?"\s*:\s*\[/,    // unclosed json plan block
 ];
 
+// Escalations that name one agent and offer an action on it.
+const AGENT_ESCALATION_ACTIONS = new Set(['nudge-agent', 'task-overrun']);
+
+/**
+ * Has the agent an escalation names stopped running?
+ *
+ * Such a banner said "this agent is stuck", but nothing took it down once the
+ * agent moved on. A Claude agent that hit its usage limit continued on its own
+ * when the limit reset, finished and reported. Its window was reaped, and the
+ * banner stayed up with a Nudge that typed into a tmux session that no longer
+ * existed (phoclub, 2026-11-19).
+ *
+ * The agent is identified by window and, when the escalation recorded it, by
+ * start time. A relaunched task reuses its window name, and the new agent is
+ * not the one that was stuck.
+ *
+ * @returns {boolean} true for an agent escalation whose agent is no longer
+ *   running without a report; false for any other escalation.
+ */
+function agentEscalationStale(wf, escalation) {
+  if (!escalation || !AGENT_ESCALATION_ACTIONS.has(escalation.action) || !escalation.actionTarget) return false;
+  const live = (a) => a && a.window === escalation.actionTarget
+    && a.status === 'running'
+    && !(a.feedback && String(a.feedback).trim())
+    && (!escalation.actionAgentStartedAt || a.startedAt === escalation.actionAgentStartedAt);
+  for (const step of Object.values((wf && wf.steps) || {})) {
+    if (step && step.status === 'running' && (step.agents || []).some(live)) return false;
+  }
+  for (const ts of Object.values((wf && wf.taskExecution && wf.taskExecution.taskStates) || {})) {
+    if (ts && ['running', 'reviewing', 'fixing'].includes(ts.status) && (ts.agents || []).some(live)) return false;
+  }
+  return true;
+}
 
 /**
  * Create an overseer bound to a specific project's state + config.
@@ -490,6 +523,17 @@ function createOverseer(config, state, broadcast) {
 
     let changed = false;
 
+    // --- An agent banner whose agent has moved on comes down ---
+    if (agentEscalationStale(wf, overseer.pendingEscalation)) {
+      log(`Cleared escalation ${overseer.pendingEscalation.symptom}: ${overseer.pendingEscalation.actionTarget} is no longer running`);
+      overseer.pendingEscalation = null;
+      if (overseer.status === 'escalating') {
+        overseer.status = 'watching';
+        overseer.activity = `Monitoring step: ${wf.currentStep || 'workflow'}`;
+      }
+      changed = true;
+    }
+
     // --- Check: package-lock.json merge conflict ---
     if (detectPackageLockConflict(config.projectRoot)) {
       const symptom = 'package-lock-conflict';
@@ -604,6 +648,7 @@ function createOverseer(config, state, broadcast) {
           description: `${agent.role} (${agent.window}) hit a Claude usage limit and stopped. Click Nudge to retry — only works if the limit has lifted; otherwise the agent will hit it again and the banner will reappear.`,
           action: 'nudge-agent',
           actionTarget: agent.window,
+          actionAgentStartedAt: agent.startedAt || null,
           askedAt: new Date().toISOString(),
         };
         recordIntervention(overseer, symptom, 'await-nudge', `pane in ${agent.window} matched usage-limit pattern; awaiting user nudge`);
@@ -634,6 +679,7 @@ function createOverseer(config, state, broadcast) {
           description: `${agent.role} (${agent.window}, task ${parseInt(taskIdx,10)+1}) has been running ${ageMin}min without POSTing feedback. Likely an oversized task (full-suite run, Nx flake check, omnibus). Force-complete uses the agent's pane output as feedback; Kill-and-skip marks the task done with no work attribution. Both stop the wasted runtime.`,
           action: 'task-overrun',
           actionTarget: agent.window,
+          actionAgentStartedAt: agent.startedAt || null,
           actionTaskIdx: taskIdx,
           askedAt: new Date().toISOString(),
         };
@@ -822,6 +868,20 @@ function createOverseer(config, state, broadcast) {
       const wf = state.loadWorkflow();
       if (!wf || !wf.sessionName) return { ok: false, error: 'no active workflow' };
       if (!windowName) return { ok: false, error: 'window required' };
+
+      // An agent that has already finished has nothing to continue, and its
+      // window may be gone with its session. Take the banner down instead.
+      const pending = wf.overseer && wf.overseer.pendingEscalation;
+      if (pending && pending.actionTarget === windowName && agentEscalationStale(wf, pending)) {
+        wf.overseer.pendingEscalation = null;
+        if (wf.overseer.status === 'escalating') {
+          wf.overseer.status = 'watching';
+          wf.overseer.activity = `Monitoring step: ${wf.currentStep || 'workflow'}`;
+        }
+        recordIntervention(wf.overseer, `nudge-${windowName}`, 'user-nudge', `${windowName} had already stopped running; cleared the banner instead`);
+        state.saveWorkflow(wf);
+        return { ok: true, cleared: true };
+      }
 
       const ok = sendContinueToAgentPane(wf.sessionName, windowName);
       if (!ok) return { ok: false, error: `tmux send-keys failed for ${windowName}` };
@@ -1024,4 +1084,4 @@ function createOverseer(config, state, broadcast) {
   return { startOverseer, stopOverseer, dismissEscalation, nudgeAgent, forceCompleteTaskAgent, killAndSkipTaskAgent, isRunning: () => running };
 }
 
-module.exports = { createOverseer };
+module.exports = { createOverseer, agentEscalationStale };
