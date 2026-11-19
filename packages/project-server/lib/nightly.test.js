@@ -189,7 +189,7 @@ test('failureAlert: red raises one, twice in a row raises it high, green or flak
   const one = nl.failureAlert([red, ok], opts);
   assert.equal(one.severity, 'moderate');
   assert.equal(one.id, 'nightly:p');
-  assert.deepEqual(one.open, { fn: 'operations', tab: 'nightly', label: 'E2E' });
+  assert.deepEqual(one.open, { fn: 'operations', tab: 'tests', label: 'Tests' });
   assert.equal(nl.failureAlert([red, err, ok], opts).severity, 'high');
   assert.equal(nl.failureAlert([ok, red], opts), null);
   assert.equal(nl.failureAlert([run('2026-11-19T02-30-00-000Z', green('b', { flaky: 2 }))], opts), null);

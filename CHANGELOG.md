@@ -21,9 +21,33 @@ that move underneath you without your having edited anything.
 
 ---
 
-## 2026-11-19 — Nightly test runs, scheduled by Build Studio
+## 2026-11-19 — Nightly test runs and test-suite health
 
 ### Added
+
+- **Operations → Tests: test-suite health measured on this machine.** The CI
+  runtime watch only sees GitHub CI, which says little for a project that
+  merges locally and pushes rarely. Now each suite's **time, test count and
+  lines of test code** are judged against the suite's own recent median, by
+  the same 10% rule and the same Keep watching / Accept new size actions. The
+  sources are:
+  - the merge gate's history (one JSON line per run, written by the project's
+    gate);
+  - the nightly run;
+  - a count of test code on the default branch.
+
+  Optional **caps** per suite raise a moderate alert when crossed. The tab also
+  lists **tests that keep flaking** in the nightly run (flaky at least once,
+  and flaky or red in at least 3 of the last 7 runs), which raises a Monitor
+  alert.
+- **A test-suite review comes due every 10 stories** (configurable). **Start
+  review** runs one agent that reads the suite for overlap: tests a later story
+  made redundant, copied helpers, every-combination matrices, copy-deck
+  assertions, fixed waits and vacuous checks. Its proposals are filed as a
+  backlog Task at the top of the backlog, as the CI maintenance pass does. When
+  that item is implemented, every suite gets a new baseline and the count
+  restarts. A growth notice can start a review too. Design:
+  `docs/plans/local-suite-watch.md`.
 
 - **Operations → Nightly: a scheduled run of a slow test suite.** A suite too
   slow for the merge gate (a full end-to-end suite of half an hour, say) can now
@@ -46,7 +70,12 @@ that move underneath you without your having edited anything.
   bug, flaky or environment, with its evidence. Its diagnosis appears in the tab.
   The agent changes no files.
 
-The runner contract, for anyone adding this to a project (full detail in
+### Changed
+
+- **The Nightly tab is now Tests**, with the suite health above the nightly run.
+  It shows where `nightly:` or `suite_watch:` is declared. Alerts link to it.
+
+The nightly runner contract, for anyone adding it to a project (full detail in
 `packages/project-server/lib/nightly.js`):
 
 ```yaml
@@ -63,6 +92,23 @@ The runner writes `<status_dir>/runs/<ISO time>/summary.json` per run, with
 skipped, durationSec, failures[], flakes[]`, or `error` when it could not run.
 While it runs, it writes its pid to `<status_dir>/run.lock`.
 
+The suite watch (full detail in `packages/project-server/lib/suite-watch.js`):
+
+```yaml
+suite_watch:
+  gate_history: tmp/ci-check/history.jsonl  # the gate appends one line per run
+  test_paths: [test, e2e]                   # git pathspecs counted as test code
+  review_every: 10                          # stories between reviews; 0 turns it off
+  caps:                                     # optional, per suite
+    nightly: { minutes: 35 }
+    "gate:unit": { tests: 5000 }
+    code: { lines: 60000 }
+```
+
+A gate history line is
+`{"at": ISO, "head": sha, "mode": "...", "ok": true, "steps": [{"name": "unit", "seconds": 10.2, "tests": 4277}]}`.
+Only `ok: true` runs are measured.
+
 ### Known issues
 
 - **It runs only while Build Studio is running.** A night missed because the
@@ -75,11 +121,13 @@ While it runs, it writes its pid to `<status_dir>/run.lock`.
 run the full inject (`cd packages/hub && npx next build`, then
 `cd packages/desktop && node inject-resources.js`), then restart the app.
 
-**In each managed project** — nothing, unless you want a nightly run. To add
-one, put a `nightly:` block like the one above in the project's
-`.build-studio/config.yaml`, then turn it on in Operations → Nightly. A project
+**In each managed project** — nothing, unless you want these. For a nightly
+run, add a `nightly:` block like the one above to the project's
+`.build-studio/config.yaml`, then turn it on in Operations → Tests. A project
 that already schedules the same suite another way (cron, launchd) should remove
-that schedule first, or the suite runs twice.
+that schedule first, or the suite runs twice. For the suite health, add a
+`suite_watch:` block. To measure the merge gate's steps as well, make the gate
+append the history line above after each successful run.
 
 ## 2026-11-17 — Recover works for Codex agents
 

@@ -207,13 +207,8 @@ export function NightlyTab() {
   if (!data) {
     return <div style={{ padding: '24px 32px', fontFamily: 'var(--mono)', fontSize: 11, color: error ? 'var(--red)' : 'var(--text-dim)' }}>{error || 'Loading…'}</div>
   }
-  if (!data.configured) {
-    return (
-      <div style={{ padding: '24px 32px', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.6 }}>
-        No nightly run is declared for this project. Add <code>nightly: {'{'} cmd, status_dir {'}'}</code> to <code>.build-studio/config.yaml</code>.
-      </div>
-    )
-  }
+  // Part of the Tests tab, which also shows when only the suite watch is declared.
+  if (!data.configured) return null
 
   const { schedule, current } = data
   const time = timeDraft ?? schedule.at

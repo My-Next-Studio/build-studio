@@ -17,7 +17,7 @@ import { ServicesTab } from './services-tab'
 import { PortalTab } from './portal-tab'
 import { RunbooksTab } from './runbooks-tab'
 import { UITestsTab } from './uitests-tab'
-import { NightlyTab } from './nightly-tab'
+import { TestsTab } from './tests-tab'
 import { PublishingTab } from './publishing-tab'
 import { BacklogTab } from './backlog-tab'
 import { QueueTab } from './queue-tab'
@@ -143,7 +143,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
   const [portals, setPortals] = useState<PortalConfig[]>(initialPortalsConfig || [])
   const [wfBrief, setWfBrief] = useState<WorkflowBrief | null>(null)
   const [ciFailed, setCiFailed] = useState(false)
-  // Latest nightly run red (Operations → Nightly), polled on the same tick.
+  // Latest nightly run red (Operations → Tests), polled on the same tick.
   const [nightlyRed, setNightlyRed] = useState(false)
   const { agents, reload: reloadAgents } = useAgents()
   const api = useProjectApi()
@@ -291,7 +291,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
     { key: 'cicd', label: 'CI/CD' },
     { key: 'runbooks', label: 'Runbooks' },
     { key: 'uitests', label: 'UITests' },
-    { key: 'nightly', label: 'Nightly' },
+    { key: 'tests', label: 'Tests' },
     { key: 'publishing', label: 'Publishing' },
     { key: 'reports', label: 'Reports' },
     ...portals.map((p, i) => ({ key: `portal-${i}`, label: p.name })),
@@ -365,7 +365,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
             }}
           >
             {t.label}
-            {((t.key === 'cicd' && ciFailed) || (t.key === 'nightly' && nightlyRed)) && (
+            {((t.key === 'cicd' && ciFailed) || (t.key === 'tests' && nightlyRed)) && (
               <span style={{
                 width: 5, height: 5, borderRadius: '50%',
                 background: 'var(--red)',
@@ -384,7 +384,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
           const hasNotification = wfBrief?.waitingForInput && wfFunctionId === fn.id
           // Red on whichever function owns the CI/CD tab — looked up rather
           // than hardcoded to 'operations', since the tab set is configurable.
-          const hasCiAlert = !hasNotification && ((ciFailed && fn.tabs?.includes('cicd')) || (nightlyRed && fn.tabs?.includes('nightly')))
+          const hasCiAlert = !hasNotification && ((ciFailed && fn.tabs?.includes('cicd')) || (nightlyRed && fn.tabs?.includes('tests')))
           return (
             <button
               key={fn.id}
@@ -459,7 +459,7 @@ function DashboardInner({ initialFunctionsConfig, initialPortalsConfig }: {
               {tab === 'cicd' && <CicdTab />}
               {tab === 'runbooks' && <RunbooksTab />}
               {tab === 'uitests' && <UITestsTab />}
-              {tab === 'nightly' && <NightlyTab />}
+              {tab === 'tests' && <TestsTab />}
               {tab === 'publishing' && <PublishingTab />}
               {tab === 'reports' && <SupportTab />}
               {tab.startsWith('portal-') && (() => {

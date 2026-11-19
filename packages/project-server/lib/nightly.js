@@ -285,7 +285,7 @@ function failureAlert(runs, { project, label }) {
     title: `${label} run ${latest.outcome === 'error' ? 'could not run' : 'failed'}`,
     detail: (latest.outcome === 'error' ? s.error : `${s.failed} failed, ${s.passed ?? 0} passed`)
       + (streak >= 2 ? ` — ${streak} runs in a row` : ''),
-    open: { fn: 'operations', tab: 'nightly', label },
+    open: { fn: 'operations', tab: 'tests', label: 'Tests' },
     since: s.finishedAt || latest.startedAt,
   };
 }

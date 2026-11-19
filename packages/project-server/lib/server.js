@@ -32,6 +32,7 @@ const { createReconcileRouter } = require('./api/reconcile');
 const { createHealthHandler } = require('./api/health');
 const { createLocalCiRouter } = require('./api/local-ci');
 const { createNightly } = require('./api/nightly');
+const { createSuiteWatch } = require('./api/suite-watch');
 const { createSupportRouter } = require('./api/support');
 const { createCliConfigRouter } = require('./api/cli-config');
 const { createOverseer } = require('./overseer');
@@ -183,7 +184,11 @@ function startServer(projectRoot, opts = {}) {
   const ciMaintenance = createCiMaintenance(config, ciRuntime);
   // The project's scheduled test run (Operations → Nightly); its failures are alerts too.
   const nightly = createNightly(config, { state });
-  const monitor = createMonitor(config, { extraAlerts: () => [...publisher.alerts(), ...ciRuntime.alerts(), ...nightly.alerts()] });
+  // Test-suite health measured on this machine (Operations → Tests).
+  const suiteWatch = createSuiteWatch(config);
+  const monitor = createMonitor(config, {
+    extraAlerts: () => [...publisher.alerts(), ...ciRuntime.alerts(), ...nightly.alerts(), ...suiteWatch.alerts()],
+  });
   const deploymentRouter = createDeploymentRouter(config, gitOps, { monitor });
   const localCiRouter = createLocalCiRouter(config);
   const monitorRouter = createMonitorRouter(config, monitor);
@@ -206,6 +211,7 @@ function startServer(projectRoot, opts = {}) {
   app.use('/api', deploymentRouter);
   app.use('/api', localCiRouter);
   app.use('/api', nightly.router);
+  app.use('/api', suiteWatch.router);
   app.use('/api', monitorRouter);
   app.use('/api', ciRuntimeRouter);
   app.use('/api', publishingRouter);
@@ -1138,6 +1144,8 @@ function startServer(projectRoot, opts = {}) {
       ciMaintenance.startTicking();
       // Starts a project's scheduled test run when it is due (lib/nightly.js).
       nightly.startTicking();
+      // Counts test code as the branch moves, and moves a suite review along.
+      suiteWatch.startTicking();
     });
   };
 
