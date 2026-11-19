@@ -947,10 +947,17 @@ function startServer(projectRoot, opts = {}) {
               // finishes. Found once (the search walks every session) and kept.
               let modelLastActivityMs = null;
               if (agent.cli === 'codex') {
-                if (!agent.codexRolloutPath) {
+                // A path recorded from an earlier session in the same pane log
+                // (a re-run appends to it) is looked up again.
+                if (!agent.codexRolloutPath || codexTelemetry.rolloutPredates(agent.codexRolloutPath, agent.startedAt)) {
                   const sid = agent.cliSessionId || codexTelemetry.sessionIdFromLog(logFile);
                   const found = sid ? codexTelemetry.findRolloutFile(sid) : null;
-                  if (found) { agent.codexRolloutPath = found; changed = true; }
+                  const usable = found && !codexTelemetry.rolloutPredates(found, agent.startedAt) ? found : null;
+                  if (usable !== (agent.codexRolloutPath || null)) {
+                    if (usable) agent.codexRolloutPath = usable;
+                    else delete agent.codexRolloutPath;
+                    changed = true;
+                  }
                 }
                 modelLastActivityMs = codexTelemetry.rolloutLastWrittenMs(agent.codexRolloutPath);
               }

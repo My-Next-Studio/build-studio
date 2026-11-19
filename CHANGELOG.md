@@ -121,6 +121,15 @@ Only `ok: true` runs are measured.
   serves the same files, hot reloaded. The run never stops a server it
   borrowed: when the run ends or is cancelled, the project's server keeps
   running. Runs in a worktree are unchanged.
+- **A re-run Codex agent is no longer shown as "waiting on the model" while it
+  works.** A pane log is per workflow and window, and a QA re-run appends to
+  the same file. Build Studio read the Codex session id from the head of that
+  log, which is the first session. It then timed that session's finished
+  rollout and reported a working agent as silent for an hour. The same stale
+  id was used for the automatic relaunch after a usage limit (which would
+  resume the old session) and for the scorecard's token count. The latest
+  session in the log is now used. A rollout recorded before the agent started
+  is looked up again.
 
 ### Known issues
 

@@ -47,27 +47,44 @@ function codexSessionRoots(home = os.homedir()) {
 }
 
 /**
- * The session id Codex announced in its own output.
+ * The session id Codex announced in its own output — the LATEST one.
  *
  * The line is `session id: <uuid>`, wrapped in ANSI bold — the pane log keeps
- * the escapes, so they are stripped before matching. Scans only the head of the
- * file: the id is printed in the banner, and a long run's log is megabytes of
- * output we have no reason to read.
+ * the escapes, so they are stripped before matching.
+ *
+ * A pane log is per workflow and window, and a relaunched agent (a QA re-run,
+ * a limit relaunch) appends to the same file, so one log can hold several
+ * sessions. Only the head was read before, which named the FIRST: the watchdog
+ * then timed a dead rollout and showed a working QA agent as "waiting on the
+ * model" for an hour (2026-11-19), and the limit relaunch and the token count
+ * were pointed at the old session too. The last announcement is the agent that
+ * is running now. The log is read once per lookup, and lookups are rare.
  */
-function sessionIdFromLog(logPath, headBytes = 64 * 1024) {
-  let head;
-  try {
-    const fd = fs.openSync(logPath, 'r');
-    try {
-      const buf = Buffer.alloc(headBytes);
-      const n = fs.readSync(fd, buf, 0, headBytes, 0);
-      head = buf.slice(0, n).toString('utf8');
-    } finally { fs.closeSync(fd); }
-  } catch (_) { return null; }
+function sessionIdFromLog(logPath) {
+  let text;
+  try { text = fs.readFileSync(logPath, 'utf8'); } catch (_) { return null; }
   // eslint-disable-next-line no-control-regex
-  const plain = head.replace(/\[[0-9;]*m/g, '');
-  const m = plain.match(/session id:\s*([0-9a-fA-F-]{8,})/i);
-  return m ? m[1].toLowerCase() : null;
+  const plain = text.replace(/\x1b\[[0-9;]*m/g, '').replace(/\[[0-9;]*m/g, '');
+  let last = null;
+  for (const m of plain.matchAll(/session id:\s*([0-9a-fA-F-]{8,})/gi)) last = m[1].toLowerCase();
+  return last;
+}
+
+/**
+ * Was this rollout created before the agent started? Then it belongs to an
+ * earlier session in the same pane (the agent's own banner not printed yet
+ * when it was looked up), and must not be timed as this agent's.
+ */
+function rolloutPredates(rolloutPath, startedAt, skewMs = 60 * 1000) {
+  const start = Date.parse(startedAt || '');
+  if (!rolloutPath || !Number.isFinite(start)) return false;
+  try {
+    const st = fs.statSync(rolloutPath);
+    const born = st.birthtimeMs || st.ctimeMs;
+    return born < start - skewMs;
+  } catch (_) {
+    return false;
+  }
 }
 
 /** The rollout file for a session id, or null. Filenames end in the id. */
@@ -185,6 +202,7 @@ function captureFromLog(logPath, home = os.homedir()) {
 
 module.exports = {
   sessionIdFromLog,
+  rolloutPredates,
   findRolloutFile,
   rolloutLastWrittenMs,
   parseRollout,

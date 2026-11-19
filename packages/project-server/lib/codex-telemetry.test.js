@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const {
-  sessionIdFromLog, findRolloutFile, parseRollout, captureFromLog,
+  sessionIdFromLog, rolloutPredates, findRolloutFile, parseRollout, captureFromLog,
 } = require('./codex-telemetry');
 
 function tmp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'codex-tel-')); }
@@ -54,13 +54,25 @@ test('no id in the log is null, not a throw or a guess', () => {
   assert.equal(sessionIdFromLog(path.join(d, 'missing.log')), null);
 });
 
-test('only the head of the log is read', () => {
-  // A long run's log is megabytes; the id is in the banner. Scanning the whole
-  // file would make this cost scale with run length for no benefit — and an id
-  // appearing late is not the agent's own session anyway.
+test('a log a re-run appended to names its latest session, not its first', () => {
+  // A pane log is per workflow and window; a QA re-run appends to the same file.
+  // Reading only the head named the first session, so the watchdog timed a dead
+  // rollout and showed a working QA agent as waiting on the model (2026-11-19).
   const d = tmp();
-  const p = writeLog(d, 'x'.repeat(200000) + '\nsession id: deadbeef-1111\n');
-  assert.equal(sessionIdFromLog(p), null);
+  const p = writeLog(d, 'session id: aaaa1111-0000\n' + 'x'.repeat(200000) + '\n[1msession id:[0m bbbb2222-0000\nwork\n');
+  assert.equal(sessionIdFromLog(p), 'bbbb2222-0000');
+});
+
+test('a rollout created before the agent started is not its own', () => {
+  const d = tmp();
+  const f = path.join(d, 'rollout.jsonl');
+  fs.writeFileSync(f, '{}');
+  const born = fs.statSync(f).birthtimeMs || fs.statSync(f).ctimeMs;
+  assert.equal(rolloutPredates(f, new Date(born + 5 * 60 * 1000).toISOString()), true);
+  assert.equal(rolloutPredates(f, new Date(born + 30 * 1000).toISOString()), false, 'within the skew');
+  assert.equal(rolloutPredates(f, new Date(born - 60 * 1000).toISOString()), false);
+  assert.equal(rolloutPredates(null, new Date().toISOString()), false);
+  assert.equal(rolloutPredates(f, undefined), false);
 });
 
 // ── locating the rollout ─────────────────────────────────────────────────────
@@ -181,4 +193,10 @@ test('the last turn_context wins if the model changed mid-session', () => {
     tokenCount({ input_tokens: 1 }),
   ].join('\n'));
   assert.equal(parseRollout(p).model, 'gpt-5.6-sol');
+});
+
+test('the watchdog looks a rollout up again when the recorded one predates the agent', () => {
+  const SRC = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
+  assert.match(SRC, /!agent\.codexRolloutPath \|\| codexTelemetry\.rolloutPredates\(agent\.codexRolloutPath, agent\.startedAt\)/);
+  assert.match(SRC, /found && !codexTelemetry\.rolloutPredates\(found, agent\.startedAt\) \? found : null/);
 });
