@@ -109,6 +109,19 @@ A gate history line is
 `{"at": ISO, "head": sha, "mode": "...", "ok": true, "steps": [{"name": "unit", "seconds": 10.2, "tests": 4277}]}`.
 Only `ok: true` runs are measured.
 
+### Fixed
+
+- **QA's dev server no longer fails to start in a run without a worktree.** A
+  lean execution or bugfix run works in the project's main checkout, and QA
+  started its own dev server there on the configured port + 100. That
+  directory is the one the project's own dev server already serves. Next 16
+  allows one `next dev` per directory, so the second server exited at once,
+  and QA reported connection refused on the URL its prompt named. QA now uses
+  the project's own dev server when one is running from that checkout. It
+  serves the same files, hot reloaded. The run never stops a server it
+  borrowed: when the run ends or is cancelled, the project's server keeps
+  running. Runs in a worktree are unchanged.
+
 ### Known issues
 
 - **It runs only while Build Studio is running.** A night missed because the

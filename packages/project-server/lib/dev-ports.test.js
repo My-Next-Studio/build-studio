@@ -133,7 +133,7 @@ test('every script that starts the CLI exports the dev server URLs', () => {
 
 test('workflow.js no longer kills a port it did not record', () => {
   assert.doesNotMatch(SRC, /WORKTREE_PORT_OFFSET/);
-  assert.match(SRC, /const ownPort = previous\[dev\.name\] \|\| null;/);
+  assert.match(SRC, /const ownPort = previouslyReused\[dev\.name\] \? null : \(previous\[dev\.name\] \|\| null\);/);
   assert.match(SRC, /devPorts\.allocateDevPorts\(/);
 });
 
@@ -144,4 +144,39 @@ test('the QA prompt and the agents\' environment name the same servers', () => {
 
 test('vite dev servers still fail loudly on a taken port', () => {
   assert.match(SRC, /-- --port \$\{wtPort\} --strictPort/);
+});
+
+// ── the project's own server, for a run in the main checkout (2026-11-19) ────
+
+const { reusableServers, ownedPorts } = require('./dev-ports');
+
+test('a run in the main checkout uses the server already serving that checkout', () => {
+  const r = reusableServers({
+    devCmds: [{ name: 'web', port: 3000 }, { name: 'api', port: 4000 }],
+    projectRoot: '/p/app',
+    worktreesPath: '/p/app/tmp/.worktrees',
+    isListening: (port) => port === 3000,
+    cwdsOf: () => ['/p/app/apps/web'],
+  });
+  assert.deepEqual(r, { web: 3000 }, 'the api server is not running: the run starts its own');
+});
+
+test('a server on the same port from another checkout, or a worktree, is not borrowed', () => {
+  const base = { devCmds: [{ name: 'web', port: 3000 }], projectRoot: '/p/app', worktreesPath: '/p/app/tmp/.worktrees', isListening: () => true };
+  assert.deepEqual(reusableServers({ ...base, cwdsOf: () => ['/p/other-app'] }), {});
+  assert.deepEqual(reusableServers({ ...base, cwdsOf: () => ['/p/app-two/web'] }), {}, 'a prefix is not inside');
+  assert.deepEqual(reusableServers({ ...base, cwdsOf: () => ['/p/app/tmp/.worktrees/exec-X/apps/web'] }), {});
+  assert.deepEqual(reusableServers({ ...base, cwdsOf: () => [] }), {});
+});
+
+test('a workflow stops only the dev servers it started', () => {
+  assert.deepEqual(ownedPorts({ devServerPorts: { web: 3000, api: 4100 }, devServersReused: { web: 3000 } }), { api: 4100 });
+  assert.deepEqual(ownedPorts({ devServerPorts: { web: 3100 } }), { web: 3100 });
+  assert.deepEqual(ownedPorts({}), {});
+});
+
+test('workflow.js borrows only in the main checkout, and never kills a borrowed port', () => {
+  assert.match(SRC, /path\.resolve\(worktreePath\) === path\.resolve\(projectRoot\)\s*\?\s*devPorts\.reusableServers\(/);
+  assert.doesNotMatch(SRC, /killSessionAndDevPorts\(wf\.sessionName, wf\.devServerPorts\)/);
+  assert.match(SRC, /devPorts\.writeClaims\(claimsFile, started,/);
 });

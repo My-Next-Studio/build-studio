@@ -882,7 +882,7 @@ function createWorkflowRouter(config, state, gitOps, tmuxOps, broadcast) {
   state.saveWorkflow = function (wf) {
     _origSaveWorkflow(wf);
     if (wf.currentStep === 'completed' && wf.sessionName) {
-      try { tmuxOps.killSessionAndDevPorts(wf.sessionName, wf.devServerPorts); } catch (_) {}
+      try { tmuxOps.killSessionAndDevPorts(wf.sessionName, devPorts.ownedPorts(wf)); } catch (_) {}
       runEmulators.stopRunEmulators(runEmulators.runIdFor(wf.id, projectRoot));
     }
   };
@@ -2868,8 +2868,10 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${da
     // ports are all that is left of it.
     const { execFileSync: execKill } = require('child_process');
     const previous = wf.devServerPorts || {};
+    // Servers a previous round borrowed from the project are not this run's to kill.
+    const previouslyReused = wf.devServersReused || {};
     for (const dev of devCmds) {
-      const ownPort = previous[dev.name] || null;
+      const ownPort = previouslyReused[dev.name] ? null : (previous[dev.name] || null);
       if (sessionExists) {
         tmuxOps.killWindowAndChildren(`${wf.sessionName}:dev-${dev.name}`, ownPort);
       } else if (ownPort) {
@@ -2880,26 +2882,44 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${da
     // Brief pause for ports to be released
     try { execKill('sleep', ['1']); } catch (_) {}
 
+    // A run with no worktree works in the main checkout, which the project's
+    // own dev server already serves: use that one rather than start a second
+    // in the same directory (dev-ports.js reusableServers — Next 16 refuses a
+    // second `next dev` there, and QA got connection refused).
+    const reused = path.resolve(worktreePath) === path.resolve(projectRoot)
+      ? devPorts.reusableServers({
+          devCmds, projectRoot, worktreesPath: config.worktreesPath,
+          isListening: devPorts.portListening, cwdsOf: devPorts.listenerCwds,
+        })
+      : {};
+    for (const [name, port] of Object.entries(reused)) {
+      console.log(`[workflow] ${name}: using the project's own dev server on :${port} (the run is in the main checkout)`);
+    }
+    const toStart = devCmds.filter((d) => !reused[d.name]);
+
     // Choose every port before starting anything, so the frontend server can be
     // given the backend's URL (BACKEND_URL).
     const owner = `${config.name || path.basename(projectRoot)}/${wf.id}`;
     const claimsFile = devPorts.claimsPath();
     const claims = devPorts.readClaims(claimsFile);
-    const { ports, moved } = devPorts.allocateDevPorts({
-      devCmds,
-      previous,
+    const { ports: started, moved } = devPorts.allocateDevPorts({
+      devCmds: toStart,
+      previous: Object.fromEntries(Object.entries(previous).filter(([n]) => !previouslyReused[n])),
       isTaken: (port) => devPorts.portListening(port)
         || devPorts.claimedByOther(claims, port, owner, { isListening: devPorts.portListening }),
     });
     for (const m of moved) {
       console.log(`[workflow] ${m.name}: port ${m.wanted} is in use by something else — using ${m.port}`);
     }
-    wf.devServerPorts = ports;
-    devPorts.writeClaims(claimsFile, ports, owner, { isListening: devPorts.portListening });
+    wf.devServerPorts = { ...started, ...reused };
+    if (Object.keys(reused).length) wf.devServersReused = reused;
+    else delete wf.devServersReused;
+    // Claims only for ports this run serves itself: a borrowed one is the project's.
+    devPorts.writeClaims(claimsFile, started, owner, { isListening: devPorts.portListening });
     const roles = devPorts.devServerRoles(devCmds);
 
     // Pass 2: start each server with full env (PORT + BACKEND_URL for frontend)
-    for (const dev of devCmds) {
+    for (const dev of toStart) {
       const windowName = `dev-${dev.name}`;
       const cwd = dev.cwd ? path.join(worktreePath, dev.cwd) : worktreePath;
       const target = `${wf.sessionName}:${windowName}`;
@@ -3022,7 +3042,7 @@ ${simEnvLine}${devUrlEnvLine}${runIdEnvLine}${suiteEnvLine}codex exec resume${da
 
   // Stop agents without deleting branches — safe for cancel
   function stopWorkflow(wf) {
-    if (wf.sessionName) tmuxOps.killSessionAndDevPorts(wf.sessionName, wf.devServerPorts);
+    if (wf.sessionName) tmuxOps.killSessionAndDevPorts(wf.sessionName, devPorts.ownedPorts(wf));
     runEmulators.stopRunEmulators(runEmulators.runIdFor(wf.id, projectRoot));
     // Clean up generated start scripts from project root
     try {

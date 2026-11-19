@@ -161,6 +161,68 @@ function writeClaims(file, ports, owner, { now = Date.now(), isListening = () =>
   }
 }
 
+/**
+ * The project's own dev servers that a run in the main checkout should use
+ * instead of starting its own, by name → port.
+ *
+ * A run with no worktree (a lean execution, a bugfix) works in the project's
+ * main checkout, which is the directory the project's own dev server already
+ * serves. Starting a second server there is at best a duplicate, and Next 16
+ * refuses it outright: one `next dev` per directory, held by a lock in
+ * `.next/dev`. The second server exits, and QA got connection refused on the
+ * port the prompt named (2026-11-19). The server already running serves the
+ * same files, hot reloaded, so it is the right one to test against.
+ *
+ * Reused only when the listener on the entry's own port runs inside this
+ * checkout and not inside one of its worktrees. Another project's server on
+ * the same port number is not this project's.
+ *
+ * @param {object} p
+ * @param {Array} p.devCmds
+ * @param {string} p.projectRoot
+ * @param {string} [p.worktreesPath]
+ * @param {(port: number) => boolean} p.isListening
+ * @param {(port: number) => string[]} p.cwdsOf  working directories of the port's listeners
+ */
+function reusableServers({ devCmds, projectRoot, worktreesPath, isListening, cwdsOf }) {
+  const root = path.resolve(projectRoot);
+  const trees = worktreesPath ? path.resolve(worktreesPath) : null;
+  const inside = (dir, base) => dir === base || dir.startsWith(base + path.sep);
+  const out = {};
+  for (const dev of devCmds || []) {
+    const port = basePort(dev);
+    if (!port || !isListening(port)) continue;
+    const cwds = (cwdsOf(port) || []).map((d) => path.resolve(d));
+    if (cwds.some((d) => inside(d, root) && !(trees && inside(d, trees)) && !d.includes(`${path.sep}.worktrees${path.sep}`))) {
+      out[dev.name] = port;
+    }
+  }
+  return out;
+}
+
+/**
+ * The dev-server ports a workflow may stop: those it started. A port it
+ * borrowed from the project (`devServersReused`) is the project's server and
+ * outlives the run.
+ */
+function ownedPorts(wf) {
+  const reused = (wf && wf.devServersReused) || {};
+  return Object.fromEntries(Object.entries((wf && wf.devServerPorts) || {}).filter(([name, port]) => reused[name] !== port));
+}
+
+/** The working directories of the processes listening on `port` (lsof). */
+function listenerCwds(port) {
+  const { spawnSync } = require('child_process');
+  const pids = (spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' }).stdout || '')
+    .split('\n').map((s) => s.trim()).filter(Boolean);
+  const cwds = [];
+  for (const pid of pids) {
+    const r = spawnSync('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn'], { encoding: 'utf8' });
+    for (const line of (r.stdout || '').split('\n')) if (line.startsWith('n')) cwds.push(line.slice(1));
+  }
+  return cwds;
+}
+
 /** Something is listening on `port` (lsof). */
 function portListening(port) {
   const { spawnSync } = require('child_process');
@@ -172,4 +234,5 @@ module.exports = {
   WORKTREE_PORT_OFFSET, CLAIM_FRESH_MS,
   basePort, devServerRoles, devServerUrls, devUrlEnvLines, allocateDevPorts,
   claimsPath, readClaims, claimedByOther, writeClaims, portListening,
+  reusableServers, listenerCwds, ownedPorts,
 };
