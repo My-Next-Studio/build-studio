@@ -21,6 +21,40 @@ that move underneath you without your having edited anything.
 
 ---
 
+## 2026-11-20 — QA preflight no longer assumes auth routes
+
+### Fixed
+
+- **QA no longer withholds the E2E suite from a healthy app over routes it
+  does not have.** The QA role in the project template told QA to probe
+  `/api/auth/me` and `POST /api/auth/register` before any E2E run, and to stop
+  if either failed. A project that signs in through a hosted provider, or has
+  no sign-in at all, has neither route. Both answer 404, and QA reported a
+  setup failure ("qa_validation could not run a check") on an app that was
+  running fine. The preflight now uses the project's own health route (or its
+  home page), checks that pages render, and probes sign-in only when the E2E
+  suite signs in through the project's own API, with the route and account
+  the suite itself uses.
+
+### Upgrade steps
+
+**In Build Studio** — nothing. The template is read when a project is set up.
+
+**In each managed project** — the template is copied into a project when it
+is set up, so an existing project keeps the old preflight. Check whether a
+project's QA role still names the auth routes:
+
+```bash
+grep -n "api/auth/me\|api/auth/register" .claude/commands/qa.md
+```
+
+If it does and the project has no such routes, replace its
+`## Preflight` section with the one in
+`templates/default/.claude/commands/qa.md`, adjusted to the project's real
+health route.
+
+---
+
 ## 2026-11-19 — Nightly test runs and test-suite health
 
 ### Added

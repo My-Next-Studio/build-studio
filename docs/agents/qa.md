@@ -32,22 +32,27 @@ You catch what others miss before users find it.
 Before running any E2E tests, verify the environment is healthy. If any check fails, **stop immediately, report the setup failure, and do not run the test suite** — a broken environment produces meaningless results and wastes 20+ minutes.
 
 ```
-1. Backend responds on the expected port:
-   curl -s http://localhost:<port>/api/auth/me  →  should return JSON (401 is fine, 000/5xx is not)
+1. The app responds on the expected port. Use the project's own health check:
+   its health route when it has one (often /api/health or /health, see its
+   routes or docs), otherwise the home page.
+   curl -s -i http://localhost:<port>/<health path>
+   →  must answer; connection refused, a 5xx or a hang is a failure
 
-2. Backend is running in dev/test mode, not production:
-   curl -s -X POST http://localhost:<port>/api/auth/register \
-     -H 'Content-Type: application/json' \
-     -d '{"email":"preflight@example.com","password":"test12345"}' \
-     →  must return 201 or 409, never 500
-
-3. Frontend responds on the expected port:
+2. The pages render (web projects):
    curl -s http://localhost:<frontend-port>/  →  must return HTML, not connection refused
 
-4. Session cookies work (dev cookie is localhost-compatible):
-   Register → check Set-Cookie header has no Domain= attribute (or Domain=localhost)
-   A Domain=<real-domain> cookie is never sent to localhost — all auth tests will fail
+3. Sign-in works, ONLY when the E2E suite signs in through the project's own API:
+   use the route and test account the suite itself uses (its E2E helpers or
+   docs). If that sets a session cookie, the cookie must have no Domain=
+   attribute (or Domain=localhost): a Domain=<real-domain> cookie is never
+   sent to localhost, and every auth test then fails.
+   Sign-in through a hosted provider (Supabase, Auth0, Clerk…) is covered by
+   step 1 when the health route reports it, and needs no probe here.
 ```
+
+Probe only routes this project has. Never guess one: a 404 from a route the
+project does not have says nothing about its environment, and reporting it as
+a setup failure withholds the suite from a healthy app.
 
 If any check fails, submit a feedback report describing the setup failure and stop. Do not attempt to fix the environment yourself — that is outside QA domain.
 
@@ -89,9 +94,9 @@ If the PRD ships any user-visible UI (a screen, sheet, modal, empty state, icon 
 - **Clean up test data after EVERY test run**: Tests that create data (users, events, sessions, etc.) MUST delete it when done. This is non-negotiable — test data accumulates fast and pollutes the database.
   - Use a recognizable pattern for test data: emails like `test-<timestamp>-<random>@example.com`, slugs like `test-<name>-<timestamp>`
   - Add an `afterAll` / teardown block that deletes everything created during the run
-  - If tests create data via API (e.g., `POST /api/auth/register`), call the corresponding delete endpoint or run a direct DB cleanup query
+  - If tests create data via API (e.g. a sign-up or create endpoint), call the corresponding delete endpoint or run a direct DB cleanup query
   - If no delete endpoint exists, write a cleanup SQL script and note it in the qa-handoff doc
-  - **Preflight users too**: The preflight check registers `preflight@example.com` — delete it after the check passes
+  - **Preflight data too**: if the preflight signed up a test account, delete it after the check passes
   - Verify cleanup worked: query the DB after teardown and assert test data is gone
 - **Choose the right test layer**: Write E2E tests only for ACs that require verifying UI state, navigation, client-side behavior, or cross-layer integration. For pure API contracts (status codes, response shape, validation errors), write unit tests — they run in milliseconds and are more reliable. Default to unit tests; reach for E2E only when the browser is genuinely necessary.
 - Every form submit button and CTA must have an E2E test that clicks it and asserts the expected outcome (success state, error state, or redirect). A button that renders but does nothing is a silent breakage — always verify the action fires
