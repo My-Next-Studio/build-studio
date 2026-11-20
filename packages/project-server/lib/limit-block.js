@@ -56,6 +56,20 @@ const CHOOSER_RE = /stop and wait for (?:the )?limit to reset/i;
 const RATE_LIMIT_RE = /exceeded retry limit,?\s+last status:?\s+429\b[^\n]*/i;
 
 /**
+ * The provider refused the model for load, not for this account, and codex
+ * exited:
+ *
+ *     ERROR: Selected model is at capacity. Please try a different model.
+ *
+ * Handled as a rate limit (`kind: 'rate'`): no reset time, usually over within
+ * minutes, and the same backoff fits. The agent's conversation is resumed, not
+ * restarted. Read as a stall, it left a review agent shown as "waiting on the
+ * model" for a quarter of an hour after its process had exited
+ * (sickla_tunneln, 2026-11-19).
+ */
+const CAPACITY_RE = /selected model is at capacity[^\n]*/i;
+
+/**
  * How long to wait before each relaunch after a rate limit: short at first,
  * since these clear quickly, then hourly like the codex usage-limit probe.
  */
@@ -242,7 +256,8 @@ function describeBlock(block, now = new Date()) {
     const at = nextRateRetryAt(block);
     const clock = at ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null;
     const tries = block.probeCount ? ` (${block.probeCount} retr${block.probeCount === 1 ? 'y' : 'ies'} so far)` : '';
-    return `Rate-limited by the provider (429)${tries} — relaunching automatically${clock ? ` at ${clock}` : ''}.`;
+    const what = CAPACITY_RE.test(block.raw || '') ? 'The model was at capacity' : 'Rate-limited by the provider (429)';
+    return `${what}${tries} — relaunching automatically${clock ? ` at ${clock}` : ''}.`;
   }
   const when = block.resetsAt ? new Date(block.resetsAt) : null;
   const valid = when && Number.isFinite(when.getTime());
@@ -283,8 +298,9 @@ function stripAnsi(s) {
  *
  * @param {{pane?:string, log?:string}} sources
  * @param {Date} now
- * A pane with no usage-limit notice but codex's 429 give-up line is a rate
- * limit (`kind: 'rate'`, see RATE_LIMIT_RE).
+ * A pane with no usage-limit notice but codex's 429 give-up line, or its
+ * model-at-capacity error, is a rate limit (`kind: 'rate'`, see RATE_LIMIT_RE
+ * and CAPACITY_RE).
  *
  * @returns {null|{raw:string, resetsAt:Date|null, needsConfirm:boolean, kind:'usage'|'rate'}}
  */
@@ -303,7 +319,7 @@ function detectLimitState({ pane = '', log = '', seenAt } = {}, now = new Date()
   // log proves only that the agent was blocked at some point — it may have
   // resumed and moved on since.
   if (!fromPane && !needsConfirm) {
-    const rate = RATE_LIMIT_RE.exec(paneClean);
+    const rate = RATE_LIMIT_RE.exec(paneClean) || CAPACITY_RE.exec(paneClean);
     return rate ? { raw: rate[0].trim().replace(/\s+/g, ' '), resetsAt: null, needsConfirm: false, kind: 'rate' } : null;
   }
 
@@ -317,5 +333,5 @@ function detectLimitState({ pane = '', log = '', seenAt } = {}, now = new Date()
 
 module.exports = {
   parseLimitNotice, parseResetTime, isResumeDue, describeBlock, detectLimitState, nextRateRetryAt,
-  LIMIT_RE, CHOOSER_RE, RATE_LIMIT_RE, RATE_RETRY_DELAYS_MS,
+  LIMIT_RE, CHOOSER_RE, RATE_LIMIT_RE, CAPACITY_RE, RATE_RETRY_DELAYS_MS,
 };

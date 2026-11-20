@@ -256,3 +256,29 @@ test('the summary names a rate limit and when it retries', () => {
   assert.match(describeBlock({ kind: 'rate', detectedAt: '2026-10-25T15:08:00Z' }), /^Rate-limited by the provider \(429\) — relaunching automatically at /);
   assert.match(describeBlock({ kind: 'rate', detectedAt: '2026-10-25T15:08:00Z', probeCount: 2, lastProbeAt: '2026-10-25T15:28:00Z' }), /\(2 retries so far\)/);
 });
+
+// ── Model at capacity: codex exited on the provider's load (sickla_tunneln, 2026-11-19)
+// Shown as "waiting on the model" after the process had exited. Same handling
+// as a 429: resume the conversation on the backoff.
+const CAPACITY_PANE = [
+  '- Frontend work goes through the `sickla-tunneln-design` skill — no freehand UI.',
+  'ERROR: Selected model is at capacity. Please try a different model.',
+  'ERROR: Selected model is at capacity. Please try a different model.',
+  'tokens used',
+  '14 472',
+  'lars@Mac sickla_tunneln % ',
+].join('\n');
+
+test('codex exiting on a model at capacity is a rate-limit block', () => {
+  const s = detectLimitState({ pane: CAPACITY_PANE });
+  assert.equal(s.kind, 'rate');
+  assert.equal(s.resetsAt, null);
+  assert.match(s.raw, /^Selected model is at capacity\. Please try a different model\.$/);
+  assert.equal(isResumeDue({ kind: 'rate', raw: s.raw, detectedAt: '2026-11-19T21:58:00Z' }, new Date('2026-11-19T22:03:00Z')).due, true, 'first retry after 5 minutes');
+});
+
+test('the summary names a model at capacity rather than a 429', () => {
+  const d = describeBlock({ kind: 'rate', raw: 'Selected model is at capacity. Please try a different model.', detectedAt: '2026-11-19T21:58:00Z' });
+  assert.match(d, /^The model was at capacity — relaunching automatically at /);
+  assert.doesNotMatch(d, /429/);
+});

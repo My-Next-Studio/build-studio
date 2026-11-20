@@ -137,6 +137,13 @@ Only `ok: true` runs are measured.
   that names one agent (usage limit, or a task running past 45 minutes) now
   comes down once that agent has reported, failed or been relaunched. Nudge on
   such a banner clears it instead of typing into a closed pane.
+- **A Codex agent that exits because the model is at capacity is resumed
+  automatically.** Codex exits on "Selected model is at capacity". Build
+  Studio showed that agent as "waiting on the model", and after 15 minutes as
+  stalled, although its process had exited. It is now handled like a 429 rate
+  limit. The card says the agent is waiting on a rate limit because the model
+  was at capacity. The same conversation is resumed after 5, 15 and 30
+  minutes, then hourly.
 
 ### Known issues
 
